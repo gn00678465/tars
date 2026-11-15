@@ -40,7 +40,13 @@ describe("tars install", () => {
     writeFileSync(join(paths.skills, "removed/SKILL.md"), "old");
     expect(await run(["install", ...seedArgs], deps)).toBe(0);
     expect(readdirSync(paths.skills).sort()).toEqual(["alpha", "beta"]);
-    expect(readdirSync(paths.data).sort()).toEqual(["MEMORY.md", "SOUL.md", "skills", "workspace"]);
+    expect(readdirSync(paths.data).sort()).toEqual([
+      "MEMORY.md",
+      "SOUL.md",
+      "harness",
+      "skills",
+      "workspace",
+    ]);
   });
 
   test("never overwrites an existing MEMORY.md or SOUL.md", async () => {

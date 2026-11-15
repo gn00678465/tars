@@ -1,9 +1,11 @@
 import type { Command } from "commander";
 import { link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
+import { sibling } from "../../core/fs.ts";
 import type { Io } from "../../core/io.ts";
 import { resolvePaths, type Env, type TarsPaths } from "../../core/paths.ts";
+import { harnessEntries } from "../session/harness/registry.ts";
 import type { EmbeddedFile } from "./embedded.ts";
 
 export interface InstallDeps {
@@ -25,7 +27,7 @@ const SEEDS = [
 export function registerInstall(program: Command, deps: InstallDeps): void {
   program
     .command("install")
-    .description("install tars's skills and seed SOUL.md and MEMORY.md into the data dir")
+    .description("install skills, seed SOUL.md and MEMORY.md, and prepare every harness")
     .option("--soul <file>", "copy this file to SOUL.md if SOUL.md does not exist")
     .option("--memory <file>", "copy this file to MEMORY.md if MEMORY.md does not exist")
     .addHelpText(
@@ -61,10 +63,12 @@ export async function install(
   await replaceSkills(paths.skills, skills);
   for (const seed of seeds) if (seed.bytes) await createExclusive(seed.target, seed.bytes);
   await mkdir(paths.workspace, { recursive: true });
+  for (const [, adapter] of harnessEntries) await adapter.prepare(paths);
 
   io.out(`data: ${paths.data}`);
   io.out(`skills: ${skills.length} files`);
   for (const seed of seeds) io.out(`${seed.label}: ${seed.bytes ? "created" : "kept"}`);
+  io.out(`harnesses: ${harnessEntries.map(([name]) => name).join(", ")}`);
 }
 
 async function readSeed(
@@ -90,8 +94,8 @@ async function readSeed(
 
 /** Writes files into a sibling temp dir, then swaps it in, so stale skill files never survive. */
 export async function replaceSkills(dir: string, files: readonly EmbeddedFile[]): Promise<void> {
-  const tmp = join(dirname(dir), `.${basename(dir)}.tmp`);
-  const old = join(dirname(dir), `.${basename(dir)}.old`);
+  const tmp = sibling(dir, "tmp");
+  const old = sibling(dir, "old");
   await rm(tmp, { recursive: true, force: true });
   await rm(old, { recursive: true, force: true });
   for (const file of files) {
@@ -109,7 +113,7 @@ export async function replaceSkills(dir: string, files: readonly EmbeddedFile[])
 
 /** link() fails if the target exists, so a seed never overwrites memory, even under a race. */
 async function createExclusive(target: string, bytes: Uint8Array): Promise<void> {
-  const tmp = join(dirname(target), `.${basename(target)}.tmp`);
+  const tmp = sibling(target, "tmp");
   await writeFile(tmp, bytes);
   try {
     await link(tmp, target);
