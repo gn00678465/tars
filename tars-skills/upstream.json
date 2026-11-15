@@ -32,5 +32,15 @@
       "SKILL.md"
     ],
     "path": ""
+  },
+  "socratic-tutor": {
+    "repo": "https://github.com/janestreet/agent_skills",
+    "commit": "7c6715c29548a3b39d4a9545c698ee4fd17a7213",
+    "path": "socratic-tutor",
+    "license": "MIT",
+    "copied": "2026-11-15",
+    "files": [
+      "SKILL.md"
+    ]
   }
 }
