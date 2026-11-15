@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { link, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 /** A hidden sibling with a fixed name, so the next run recognizes and replaces a crashed run's leftover. */
@@ -28,6 +28,24 @@ export async function ensureSymlink(target: string, path: string): Promise<void>
   try {
     await symlink(target, tmp);
     await rename(tmp, path);
+  } finally {
+    await rm(tmp, { force: true });
+  }
+}
+
+/**
+ * Creates path with data unless it exists; returns false when it did. link() fails on an existing
+ * target, so this never overwrites, even under a race.
+ */
+export async function createExclusive(path: string, data: string | Uint8Array): Promise<boolean> {
+  const tmp = uniqueTemp(path);
+  await writeFile(tmp, data);
+  try {
+    await link(tmp, path);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw err;
   } finally {
     await rm(tmp, { force: true });
   }

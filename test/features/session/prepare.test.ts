@@ -62,3 +62,19 @@ test("the skills symlinks resolve to the data dir's skills, and settings.json ex
     ],
   });
 });
+
+test("seeds .claude.json so interactive claude skips its first-run login, and never touches an existing one", async () => {
+  const { paths } = await installedHome();
+  const state = join(paths.harness, "claude/.claude.json");
+  expect(JSON.parse(readFileSync(state, "utf8"))).toEqual({ hasCompletedOnboarding: true });
+
+  const written =
+    '{"hasCompletedOnboarding":true,"projects":{"/w":{"hasTrustDialogAccepted":true}}}';
+  writeFileSync(state, written);
+  for (const [, adapter] of harnessEntries) await adapter.prepare(paths);
+  expect(readFileSync(state, "utf8")).toBe(written);
+
+  rmSync(state);
+  for (const [, adapter] of harnessEntries) await adapter.prepare(paths);
+  expect(JSON.parse(readFileSync(state, "utf8"))).toEqual({ hasCompletedOnboarding: true });
+});

@@ -1,8 +1,8 @@
 import type { Command } from "commander";
-import { link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
-import { uniqueTemp } from "../../core/fs.ts";
+import { createExclusive, uniqueTemp } from "../../core/fs.ts";
 import type { Io } from "../../core/io.ts";
 import { resolvePaths, type Env, type TarsPaths } from "../../core/paths.ts";
 import { harnessEntries } from "../session/harness/registry.ts";
@@ -79,7 +79,11 @@ export async function install(
 
   await mkdir(paths.data, { recursive: true });
   await replaceSkills(paths.skills, skills);
-  for (const seed of seeds) if (seed.bytes) await createExclusive(seed.target, seed.bytes);
+  for (const seed of seeds) {
+    if (seed.bytes && !(await createExclusive(seed.target, seed.bytes))) {
+      throw concurrentInstall(seed.target);
+    }
+  }
   await mkdir(paths.workspace, { recursive: true });
   for (const [, adapter] of harnessEntries) await adapter.prepare(paths);
 
@@ -133,34 +137,20 @@ export async function replaceSkills(dir: string, files: readonly EmbeddedFile[])
     await rename(dir, old).catch((err: NodeJS.ErrnoException) => {
       if (err.code !== "ENOENT") throw err;
     });
-    await rename(tmp, dir).catch(concurrentInstall(dir));
+    await rename(tmp, dir).catch((err: NodeJS.ErrnoException) => {
+      throw err.code === "ENOTEMPTY" || err.code === "EEXIST" ? concurrentInstall(dir) : err;
+    });
   } finally {
     await rm(tmp, { recursive: true, force: true });
     await rm(old, { recursive: true, force: true });
   }
 }
 
-/** link() fails if the target exists, so a seed never overwrites memory, even under a race. */
-async function createExclusive(target: string, bytes: Uint8Array): Promise<void> {
-  const tmp = uniqueTemp(target);
-  await writeFile(tmp, bytes);
-  try {
-    await link(tmp, target).catch(concurrentInstall(target));
-  } finally {
-    await rm(tmp, { force: true });
-  }
-}
-
 /** The target appeared between our check and our rename or link: another install got there first. */
-function concurrentInstall(path: string) {
-  return (err: NodeJS.ErrnoException): never => {
-    if (err.code === "ENOTEMPTY" || err.code === "EEXIST") {
-      throw new TarsError(
-        `another tars install wrote ${path} at the same time; run tars install again`,
-      );
-    }
-    throw err;
-  };
+function concurrentInstall(path: string): TarsError {
+  return new TarsError(
+    `another tars install wrote ${path} at the same time; run tars install again`,
+  );
 }
 
 async function exists(path: string): Promise<boolean> {

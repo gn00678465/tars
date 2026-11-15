@@ -249,6 +249,7 @@ class Suite {
 
     await this.setup();
     await this.claude();
+    await this.claudeInteractive();
     await this.agy();
 
     const changes = diffSnapshots(userConfig, snapshotUserConfig(this.host));
@@ -402,6 +403,40 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
         found.length === 2 &&
         found.every((p) => p === installed),
       `same bytes as dist/tars: ${same}; ${shells.files}/stdout.txt: ${found.join(", ")}`,
+    );
+  }
+
+  /**
+   * Interactive claude runs a first-run flow, login screen included, on a config dir it has not
+   * seen, whatever CLAUDE_CODE_OAUTH_TOKEN says. -p skips that flow, so this needs a pty.
+   */
+  async claudeInteractive() {
+    const screen = async (name: string, argv: string, env: Record<string, string>) => {
+      const run = await this.step({
+        name,
+        argv: ["script", "-q", "-c", argv, "/dev/null"],
+        cwd: this.l.launchDir,
+        env: this.claudeEnv({ TERM: "xterm-256color", ...env }),
+        timeoutMs: 10_000,
+      });
+      // The TUI draws with cursor moves instead of spaces, so compare with all whitespace removed.
+      const text = Bun.stripANSI(run.result.stdout);
+      return { run, text: text.replace(/\s+/g, "") };
+    };
+    const FIRST_RUN = "WelcometoClaudeCode";
+    const TRUST = "Itrustthisfolder";
+    const control = await screen("control-claude-interactive", "claude", {
+      CLAUDE_CONFIG_DIR: join(this.l.scratchDir, "fresh-claude-config"),
+      CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
+    });
+    const tars = await screen("tars-claude-interactive", "tars claude", {});
+    this.check(
+      "claude-interactive-no-login",
+      "interactive tars claude skips Claude Code's first-run login and reaches the folder trust prompt; plain claude on a fresh config dir does not",
+      control.text.includes(FIRST_RUN) &&
+        !tars.text.includes(FIRST_RUN) &&
+        tars.text.includes(TRUST),
+      `${control.run.files}/stdout.txt first-run: ${control.text.includes(FIRST_RUN)}; ${tars.run.files}/stdout.txt first-run: ${tars.text.includes(FIRST_RUN)}, trust prompt: ${tars.text.includes(TRUST)}`,
     );
   }
 

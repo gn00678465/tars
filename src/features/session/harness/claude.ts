@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { TarsError } from "../../../core/exit.ts";
-import { ensureSymlink, writeFileAtomic } from "../../../core/fs.ts";
+import { createExclusive, ensureSymlink, writeFileAtomic } from "../../../core/fs.ts";
 import type { TarsPaths } from "../../../core/paths.ts";
 import type { BootContext } from "../boot.ts";
 import type { HarnessAdapter } from "./types.ts";
@@ -29,6 +29,10 @@ export const claude: HarnessAdapter = {
       join(paths.home, "CLAUDE.md"),
       join(paths.home, "CLAUDE.local.md"),
     ];
+    // Interactive Claude Code treats a config dir without this flag as a first run and shows its
+    // login screen, ignoring CLAUDE_CODE_OAUTH_TOKEN. Claude Code keeps its own state in this
+    // file, so tars only seeds a missing one and never reads it back.
+    await createExclusive(join(config, ".claude.json"), '{"hasCompletedOnboarding":true}\n');
     // tars owns this file whole and never reads it back (M1: tars does not merge harness config).
     await writeFileAtomic(
       join(config, "settings.json"),
