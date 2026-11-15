@@ -1,0 +1,36 @@
+{
+  "beancount-ledger": {
+    "repo": "https://github.com/gn00678465/beancount-fava",
+    "commit": "2201d176420dd33453320b7e1d5e78000e5e80c1",
+    "path": "skills/beancount-ledger",
+    "license": "none (upstream has no license file; owner's own repo)",
+    "copied": "2026-11-15",
+    "files": [
+      "SKILL.md"
+    ]
+  },
+  "serenity-skill": {
+    "repo": "https://github.com/muxuuu/serenity-skill",
+    "commit": "193e409c6ec6acad8e52c29c0570470ed83e3eae",
+    "license": "MIT",
+    "copied": "2026-10-27",
+    "files": [
+      "assets/research-prompt-pack.md",
+      "assets/thesis-template.md",
+      "examples/a-share-ai-semiconductor-demo.md",
+      "examples/cpo-company-challenge.md",
+      "examples/demo-conversation.md",
+      "LICENSE",
+      "references/deep-research-workflow.md",
+      "references/evidence-ladder.md",
+      "references/market-source-playbook.md",
+      "references/output-style-and-language.md",
+      "references/public-profile-and-evaluation.md",
+      "references/research-sources.md",
+      "references/risk-and-compliance.md",
+      "references/serenity-dialogue-protocol.md",
+      "SKILL.md"
+    ],
+    "path": ""
+  }
+}

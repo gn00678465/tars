@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "skills": {
+    "cli-for-agents": {
+      "source": "cursor/plugins",
+      "ref": "3dbd22ff12742fb28c9700b9760baa29ed41dc13",
+      "sourceType": "github",
+      "skillPath": "cli-for-agent/skills/cli-for-agents/SKILL.md",
+      "computedHash": "d7fd8ae391a78becc5096d18c8dd6dde9567d2087390d450c19712db39f481e0",
+      "installMode": "copy"
+    },
+    "ts-bun-conventions": {
+      "source": "./.agents/skills/ts-bun-conventions",
+      "sourceType": "local",
+      "computedHash": "82f0b7885e93aed3e029fb2592ab2153c74bd60a26dc37714ecb57b4251da030",
+      "installMode": "copy"
+    },
+    "typescript-magician": {
+      "source": "mcollina/skills",
+      "ref": "c75d70dbfbe991d8cec42aeda0b64ff14fbb9ac7",
+      "sourceType": "github",
+      "skillPath": "skills/typescript-magician/SKILL.md",
+      "computedHash": "99e61d29c107b3c52adbb70c6ee8cfbfb7830ea0649dba4ec89557fdf5c46b54",
+      "installMode": "copy"
+    }
+  }
+}
