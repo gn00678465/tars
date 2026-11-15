@@ -1,17 +1,36 @@
 import { Command, CommanderError } from "commander";
+import { EXIT, TarsError } from "./core/exit.ts";
+import { processIo, type Io } from "./core/io.ts";
+import type { Env } from "./core/paths.ts";
 
-export function buildProgram(): Command {
-  return new Command("tars").exitOverride();
+export interface Deps {
+  readonly io: Io;
+  readonly env: Env;
 }
 
-export async function run(argv: string[]): Promise<number> {
+export function defaultDeps(): Deps {
+  return { io: processIo, env: process.env };
+}
+
+export function buildProgram(deps: Deps): Command {
+  return new Command("tars").exitOverride().configureOutput({
+    writeOut: (s) => deps.io.out(s.trimEnd()),
+    writeErr: (s) => deps.io.err(s.trimEnd()),
+  });
+}
+
+export async function run(argv: readonly string[], deps: Deps = defaultDeps()): Promise<number> {
   try {
-    await buildProgram().parseAsync(argv, { from: "user" });
-    return 0;
+    await buildProgram(deps).parseAsync(argv, { from: "user" });
+    return EXIT.ok;
   } catch (err) {
     // commander reports usage errors with exit code 1; tars reserves 2 for them.
     // --help and --version also arrive here, with exit code 0.
-    if (err instanceof CommanderError) return err.exitCode === 0 ? 0 : 2;
+    if (err instanceof CommanderError) return err.exitCode === 0 ? EXIT.ok : EXIT.usage;
+    if (err instanceof TarsError) {
+      deps.io.err(`error: ${err.message}`);
+      return err.exitCode;
+    }
     throw err;
   }
 }
