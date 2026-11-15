@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../src/core/io.ts";
@@ -20,6 +20,13 @@ export function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "tars-test-"));
 }
 
+/** A shell script standing in for the compiled tars binary that install copies. */
+export function fakeExecutable(output = "fake tars"): string {
+  const path = join(tempHome(), "tars");
+  writeFileSync(path, `#!/bin/sh\necho ${output}\n`, { mode: 0o755 });
+  return path;
+}
+
 export interface FakeSecrets extends SecretStore {
   readonly entries: Map<SecretName, string>;
 }
@@ -39,6 +46,7 @@ export type TestDeps = Deps & { readonly io: CapturedIo };
 export function testDeps(overrides: Partial<Deps> = {}): TestDeps {
   return {
     env: {},
+    executable: fakeExecutable(),
     cwd: "/launch-dir",
     secrets: fakeSecrets(),
     embedded: async () => [],

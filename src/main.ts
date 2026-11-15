@@ -16,6 +16,7 @@ export function defaultDeps(): Deps {
   return {
     io: processIo,
     env: process.env,
+    executable: process.execPath,
     cwd: process.cwd(),
     secrets: keyringStore,
     readSecret,
@@ -34,7 +35,7 @@ export function buildProgram(deps: Deps, exitWith: (code: number) => void): Comm
     "after",
     `
 Examples:
-  tars install --soul ./SOUL.md --memory ./MEMORY.md
+  dist/tars install --soul ./SOUL.md --memory ./MEMORY.md
   tars auth claude
   tars claude
   tars agy

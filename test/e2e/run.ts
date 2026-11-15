@@ -347,6 +347,7 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
       argv: ["tars", "install", "--soul", this.l.soulFixture, "--memory", this.l.memoryFixture],
       cwd: this.host.home,
     });
+    await this.onPath();
     const auth = await this.step({
       name: "tars-auth-claude",
       argv: ["tars", "auth", "claude"],
@@ -370,6 +371,37 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
       "tars install and tars auth claude succeed inside the sandbox; the fake Google login is planted",
       install.result.exitCode === 0 && auth.result.exitCode === 0 && plant.result.exitCode === 0,
       `exit codes ${install.result.exitCode}/${auth.result.exitCode}/${plant.result.exitCode}; ${auth.files}/stdout.txt: ${auth.result.stdout.trim()}`,
+    );
+  }
+
+  /** install copied dist/tars into ~/.local/bin, which the sandbox PATH lacks, so it must write the startup files. */
+  async onPath() {
+    const installed = join(this.host.home, ".local", "bin", "tars");
+    const shells = await this.step({
+      name: "tars-on-path",
+      // Starts without the sandbox bin dir, and sources ~/.profile directly: this host's
+      // /etc/profile.d appends ~/.local/bin to every login PATH, which would hide a missing line.
+      argv: [
+        "env",
+        "PATH=/usr/bin:/bin",
+        "sh",
+        "-c",
+        '(. "$HOME/.profile" && command -v tars) && zsh -c "command -v tars"',
+      ],
+      cwd: this.host.home,
+    });
+    const same =
+      existsSync(onHost(this.host, installed)) &&
+      readFileSync(onHost(this.host, installed)).equals(readFileSync(join(this.host.bin, "tars")));
+    const found = shells.result.stdout.trim().split("\n");
+    this.check(
+      "install-on-path",
+      "tars install copies the built tars to ~/.local/bin; from a PATH without it, sh after ~/.profile and a non-interactive zsh both find it there",
+      shells.result.exitCode === 0 &&
+        same &&
+        found.length === 2 &&
+        found.every((p) => p === installed),
+      `same bytes as dist/tars: ${same}; ${shells.files}/stdout.txt: ${found.join(", ")}`,
     );
   }
 

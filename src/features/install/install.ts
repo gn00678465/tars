@@ -6,17 +6,22 @@ import { uniqueTemp } from "../../core/fs.ts";
 import type { Io } from "../../core/io.ts";
 import { resolvePaths, type Env, type TarsPaths } from "../../core/paths.ts";
 import { harnessEntries } from "../session/harness/registry.ts";
+import { applyPath, installExecutable, planPath } from "./bin.ts";
 import type { EmbeddedFile } from "./embedded.ts";
 
 export interface InstallDeps {
   readonly io: Io;
   readonly env: Env;
+  /** The running tars binary, copied into the bin dir. */
+  readonly executable: string;
   embedded(): Promise<readonly EmbeddedFile[]>;
 }
 
-export interface InstallSources {
+export interface InstallOptions {
   readonly soul?: string;
   readonly memory?: string;
+  /** commander turns --no-modify-path into modifyPath: false. */
+  readonly modifyPath: boolean;
 }
 
 const SEEDS = [
@@ -27,27 +32,38 @@ const SEEDS = [
 export function registerInstall(program: Command, deps: InstallDeps): void {
   program
     .command("install")
-    .description("install skills, seed SOUL.md and MEMORY.md, and prepare every harness")
+    .description(
+      "install skills, seed SOUL.md and MEMORY.md, prepare every harness, and put tars on PATH",
+    )
     .option("--soul <file>", "copy this file to SOUL.md if SOUL.md does not exist")
     .option("--memory <file>", "copy this file to MEMORY.md if MEMORY.md does not exist")
+    .option("--no-modify-path", "copy tars into the bin dir but leave shell startup files alone")
     .addHelpText(
       "after",
       `
 Skills are replaced on every run. SOUL.md and MEMORY.md are never overwritten.
 
+tars is copied to $XDG_BIN_HOME/tars, else ~/.local/bin/tars. When that dir is not on
+PATH, install writes <data>/env and sources it from ~/.profile, each existing
+~/.bash_profile, ~/.bash_login, ~/.bashrc, and, when zsh or fish is present, from
+\${ZDOTDIR:-$HOME}/.zshenv or fish/conf.d/tars.fish. Rerunning adds nothing twice.
+
 Examples:
-  tars install --soul ./SOUL.md --memory ./MEMORY.md
-  tars install`,
+  dist/tars install --soul ./SOUL.md --memory ./MEMORY.md
+  tars install
+  tars install --no-modify-path`,
     )
-    .action(async (sources: InstallSources) => {
-      await install(resolvePaths(deps.env), await deps.embedded(), sources, deps.io);
+    .action(async (options: InstallOptions) => {
+      const paths = resolvePaths(deps.env);
+      await install(paths, await deps.embedded(), options, deps.io);
+      await installOnPath(paths, deps, options.modifyPath);
     });
 }
 
 export async function install(
   paths: TarsPaths,
   skills: readonly EmbeddedFile[],
-  sources: InstallSources,
+  sources: Omit<InstallOptions, "modifyPath">,
   io: Io,
 ): Promise<void> {
   if (skills.length === 0) {
@@ -69,6 +85,17 @@ export async function install(
   io.out(`skills: ${skills.length} files`);
   for (const seed of seeds) io.out(`${seed.label}: ${seed.bytes ? "created" : "kept"}`);
   io.out(`harnesses: ${harnessEntries.map(([name]) => name).join(", ")}`);
+}
+
+async function installOnPath(paths: TarsPaths, deps: InstallDeps, modifyPath: boolean) {
+  // Planned first: a bin dir no shell can quote fails before anything lands in it.
+  const plan = modifyPath ? await planPath(paths, deps.env) : undefined;
+  deps.io.out(`bin: ${await installExecutable(deps.executable, paths.bin)}`);
+  if (!plan) return deps.io.out(`path: left alone (--no-modify-path)`);
+  if (plan.kind === "on-path") return deps.io.out(`path: ${paths.bin} is already on PATH`);
+  await applyPath(plan.edits);
+  deps.io.out(`path: ${plan.edits.map((edit) => edit.file).join(", ")}`);
+  deps.io.err(`open a new shell, or run: . "${plan.envFile}"`);
 }
 
 async function readSeed(

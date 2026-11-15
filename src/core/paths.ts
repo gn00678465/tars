@@ -12,6 +12,8 @@ export interface TarsPaths {
   readonly skills: string;
   readonly workspace: string;
   readonly harness: string;
+  /** Directory `tars install` copies the executable into. */
+  readonly bin: string;
 }
 
 /** Set by tars for every harness it starts, so `tars` run inside a session finds the same data dir. */
@@ -22,12 +24,8 @@ export function resolvePaths(env: Env): TarsPaths {
   if (!home || !isAbsolute(home)) throw new TarsError("HOME must be set to an absolute path");
   // agy runs with a HOME and XDG dirs of its own, so inside it only DATA_DIR_VAR points back here.
   const pinned = env[DATA_DIR_VAR];
-  // The XDG Base Directory spec says to ignore a relative XDG_DATA_HOME.
-  const xdg = env.XDG_DATA_HOME;
   const data =
-    pinned && isAbsolute(pinned)
-      ? pinned
-      : join(xdg && isAbsolute(xdg) ? xdg : join(home, ".local", "share"), "tars");
+    pinned && isAbsolute(pinned) ? pinned : join(xdgDir(env.XDG_DATA_HOME, home, "share"), "tars");
   return {
     home,
     data,
@@ -36,5 +34,11 @@ export function resolvePaths(env: Env): TarsPaths {
     skills: join(data, "skills"),
     workspace: join(data, "workspace"),
     harness: join(data, "harness"),
+    bin: xdgDir(env.XDG_BIN_HOME, home, "bin"),
   };
+}
+
+/** The XDG Base Directory spec says to ignore a relative path in these variables. */
+function xdgDir(value: string | undefined, home: string, fallback: string): string {
+  return value && isAbsolute(value) ? value : join(home, ".local", fallback);
 }

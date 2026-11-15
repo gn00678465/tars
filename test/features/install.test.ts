@@ -43,6 +43,7 @@ describe("tars install", () => {
     expect(readdirSync(paths.data).sort()).toEqual([
       "MEMORY.md",
       "SOUL.md",
+      "env",
       "harness",
       "skills",
       "workspace",
@@ -66,6 +67,7 @@ describe("tars install", () => {
     expect(readdirSync(paths.data).sort()).toEqual([
       "MEMORY.md",
       "SOUL.md",
+      "env",
       "harness",
       "skills",
       "workspace",
