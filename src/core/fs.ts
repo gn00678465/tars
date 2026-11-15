@@ -9,7 +9,7 @@ export function sibling(path: string, suffix: string): string {
 
 // Every session launch runs prepare, so concurrent launches write the same paths; a per-call
 // temp name keeps one launch's rename from consuming another's temp file.
-const uniqueTemp = (path: string) => sibling(path, `tmp-${randomUUID()}`);
+export const uniqueTemp = (path: string) => sibling(path, `tmp-${randomUUID()}`);
 
 export async function writeFileAtomic(path: string, data: string): Promise<void> {
   const tmp = uniqueTemp(path);

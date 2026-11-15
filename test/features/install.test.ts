@@ -49,6 +49,29 @@ describe("tars install", () => {
     ]);
   });
 
+  test("concurrent installs never leave the data dir without skills, a mixed seed, or temp files", async () => {
+    const { home, paths, seedArgs } = setup();
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        run(
+          ["install", ...seedArgs],
+          testDeps({ env: { HOME: home }, embedded: async () => fixture }),
+        ),
+      ),
+    );
+    expect(results).toContain(0);
+    expect(results.every((code) => code === 0 || code === 1)).toBe(true);
+    expect(readFileSync(join(paths.skills, "alpha/SKILL.md"), "utf8")).toBe("alpha v2");
+    expect(readFileSync(paths.memory, "utf8")).toBe("memories");
+    expect(readdirSync(paths.data).sort()).toEqual([
+      "MEMORY.md",
+      "SOUL.md",
+      "harness",
+      "skills",
+      "workspace",
+    ]);
+  });
+
   test("never overwrites an existing MEMORY.md or SOUL.md", async () => {
     const { deps, paths, seedArgs } = setup();
     expect(await run(["install", ...seedArgs], deps)).toBe(0);

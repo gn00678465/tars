@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
-import { sibling } from "../../core/fs.ts";
+import { uniqueTemp } from "../../core/fs.ts";
 import type { Io } from "../../core/io.ts";
 import { resolvePaths, type Env, type TarsPaths } from "../../core/paths.ts";
 import { harnessEntries } from "../session/harness/registry.ts";
@@ -94,32 +94,46 @@ async function readSeed(
 
 /** Writes files into a sibling temp dir, then swaps it in, so stale skill files never survive. */
 export async function replaceSkills(dir: string, files: readonly EmbeddedFile[]): Promise<void> {
-  const tmp = sibling(dir, "tmp");
-  const old = sibling(dir, "old");
-  await rm(tmp, { recursive: true, force: true });
-  await rm(old, { recursive: true, force: true });
-  for (const file of files) {
-    const path = join(tmp, file.path);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, file.bytes);
+  const tmp = uniqueTemp(dir);
+  const old = uniqueTemp(dir);
+  try {
+    for (const file of files) {
+      const path = join(tmp, file.path);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, file.bytes);
+    }
+    // rename() cannot replace a non-empty directory, so the old tree moves aside first.
+    await rename(dir, old).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== "ENOENT") throw err;
+    });
+    await rename(tmp, dir).catch(concurrentInstall(dir));
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+    await rm(old, { recursive: true, force: true });
   }
-  // rename() cannot replace a non-empty directory, so the old tree moves aside first.
-  await rename(dir, old).catch((err: NodeJS.ErrnoException) => {
-    if (err.code !== "ENOENT") throw err;
-  });
-  await rename(tmp, dir);
-  await rm(old, { recursive: true, force: true });
 }
 
 /** link() fails if the target exists, so a seed never overwrites memory, even under a race. */
 async function createExclusive(target: string, bytes: Uint8Array): Promise<void> {
-  const tmp = sibling(target, "tmp");
+  const tmp = uniqueTemp(target);
   await writeFile(tmp, bytes);
   try {
-    await link(tmp, target);
+    await link(tmp, target).catch(concurrentInstall(target));
   } finally {
     await rm(tmp, { force: true });
   }
+}
+
+/** The target appeared between our check and our rename or link: another install got there first. */
+function concurrentInstall(path: string) {
+  return (err: NodeJS.ErrnoException): never => {
+    if (err.code === "ENOTEMPTY" || err.code === "EEXIST") {
+      throw new TarsError(
+        `another tars install wrote ${path} at the same time; run tars install again`,
+      );
+    }
+    throw err;
+  };
 }
 
 async function exists(path: string): Promise<boolean> {
