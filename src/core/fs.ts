@@ -39,8 +39,8 @@ export async function ensureSymlink(target: string, path: string): Promise<void>
  */
 export async function createExclusive(path: string, data: string | Uint8Array): Promise<boolean> {
   const tmp = uniqueTemp(path);
-  await writeFile(tmp, data);
   try {
+    await writeFile(tmp, data);
     await link(tmp, path);
     return true;
   } catch (err) {
