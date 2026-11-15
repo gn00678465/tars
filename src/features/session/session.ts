@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { TarsError } from "../../core/exit.ts";
 import type { Io } from "../../core/io.ts";
-import { resolvePaths, type Env } from "../../core/paths.ts";
+import { DATA_DIR_VAR, resolvePaths, type Env } from "../../core/paths.ts";
 import type { SecretStore } from "../../core/secrets.ts";
 import { loadBoot } from "./boot.ts";
 import { harnessEntries, type HarnessName } from "./harness/registry.ts";
@@ -62,5 +62,6 @@ async function startSession(
   const env = Object.fromEntries(
     Object.entries(deps.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
+  env[DATA_DIR_VAR] = paths.data;
   return deps.launch(adapter.plan({ paths, env, launchDir: deps.cwd, userArgs, boot, credential }));
 }

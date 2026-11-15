@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { resolvePaths } from "../../../src/core/paths.ts";
 import { run } from "../../../src/main.ts";
 import { fakeSecrets } from "../../helpers.ts";
 import { installedHome } from "./fixture.ts";
@@ -108,6 +109,13 @@ describe("boot check", () => {
     expect(await run(["agy"], deps)).toBe(1);
     expect(plans).toHaveLength(0);
   });
+});
+
+test("tars run inside either harness resolves the same MEMORY.md as the launching tars", async () => {
+  const { deps, plans, paths } = await installedHome();
+  expect(await run(["claude"], deps)).toBe(7);
+  expect(await run(["agy"], deps)).toBe(7);
+  for (const plan of plans) expect(resolvePaths(plan.env).memory).toBe(paths.memory);
 });
 
 describe("tars agy", () => {

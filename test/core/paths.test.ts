@@ -15,6 +15,13 @@ test("an absolute XDG_DATA_HOME moves the data dir", () => {
   expect(resolvePaths({ HOME: "/h", XDG_DATA_HOME: "/x" }).data).toBe("/x/tars");
 });
 
+test("an absolute TARS_DATA_DIR wins over HOME and XDG_DATA_HOME; a relative one is ignored", () => {
+  expect(resolvePaths({ HOME: "/h", XDG_DATA_HOME: "/x", TARS_DATA_DIR: "/d" }).memory).toBe(
+    "/d/MEMORY.md",
+  );
+  expect(resolvePaths({ HOME: "/h", TARS_DATA_DIR: "rel" }).data).toBe("/h/.local/share/tars");
+});
+
 test("a relative XDG_DATA_HOME is ignored", () => {
   expect(resolvePaths({ HOME: "/h", XDG_DATA_HOME: "rel" }).data).toBe("/h/.local/share/tars");
 });
