@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "bun scripts/build.ts",
-    "check": "oxfmt --check src test scripts && oxlint --deny-warnings && tsc --noEmit && bun test && gitleaks dir ."
+    "check": "oxfmt --check src test scripts && oxlint --deny-warnings && tsc --noEmit && bun test && gitleaks dir .",
+    "e2e": "bun scripts/build.ts && bun test/e2e/run.ts"
   },
   "dependencies": {
     "commander": "15.1.0"
