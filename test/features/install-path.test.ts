@@ -98,11 +98,15 @@ describe("tars install puts tars on PATH", () => {
     expect(existsSync(join(home, ".zshenv"))).toBe(false);
   });
 
-  test("gives fish its own conf.d file", async () => {
+  test("adds a source line to fish/conf.d/tars.fish and keeps what is already there", async () => {
     const { home, paths, install } = setup({}, ["fish"]);
+    const confd = join(home, ".config/fish/conf.d");
+    mkdirSync(confd, { recursive: true });
+    writeFileSync(join(confd, "tars.fish"), "set -gx KEEP me\n");
     expect(await install()).toBe(0);
-    expect(read(join(home, ".config/fish/conf.d/tars.fish"))).toBe(
-      'source "$HOME/.local/share/tars/env.fish"\n',
+    expect(await install()).toBe(0);
+    expect(read(join(confd, "tars.fish"))).toBe(
+      'set -gx KEEP me\nsource "$HOME/.local/share/tars/env.fish"\n',
     );
     expect(read(join(paths.data, "env.fish"))).toContain('contains "$HOME/.local/bin" $PATH');
   });
@@ -119,11 +123,12 @@ describe("tars install puts tars on PATH", () => {
     expect(sh.stdout.toString().trim()).toBe(`${join(home, ".local/bin")}:/usr/bin:/bin`);
   });
 
-  test("refuses a bin dir that a shell would expand, before writing anything into it", async () => {
+  test("refuses a bin dir that a shell would expand, before install writes anything", async () => {
     const bin = join(tempHome(), "$evil");
-    const { home, install } = setup({ XDG_BIN_HOME: bin });
+    const { home, paths, install } = setup({ XDG_BIN_HOME: bin });
     expect(await install()).toBe(1);
     expect(existsSync(bin)).toBe(false);
+    expect(readdirSync(paths.data).sort()).toEqual(["MEMORY.md", "SOUL.md"]);
     expect(existsSync(join(home, ".profile"))).toBe(false);
   });
 });

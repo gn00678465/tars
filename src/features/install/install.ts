@@ -6,7 +6,7 @@ import { uniqueTemp } from "../../core/fs.ts";
 import type { Io } from "../../core/io.ts";
 import { resolvePaths, type Env, type TarsPaths } from "../../core/paths.ts";
 import { harnessEntries } from "../session/harness/registry.ts";
-import { applyPath, installExecutable, planPath } from "./bin.ts";
+import { applyPath, installExecutable, planPath, type PathPlan } from "./bin.ts";
 import type { EmbeddedFile } from "./embedded.ts";
 
 export interface InstallDeps {
@@ -55,8 +55,10 @@ Examples:
     )
     .action(async (options: InstallOptions) => {
       const paths = resolvePaths(deps.env);
+      // Planned first: a bin dir no shell can quote fails before install writes anything.
+      const plan = options.modifyPath ? await planPath(paths, deps.env) : undefined;
       await install(paths, await deps.embedded(), options, deps.io);
-      await installOnPath(paths, deps, options.modifyPath);
+      await installOnPath(paths, deps, plan);
     });
 }
 
@@ -87,9 +89,7 @@ export async function install(
   io.out(`harnesses: ${harnessEntries.map(([name]) => name).join(", ")}`);
 }
 
-async function installOnPath(paths: TarsPaths, deps: InstallDeps, modifyPath: boolean) {
-  // Planned first: a bin dir no shell can quote fails before anything lands in it.
-  const plan = modifyPath ? await planPath(paths, deps.env) : undefined;
+async function installOnPath(paths: TarsPaths, deps: InstallDeps, plan: PathPlan | undefined) {
   deps.io.out(`bin: ${await installExecutable(deps.executable, paths.bin)}`);
   if (!plan) return deps.io.out(`path: left alone (--no-modify-path)`);
   if (plan.kind === "on-path") return deps.io.out(`path: ${paths.bin} is already on PATH`);

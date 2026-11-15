@@ -22,7 +22,7 @@ export async function installExecutable(source: string, bin: string): Promise<st
   return target;
 }
 
-/** One file tars writes to put the bin dir on PATH: owned whole, or one line appended. */
+/** One file tars writes to put the bin dir on PATH: an env file it owns, or a startup file it appends one line to. */
 type ShellEdit =
   | { readonly kind: "own"; readonly file: string; readonly content: string }
   | { readonly kind: "append"; readonly file: string; readonly line: string };
@@ -51,10 +51,10 @@ async function shellEdits(paths: TarsPaths, env: Env): Promise<ShellEdit[]> {
   const bin = quoted(paths.bin, paths.home);
   const envSh = join(paths.data, "env");
   const envFish = join(paths.data, "env.fish");
-  const source: (file: string) => ShellEdit = (file) => ({
+  const source = (file: string, envFile = envSh, command = "."): ShellEdit => ({
     kind: "append",
     file,
-    line: `. ${quoted(envSh, paths.home)}`,
+    line: `${command} ${quoted(envFile, paths.home)}`,
   });
   const has = (shell: string) =>
     basename(env.SHELL ?? "") === shell || Bun.which(shell, { PATH: env.PATH ?? "" }) !== null;
@@ -91,17 +91,16 @@ if not contains ${bin} $PATH
 end
 `,
       },
-      {
-        kind: "own",
-        file: join(dir, "fish", "conf.d", "tars.fish"),
-        content: `source ${quoted(envFish, paths.home)}\n`,
-      },
+      source(join(dir, "fish", "conf.d", "tars.fish"), envFish, "source"),
     );
   }
   return edits;
 }
 
-/** zsh reads .zshenv for every shell, interactive or not; ZDOTDIR moves it. */
+/**
+ * zsh reads .zshenv for every shell, interactive or not. An existing $HOME/.zshenv wins over a
+ * missing $ZDOTDIR/.zshenv, as in rustup: ZDOTDIR is often set inside $HOME/.zshenv itself.
+ */
 async function zshenv(home: string, zdotdir: string | undefined): Promise<string> {
   const candidates = [zdotdir && isAbsolute(zdotdir) ? zdotdir : undefined, home]
     .filter((dir): dir is string => dir !== undefined)
