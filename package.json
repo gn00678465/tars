@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "oxfmt --check src test && oxlint --deny-warnings && tsc --noEmit && bun test && gitleaks dir ."
+    "build": "bun scripts/build.ts",
+    "check": "oxfmt --check src test scripts && oxlint --deny-warnings && tsc --noEmit && bun test && gitleaks dir ."
   },
   "dependencies": {
     "commander": "15.1.0"

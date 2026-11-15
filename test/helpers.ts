@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../src/core/io.ts";
+import type { Deps } from "../src/main.ts";
 
 export interface CapturedIo extends Io {
   readonly stdout: string[];
@@ -16,4 +17,11 @@ export function captureIo(): CapturedIo {
 
 export function tempHome(): string {
   return mkdtempSync(join(tmpdir(), "tars-test-"));
+}
+
+export type TestDeps = Deps & { readonly io: CapturedIo };
+
+/** Deps with no access to the real HOME, keyring, or embedded files. */
+export function testDeps(overrides: Partial<Deps> = {}): TestDeps {
+  return { env: {}, embedded: async () => [], ...overrides, io: captureIo() };
 }
