@@ -10,7 +10,6 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
 import { dirname } from "node:path";
 import { TarsError } from "../../core/exit.ts";
@@ -53,7 +52,8 @@ function writeAtomic(path: string, content: string): void {
   const fd = openSync(tmp, "w");
   try {
     fchmodSync(fd, statSync(path).mode & 0o777);
-    writeSync(fd, content);
+    // writeFileSync loops until every byte is written; a bare writeSync may stop short.
+    writeFileSync(fd, content);
     fsyncSync(fd);
   } finally {
     closeSync(fd);

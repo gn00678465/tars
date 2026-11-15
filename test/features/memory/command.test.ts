@@ -212,6 +212,23 @@ describe("failures and usage errors", () => {
   });
 });
 
+test("a write cut short by a file size limit fails and leaves MEMORY.md intact", () => {
+  const path = sampleMemoryFile();
+  const text = "長".repeat(4000);
+  const proc = Bun.spawnSync(
+    [
+      "sh",
+      "-c",
+      'ulimit -f 1 && exec bun "$0" memory remember --id pref-long --section 偏好 --text "$1" --source user',
+      MAIN,
+      text,
+    ],
+    { env: envFor(path), stdout: "pipe", stderr: "pipe" },
+  );
+  expect(proc.exitCode).not.toBe(0);
+  expect(readFileSync(path, "utf8")).toBe(SAMPLE);
+});
+
 describe("concurrency", () => {
   test("concurrent writer processes all land", async () => {
     const path = sampleMemoryFile();
