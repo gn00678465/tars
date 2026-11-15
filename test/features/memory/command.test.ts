@@ -3,13 +3,17 @@ import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { dirname, join } from "node:path";
 import { parseMemory } from "../../../src/features/memory/document.ts";
 import { LockTimeoutError, updateMemoryFile } from "../../../src/features/memory/store.ts";
-import { SAMPLE, sampleMemoryFile } from "./sample.ts";
+import { SAMPLE, envFor, sampleMemoryFile } from "./sample.ts";
 
-const CLI = join(import.meta.dir, "cli.ts");
+const MAIN = join(import.meta.dir, "../../../src/main.ts");
 const lockOf = (memoryPath: string) => join(dirname(memoryPath), ".MEMORY.md.lock");
 
 function tars(memoryPath: string, ...args: string[]) {
-  const proc = Bun.spawnSync(["bun", CLI, memoryPath, ...args], { stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawnSync(["bun", MAIN, "memory", ...args], {
+    env: envFor(memoryPath),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   return { code: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
@@ -214,7 +218,8 @@ describe("concurrency", () => {
     const writers = ["w0", "w1", "w2", "w3", "w4", "w5"];
     const perWriter = 15;
     const procs = writers.map((w) =>
-      Bun.spawn(["bun", join(import.meta.dir, "remember-many.ts"), path, w, String(perWriter)], {
+      Bun.spawn(["bun", join(import.meta.dir, "remember-many.ts"), w, String(perWriter)], {
+        env: envFor(path),
         stderr: "pipe",
       }),
     );

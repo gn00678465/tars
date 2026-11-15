@@ -1,6 +1,6 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export const SAMPLE = `# 記憶
 
@@ -33,7 +33,15 @@ export const SAMPLE = `# 記憶
 
 /** A fresh MEMORY.md in its own temp dir. */
 export function sampleMemoryFile(content = SAMPLE): string {
-  const path = join(mkdtempSync(join(tmpdir(), "tars-memory-")), "MEMORY.md");
+  const data = join(mkdtempSync(join(tmpdir(), "tars-memory-")), "tars");
+  mkdirSync(data);
+  const path = join(data, "MEMORY.md");
   writeFileSync(path, content);
   return path;
+}
+
+/** The env under which `tars` resolves memoryPath, as written by sampleMemoryFile, to its MEMORY.md. */
+export function envFor(memoryPath: string): Record<string, string> {
+  const root = dirname(dirname(memoryPath));
+  return { HOME: root, XDG_DATA_HOME: root, PATH: process.env.PATH ?? "/usr/bin" };
 }

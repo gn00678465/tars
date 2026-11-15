@@ -1,10 +1,11 @@
-// One writer for the concurrency test. Args: <memory path> <writer name> <count>.
-import { runMemoryCli } from "./cli.ts";
+// One writer for the concurrency test. Args: <writer name> <count>; the memory file comes from the env.
+import { run } from "../../../src/main.ts";
 
-const [memoryPath = "", writer = "", count = "0"] = process.argv.slice(2);
+const [writer = "", count = "0"] = process.argv.slice(2);
 for (let i = 0; i < Number(count); i += 1) {
   const id = `${writer}-${i}`;
   const argv = [
+    "memory",
     "remember",
     "--id",
     id,
@@ -15,6 +16,6 @@ for (let i = 0; i < Number(count); i += 1) {
     "--source",
     "user",
   ];
-  const code = await runMemoryCli(memoryPath, argv);
+  const code = await run(argv);
   if (code !== 0) process.exit(code);
 }

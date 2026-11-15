@@ -1,10 +1,12 @@
 import { Command, CommanderError } from "commander";
 import { EXIT, TarsError } from "./core/exit.ts";
 import { processIo, readSecret } from "./core/io.ts";
+import { resolvePaths } from "./core/paths.ts";
 import { keyringStore } from "./core/secrets.ts";
 import { registerAuth, type AuthDeps } from "./features/auth/auth.ts";
 import { skillsFromBundle } from "./features/install/embedded.ts";
 import { registerInstall, type InstallDeps } from "./features/install/install.ts";
+import { registerMemoryCommands } from "./features/memory/command.ts";
 import { launch } from "./features/session/launch.ts";
 import { registerSessions, type SessionDeps } from "./features/session/session.ts";
 
@@ -35,11 +37,13 @@ Examples:
   tars install --soul ./SOUL.md --memory ./MEMORY.md
   tars auth claude
   tars claude
-  tars agy`,
+  tars agy
+  tars memory remember --id pref-tone --section 偏好 --text "回覆先講結論。" --source user`,
   );
   registerInstall(program, deps);
   registerAuth(program, deps);
   registerSessions(program, deps, exitWith);
+  registerMemoryCommands(program, { io: deps.io, memoryPath: () => resolvePaths(deps.env).memory });
   return program;
 }
 
