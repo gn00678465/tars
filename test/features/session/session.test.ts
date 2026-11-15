@@ -31,24 +31,20 @@ describe("tars claude", () => {
     expect(plans[0]!.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
   });
 
-  test("restores a deleted or edited settings.json before launch, keeping Claude Code's own keys", async () => {
+  test("restores a deleted, edited, or corrupted settings.json before launch", async () => {
     const { deps, plans, paths } = await installedHome();
     const settings = `${paths.data}/harness/claude/settings.json`;
-    rmSync(settings);
-    expect(await run(["claude"], deps)).toBe(7);
-    writeFileSync(settings, JSON.stringify({ model: "opus", claudeMdExcludes: [] }));
-    expect(await run(["claude"], deps)).toBe(7);
-    expect(plans).toHaveLength(2);
-    const after = JSON.parse(readFileSync(settings, "utf8"));
-    expect(after.model).toBe("opus");
-    expect(after.claudeMdExcludes).toContain(`${paths.home}/.claude/CLAUDE.md`);
-  });
-
-  test("a settings.json that is not a JSON object stops the launch", async () => {
-    const { deps, plans, paths } = await installedHome();
-    writeFileSync(`${paths.data}/harness/claude/settings.json`, "not json");
-    expect(await run(["claude"], deps)).toBe(1);
-    expect(plans).toHaveLength(0);
+    const excludes = () => JSON.parse(readFileSync(settings, "utf8")).claudeMdExcludes;
+    for (const tamper of [
+      () => rmSync(settings),
+      () => writeFileSync(settings, "{}"),
+      () => writeFileSync(settings, "not json"),
+    ]) {
+      tamper();
+      expect(await run(["claude"], deps)).toBe(7);
+      expect(excludes()).toContain(`${paths.home}/.claude/CLAUDE.md`);
+    }
+    expect(plans).toHaveLength(3);
   });
 
   test("the system prompt carries both files with their sha256, and stderr logs the hashes", async () => {

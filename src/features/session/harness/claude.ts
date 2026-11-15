@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { TarsError } from "../../../core/exit.ts";
 import { ensureSymlink, writeFileAtomic } from "../../../core/fs.ts";
@@ -29,12 +29,10 @@ export const claude: HarnessAdapter = {
       join(paths.home, "CLAUDE.md"),
       join(paths.home, "CLAUDE.local.md"),
     ];
-    // tars owns only this key; Claude Code may write its own settings into the same file.
-    const settingsPath = join(config, "settings.json");
-    const settings = await readSettings(settingsPath);
+    // tars owns this file whole and never reads it back (M1: tars does not merge harness config).
     await writeFileAtomic(
-      settingsPath,
-      `${JSON.stringify({ ...settings, claudeMdExcludes }, null, 2)}\n`,
+      join(config, "settings.json"),
+      `${JSON.stringify({ claudeMdExcludes }, null, 2)}\n`,
     );
   },
 
@@ -62,23 +60,6 @@ export const claude: HarnessAdapter = {
     };
   },
 };
-
-async function readSettings(path: string): Promise<Record<string, unknown>> {
-  const text = await readFile(path, "utf8").catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") return "{}";
-    throw err;
-  });
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = undefined;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new TarsError(`${path} is not a JSON object; fix or delete it`);
-  }
-  return parsed as Record<string, unknown>;
-}
 
 const BLOCK_TAG = /<(\s*\/?\s*tars-file)/gi;
 
