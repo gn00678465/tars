@@ -22,7 +22,7 @@ description: 使用者的訊息以「hey tars」或「tars」開頭時使用，�
 | 請求在講 | 去處 |
 |---|---|
 | 支出、收入、轉帳、代墊、帳戶餘額、查帳 | `playbooks/bookkeeping.md` |
-| 排讀書計畫、準備考試、檢查學習進度 | `playbooks/learn.md` |
+| 排讀書計畫、準備考試、檢查學習進度、教我學會某個主題或技能、考我、練到熟 | `playbooks/learn.md` |
 | 怎麼讀、怎麼記、讀了就忘、學習方法有沒有用或為什麼有效 | `learning-how-to-learn` skill |
 | 模糊想法要整理成計畫、覆盤一天的工作、做決策 | `playbooks/coach.md` |
 | 探索科技題材的供應鏈瓶頸、找台股與美股的卡點、篩選受惠股 | `playbooks/theme-bottleneck-scan.md` |
