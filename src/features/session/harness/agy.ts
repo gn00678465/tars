@@ -29,7 +29,15 @@ export const agy: HarnessAdapter = {
       command: "agy",
       args: ["--add-dir", ctx.launchDir, ...ctx.userArgs],
       // DBUS_SESSION_BUS_ADDRESS stays inherited: agy reads the user's Google login from the keyring.
-      env: { ...ctx.env, HOME: home, XDG_CONFIG_HOME: join(home, ".config") },
+      // The XDG dirs follow HOME, as in the verified launch; inherited ones point at the user's real dirs.
+      env: {
+        ...ctx.env,
+        HOME: home,
+        XDG_CONFIG_HOME: join(home, ".config"),
+        XDG_DATA_HOME: join(home, ".local", "share"),
+        XDG_STATE_HOME: join(home, ".local", "state"),
+        XDG_CACHE_HOME: join(home, ".cache"),
+      },
       cwd: ctx.paths.workspace,
     };
   },

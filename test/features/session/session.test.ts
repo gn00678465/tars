@@ -22,6 +22,34 @@ describe("tars claude", () => {
     expect(plan.args.slice(2)).toEqual(["--add-dir", "/launch-dir", "--continue", "x"]);
   });
 
+  test("drops inherited API keys so the keyring token is the login Claude Code uses", async () => {
+    const { deps, plans, env } = await installedHome();
+    Object.assign(env, { ANTHROPIC_API_KEY: "sk-ant-api-FAKE", ANTHROPIC_AUTH_TOKEN: "FAKE" });
+    expect(await run(["claude"], deps)).toBe(7);
+    expect(plans[0]!.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(plans[0]!.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  });
+
+  test("restores a deleted or edited settings.json before launch, keeping Claude Code's own keys", async () => {
+    const { deps, plans, paths } = await installedHome();
+    const settings = `${paths.data}/harness/claude/settings.json`;
+    rmSync(settings);
+    expect(await run(["claude"], deps)).toBe(7);
+    writeFileSync(settings, JSON.stringify({ model: "opus", claudeMdExcludes: [] }));
+    expect(await run(["claude"], deps)).toBe(7);
+    expect(plans).toHaveLength(2);
+    const after = JSON.parse(readFileSync(settings, "utf8"));
+    expect(after.model).toBe("opus");
+    expect(after.claudeMdExcludes).toContain(`${paths.home}/.claude/CLAUDE.md`);
+  });
+
+  test("a settings.json that is not a JSON object stops the launch", async () => {
+    const { deps, plans, paths } = await installedHome();
+    writeFileSync(`${paths.data}/harness/claude/settings.json`, "not json");
+    expect(await run(["claude"], deps)).toBe(1);
+    expect(plans).toHaveLength(0);
+  });
+
   test("the system prompt carries both files with their sha256, and stderr logs the hashes", async () => {
     const { deps, plans } = await installedHome("I am tars.\n", "- user likes tea\n");
     expect(await run(["claude"], deps)).toBe(7);
@@ -91,6 +119,9 @@ describe("tars agy", () => {
     expect(plan.cwd).toBe(paths.workspace);
     expect(plan.env.HOME).toBe(`${paths.data}/harness/agy-home`);
     expect(plan.env.XDG_CONFIG_HOME).toBe(`${paths.data}/harness/agy-home/.config`);
+    expect(plan.env.XDG_DATA_HOME).toBe(`${paths.data}/harness/agy-home/.local/share`);
+    expect(plan.env.XDG_STATE_HOME).toBe(`${paths.data}/harness/agy-home/.local/state`);
+    expect(plan.env.XDG_CACHE_HOME).toBe(`${paths.data}/harness/agy-home/.cache`);
     expect(plan.env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/fake-bus");
     expect(plan.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(plan.args).toEqual(["--add-dir", "/launch-dir", "--print", "hi"]);

@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { TarsError } from "../../../core/exit.ts";
 import { ensureSymlink, writeFileAtomic } from "../../../core/fs.ts";
@@ -29,9 +29,12 @@ export const claude: HarnessAdapter = {
       join(paths.home, "CLAUDE.md"),
       join(paths.home, "CLAUDE.local.md"),
     ];
+    // tars owns only this key; Claude Code may write its own settings into the same file.
+    const settingsPath = join(config, "settings.json");
+    const settings = await readSettings(settingsPath);
     await writeFileAtomic(
-      join(config, "settings.json"),
-      `${JSON.stringify({ claudeMdExcludes }, null, 2)}\n`,
+      settingsPath,
+      `${JSON.stringify({ ...settings, claudeMdExcludes }, null, 2)}\n`,
     );
   },
 
@@ -44,11 +47,13 @@ export const claude: HarnessAdapter = {
       );
     }
     const { config, anthropic } = dirs(ctx.paths);
+    // Claude Code prefers these over CLAUDE_CODE_OAUTH_TOKEN; the shared login is the keyring token.
+    const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ...env } = ctx.env;
     return {
       command: "claude",
       args: ["--append-system-prompt", prompt, "--add-dir", ctx.launchDir, ...ctx.userArgs],
       env: {
-        ...ctx.env,
+        ...env,
         CLAUDE_CONFIG_DIR: config,
         ANTHROPIC_CONFIG_DIR: anthropic,
         CLAUDE_CODE_OAUTH_TOKEN: ctx.credential,
@@ -57,6 +62,23 @@ export const claude: HarnessAdapter = {
     };
   },
 };
+
+async function readSettings(path: string): Promise<Record<string, unknown>> {
+  const text = await readFile(path, "utf8").catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") return "{}";
+    throw err;
+  });
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new TarsError(`${path} is not a JSON object; fix or delete it`);
+  }
+  return parsed as Record<string, unknown>;
+}
 
 const BLOCK_TAG = /<(\s*\/?\s*tars-file)/gi;
 

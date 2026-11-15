@@ -50,6 +50,8 @@ async function startSession(
 ): Promise<number> {
   const paths = resolvePaths(deps.env);
   const boot = await loadBoot(paths);
+  // Re-converge before every launch: a missing settings.json would let ~/.claude/CLAUDE.md load.
+  await adapter.prepare(paths);
   for (const file of boot.files) deps.io.err(`${file.sha256}  ${file.label}`);
   let credential: string | undefined;
   if (adapter.credential) {
