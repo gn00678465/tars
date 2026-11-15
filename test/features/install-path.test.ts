@@ -98,6 +98,25 @@ describe("tars install puts tars on PATH", () => {
     expect(existsSync(join(home, ".zshenv"))).toBe(false);
   });
 
+  const zsh = Bun.which("zsh");
+  for (const [where, zshenv, exported] of [
+    ["exported by the parent, beside an unrelated $HOME/.zshenv", "setopt no_beep\n", true],
+    ["set inside $HOME/.zshenv", 'export ZDOTDIR="$HOME/.config/zsh"\n', false],
+  ] as const) {
+    test.skipIf(!zsh)(`a new zsh finds tars when ZDOTDIR is ${where}`, async () => {
+      const home = tempHome();
+      const zdotdir = join(home, ".config/zsh");
+      mkdirSync(zdotdir, { recursive: true });
+      writeFileSync(join(home, ".zshenv"), zshenv);
+      const { install } = setup({ HOME: home, ZDOTDIR: zdotdir, SHELL: "/usr/bin/zsh" });
+      expect(await install()).toBe(0);
+      const env: Record<string, string> = { HOME: home, PATH: "/usr/bin:/bin" };
+      if (exported) env.ZDOTDIR = zdotdir;
+      const found = Bun.spawnSync([zsh!, "-c", "command -v tars"], { env });
+      expect(found.stdout.toString().trim()).toBe(join(home, ".local/bin/tars"));
+    });
+  }
+
   test("adds a source line to fish/conf.d/tars.fish and keeps what is already there", async () => {
     const { home, paths, install } = setup({}, ["fish"]);
     const confd = join(home, ".config/fish/conf.d");

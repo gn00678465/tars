@@ -77,7 +77,8 @@ esac
     const file = join(paths.home, name);
     if (await exists(file)) edits.push(source(file));
   }
-  if (has("zsh")) edits.push(source(await zshenv(paths.home, env.ZDOTDIR)));
+  if (has("zsh"))
+    for (const file of await zshenvFiles(paths.home, env.ZDOTDIR)) edits.push(source(file));
   if (has("fish")) {
     const config = env.XDG_CONFIG_HOME;
     const dir = config && isAbsolute(config) ? config : join(paths.home, ".config");
@@ -98,15 +99,15 @@ end
 }
 
 /**
- * zsh reads .zshenv for every shell, interactive or not. An existing $HOME/.zshenv wins over a
- * missing $ZDOTDIR/.zshenv, as in rustup: ZDOTDIR is often set inside $HOME/.zshenv itself.
+ * zsh reads .zshenv once per shell, interactive or not, from the ZDOTDIR in effect before it runs.
+ * ZDOTDIR may come from the parent (read $ZDOTDIR/.zshenv) or be set inside $HOME/.zshenv (read
+ * that one), and install cannot tell which, so it writes both.
  */
-async function zshenv(home: string, zdotdir: string | undefined): Promise<string> {
-  const candidates = [zdotdir && isAbsolute(zdotdir) ? zdotdir : undefined, home]
-    .filter((dir): dir is string => dir !== undefined)
-    .map((dir) => join(dir, ".zshenv"));
-  for (const file of candidates) if (await exists(file)) return file;
-  return candidates[0]!;
+async function zshenvFiles(home: string, zdotdir: string | undefined): Promise<string[]> {
+  const atHome = join(home, ".zshenv");
+  if (!zdotdir || !isAbsolute(zdotdir) || zdotdir === home) return [atHome];
+  const atZdotdir = join(zdotdir, ".zshenv");
+  return (await exists(atHome)) ? [atZdotdir, atHome] : [atZdotdir];
 }
 
 /** A double-quoted path that sh, bash, zsh, and fish all read the same way, with $HOME kept symbolic. */
