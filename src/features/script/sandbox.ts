@@ -99,8 +99,9 @@ export async function runSandboxed(job: SandboxJob, host: SandboxHost): Promise<
 
   const record = join(runDir, `${process.pid}.json`);
   const callerDir = process.cwd();
-  // On Linux sandbox-runtime ignores its cwd argument and scans process.cwd(); the script inherits it.
-  process.chdir(job.cwd);
+  // On Linux sandbox-runtime ignores its cwd argument and denies writes to .git/hooks, .bashrc and
+  // the like only under process.cwd(); --out is the one writable place, so that is what it scans.
+  process.chdir(job.outDir ?? job.cwd);
   try {
     await SandboxManager.initialize(config, open ? openAsk : undefined);
     // sandbox-runtime only warns when the seccomp helper is missing, then runs with Unix sockets
@@ -128,7 +129,7 @@ export async function runSandboxed(job: SandboxJob, host: SandboxHost): Promise<
       throw new TarsError(
         `${SHARED_TMP} exists, and the sandbox would let the script read and write it; remove it first`,
       );
-    return await spawnAndWait(wrapped.argv, sandboxEnv(wrapped.env, job), job.timeoutMs);
+    return await spawnAndWait(wrapped.argv, job.cwd, sandboxEnv(job), job.timeoutMs);
   } finally {
     SandboxManager.cleanupAfterCommand();
     await SandboxManager.reset();
@@ -137,26 +138,31 @@ export async function runSandboxed(job: SandboxJob, host: SandboxHost): Promise<
   }
 }
 
-/** What sandbox-runtime added for its own plumbing, plus tars's allowlist; nothing else of ours. */
-function sandboxEnv(wrapped: NodeJS.ProcessEnv, job: SandboxJob): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(wrapped))
-    if (value !== undefined && process.env[key] !== value) env[key] = value;
-  env.PATH = "/usr/bin:/bin";
-  env.LANG = "C.UTF-8";
-  env.HOME = "/tmp";
-  if (job.secret !== undefined) env.TARS_SECRET = job.secret;
-  if (job.outDir !== undefined) env.TARS_OUT = job.outDir;
-  return env;
+// On Linux wrapWithSandboxArgv returns process.env unchanged; its own variables are in the command.
+function sandboxEnv(job: SandboxJob): Record<string, string> {
+  return {
+    PATH: "/usr/bin:/bin",
+    LANG: "C.UTF-8",
+    HOME: "/tmp",
+    ...(job.secret === undefined ? {} : { TARS_SECRET: job.secret }),
+    ...(job.outDir === undefined ? {} : { TARS_OUT: job.outDir }),
+  };
 }
 
 async function spawnAndWait(
   argv: readonly string[],
+  cwd: string,
   env: Record<string, string>,
   timeoutMs: number,
 ): Promise<SandboxResult> {
   const started = performance.now();
-  const proc = Bun.spawn([...argv], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn([...argv], {
+    cwd,
+    env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   let timedOut = false;
   let forced: ReturnType<typeof setTimeout> | undefined;
   const stop = () => {

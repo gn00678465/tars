@@ -1,8 +1,11 @@
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
+  readFileSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -70,8 +73,10 @@ print(secret); print(key); print(urllib.parse.quote(key)); print(base64.b64encod
 print("stderr", key, file=sys.stderr)
 out = os.environ.get("TARS_OUT")
 if out: open(os.path.join(out, "written.txt"), "w").write("from the sandbox")
+hook = attempt(lambda: open(os.path.join(out, ".git/hooks/pre-commit"), "w").write("x")) if out else None
 print(json.dumps({
   "cwd": os.getcwd(),
+  "hook": hook,
   "argv": sys.argv[1:],
   "allowed": get(${ALLOWED_PORT}), "other": get(${OTHER_PORT}),
   "home": [attempt(lambda: open(p).read()) for p in (${JSON.stringify(`${userInfo().homedir}/canary.txt`)}, ${JSON.stringify(`${userInfo().homedir}/.local/share/tars/MEMORY.md`)})],
@@ -260,10 +265,11 @@ async function inner(): Promise<number> {
       !run.stderr.includes(KEY) && run.stderr.includes(`stderr ${"[REDACTED]"}`),
       run.stderr.trim().slice(0, 200),
     );
+    const versionDir = join(host.home, ".local/share/tars/scripts/library/probe/versions/v1");
     check(
       "cwd",
       "the script runs in its own version directory",
-      report.cwd === join(host.home, ".local/share/tars/scripts/library/probe/versions/v1"),
+      report.cwd === versionDir,
       String(report.cwd),
     );
 
@@ -278,13 +284,25 @@ async function inner(): Promise<number> {
     const project = `${host.home}/projects/app`;
     const outOk = await step(
       "out-ok",
-      `mkdir -p ${project} && cd ${project} && TARS_LAUNCH_DIR=${project} tars script run probe --out dl -- x && cat ${project}/dl/written.txt`,
+      `mkdir -p ${project}/dl/.git/hooks && cd ${project} && TARS_LAUNCH_DIR=${project} tars script run probe --out dl -- x`,
     );
+    const outReport = lastJson(outOk.stdout);
+    const dl = join(host.fakeHome, "projects/app/dl");
+    const written = existsSync(join(dl, "written.txt"))
+      ? readFileSync(join(dl, "written.txt"), "utf8")
+      : "(missing)";
     check(
       "out-ok",
-      "a --out under the launch dir is writable, though its parent is hidden",
-      outOk.exitCode === 0 && outOk.stdout.trim().endsWith("from the sandbox"),
-      `exit ${outOk.exitCode}: ${outOk.stdout.trim().split("\n").at(-1)} ${outOk.stderr.slice(0, 200)}`,
+      "a --out under the launch dir is writable, though its parent is hidden, and the script still runs in its version directory",
+      outOk.exitCode === 0 && written === "from the sandbox" && outReport.cwd === versionDir,
+      `exit ${outOk.exitCode}: written.txt ${JSON.stringify(written)}, cwd ${String(outReport.cwd)} ${outOk.stderr.slice(0, 200)}`,
+    );
+    const hookFile = join(dl, ".git/hooks/pre-commit");
+    check(
+      "out-git-hook",
+      "inside --out, the script cannot write .git/hooks",
+      String(outReport.hook).startsWith("DENIED") && !existsSync(hookFile),
+      `hook write: ${String(outReport.hook)}; ${hookFile} exists: ${existsSync(hookFile)}; dl holds ${JSON.stringify(readdirSync(dl).toSorted())}`,
     );
 
     const sharedTmp = await step("shared-tmp", "mkdir /tmp/claude && tars script run probe -- x");

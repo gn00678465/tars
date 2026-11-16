@@ -20,21 +20,24 @@ export async function prepareOutDir(requested: string, rules: OutDirRules): Prom
   await mkdir(outRoot, { recursive: true });
   const target = resolve(rules.cwd, requested);
   const real = realpathOfExistingAncestorPlusRest;
-  const [realLaunch, realOutRoot, realData] = await Promise.all([
+  const [realLaunch, realOutRoot, realData, realHome] = await Promise.all([
     real(rules.launchDir),
     real(outRoot),
     real(rules.data),
+    real(rules.realHome),
   ]);
   const allowed = [realLaunch, realOutRoot];
-  const forbidden = [
-    realData,
-    ...(await Promise.all(
-      [...rules.bins, join(rules.realHome, ".config"), join(rules.realHome, ".ssh")].map(real),
-    )),
-  ];
+  const forbidden = [realData, ...(await Promise.all(rules.bins.map(real)))];
   const check = (path: string) => {
     if (!allowed.some((root) => within(path, root)))
       throw new TarsError(`--out ${requested} must be under ${rules.launchDir} or ${outRoot}`);
+    // Dot directories in the home hold config, keys and autostart entries; refuse them all.
+    const [first = ""] = relative(realHome, path).split(sep);
+    const hidden = within(path, realHome) && first.startsWith(".") && !within(path, realOutRoot);
+    if (hidden || within(realHome, path))
+      throw new TarsError(
+        `--out ${requested} overlaps ${hidden ? join(realHome, first) : realHome}`,
+      );
     for (const f of forbidden) {
       const carvedOut = f === realData && within(path, realOutRoot);
       if ((within(path, f) && !carvedOut) || within(f, path))

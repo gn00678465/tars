@@ -43,6 +43,28 @@ describe("prepareOutDir", () => {
     await expect(prepareOutDir(path(r), r)).rejects.toThrow("--out");
   });
 
+  test.each([".gnupg/x", ".local/share/applications/x"])(
+    "launched from the home, ~/%s is refused",
+    async (path) => {
+      const r = rules();
+      const launchedAtHome = { ...r, launchDir: r.realHome };
+      await expect(prepareOutDir(join(r.realHome, path), launchedAtHome)).rejects.toThrow(
+        "overlaps",
+      );
+      expect(existsSync(join(r.realHome, path))).toBe(false);
+    },
+  );
+
+  test("launched from the home, ~/Downloads/x and the workspace's out/ are allowed", async () => {
+    const r = rules();
+    const launchedAtHome = { ...r, launchDir: r.realHome };
+    expect(await prepareOutDir(join(r.realHome, "Downloads/x"), launchedAtHome)).toBe(
+      join(r.realHome, "Downloads/x"),
+    );
+    const out = join(r.data, "workspace/out/files");
+    expect(await prepareOutDir(out, launchedAtHome)).toBe(out);
+  });
+
   test("a launch dir that contains ~/.ssh cannot hand it out", async () => {
     const r = { ...rules() };
     const launchedAtHome = { ...r, launchDir: r.realHome };
