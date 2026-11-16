@@ -12,7 +12,7 @@
 # outputs = "成功時 stdout 印一行 JSON：{\"sent\": true}"
 # exit = { 0 = "送出", 1 = "連不上 Bark 伺服器或伺服器出錯", 2 = "參數錯", 3 = "沒有金鑰、金鑰格式不符或 device key 被拒" }
 # ///
-import argparse, json, os, sys, urllib.error, urllib.request
+import argparse, http.client, json, os, sys, urllib.error, urllib.parse, urllib.request
 
 
 def main() -> int:
@@ -32,8 +32,10 @@ def main() -> int:
         url, key = s["url"], s["key"]
         if not isinstance(url, str) or not isinstance(key, str) or not key:
             raise ValueError
+        if urllib.parse.urlsplit(url).scheme.lower() not in ("http", "https"):
+            raise ValueError
     except (ValueError, TypeError, KeyError):
-        print('金鑰格式不符，要是 {"url": "<Bark 伺服器>", "key": "<device key>"}', file=sys.stderr)
+        print('金鑰格式不符，要是 {"url": "<Bark 伺服器的 http 或 https 網址>", "key": "<device key>"}', file=sys.stderr)
         return 3
 
     # bark-server 的 POST /push 收 JSON 時讀 body 裡的 device_key，key 不會出現在 URL 與紀錄裡。
@@ -60,7 +62,7 @@ def main() -> int:
             return 3
         print(f"Bark 回 HTTP {e.code}：{message}", file=sys.stderr)
         return 1
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
         print(f"連不上 Bark 伺服器：{getattr(e, 'reason', e)}", file=sys.stderr)
         return 1
     except ValueError:

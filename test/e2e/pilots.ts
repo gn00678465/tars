@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gcalChecks } from "./gcal.ts";
 import { runDialog } from "./pty.ts";
+import { rawHttp } from "./raw-http.ts";
 import { finishChecks, printChecks, type Check } from "./sandbox.ts";
 import { enterScriptNetns, lastJson, scriptHost } from "./script-host.ts";
 
@@ -9,8 +10,12 @@ const INNER = "TARS_E2E_PILOTS_INNER";
 const EXAMPLES = join(import.meta.dir, "..", "..", "examples", "scripts");
 const BARK_PORT = 18775;
 const SITE_PORT = 18776;
+const RAW_PORT = 18778;
 const BARK = `http://127.0.0.1:${BARK_PORT}`;
 const SITE = `http://127.0.0.1:${SITE_PORT}`;
+const RAW = `http://127.0.0.1:${RAW_PORT}`;
+const CUT =
+  'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\n{"cod\r\n';
 const KEY = "E2E-FAKE-DEVICE-KEY-0123456789";
 const WRONG_KEY = "E2E-WRONG-DEVICE-KEY-9876543210";
 const MIB = 1024 * 1024;
@@ -84,10 +89,16 @@ async function inner(): Promise<number> {
         if (path === "/file.bin") return new Response(FILE);
         if (path === "/big") return zeros(101, false);
         if (path === "/slow") return zeros(1, true);
+        if (path === "/ftp") return Response.redirect("ftp://127.0.0.1/file.bin", 302);
         return new Response("not found", { status: 404 });
       },
     }),
   ];
+  const raw = rawHttp(RAW_PORT, {
+    "/short": "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\nhello",
+    "/cut": CUT,
+    "/push": CUT,
+  });
   const checks: Check[] = [];
   const check = (id: string, claim: string, pass: boolean, evidence: string) =>
     checks.push({ id, claim, pass, evidence });
@@ -203,6 +214,22 @@ async function inner(): Promise<number> {
       `exit ${rejected.exitCode}: ${rejected.stderr.trim().slice(0, 200)}`,
     );
 
+    const cut = await step(
+      "bark-cut",
+      "tars secret set bark && tars script run bark-push -- --body x",
+      {},
+      JSON.stringify({ url: RAW, key: KEY }),
+    );
+    check(
+      "bark-cut",
+      "a Bark reply cut off mid-body ends bark-push with its declared 1 and no traceback",
+      cut.exitCode === 1 &&
+        raw.hits.includes("/push") &&
+        cut.stderr.trim() !== "" &&
+        !cut.stderr.includes("Traceback"),
+      `exit ${cut.exitCode}; raw server asked for ${JSON.stringify(raw.hits)}; ${cut.stderr.trim().slice(0, 300)}`,
+    );
+
     const opened = await step(
       "download-open",
       `tars script submit ${draft("download", downloadSource)} &&
@@ -223,7 +250,7 @@ async function inner(): Promise<number> {
 
     const allowed = downloadSource.replace(
       'domains = ["*"]',
-      `domains = ["127.0.0.1:${SITE_PORT}"]`,
+      `domains = ["127.0.0.1:${SITE_PORT}", "127.0.0.1:${RAW_PORT}"]`,
     );
     writeFileSync(join(host.fakeHome, "download-review.md"), "DOWNLOAD-REVIEW: trial saved\n");
     const dlGates = await step(
@@ -288,10 +315,11 @@ async function inner(): Promise<number> {
        tars script run download ${OUT} -- ${SITE}/file.bin --name x/../../escape; echo "nested $?"
        tars script run download ${OUT} -- ${SITE}/file.bin --name .hidden; echo "hidden $?"
        tars script run download ${OUT} -- ${SITE}/a/..%2Fescape; echo "encoded $?"
+       tars script run download ${OUT} -- ${SITE}/file.bin --name ''; echo "empty $?"
        tars script run download ${OUT} -- file:///etc/hostname; echo "scheme $?"`,
     );
     const codes = Object.fromEntries(
-      ["exists", "no-out", "dotdot", "nested", "hidden", "encoded", "scheme"].map((l) => [
+      ["exists", "no-out", "dotdot", "nested", "hidden", "encoded", "empty", "scheme"].map((l) => [
         l,
         exitOf(refusals.stdout, l),
       ]),
@@ -312,8 +340,9 @@ async function inner(): Promise<number> {
     );
     check(
       "download-names",
-      "a file name that climbs out of --out or hides itself, given or from the URL, and a non-http URL end with 2 before any fetch",
+      "a file name that is empty, climbs out of --out or hides itself, given or from the URL, and a non-http URL end with 2 before any fetch",
       codes.dotdot === 2 &&
+        codes.empty === 2 &&
         codes.nested === 2 &&
         codes.hidden === 2 &&
         codes.encoded === 2 &&
@@ -343,9 +372,43 @@ async function inner(): Promise<number> {
       `slow ${exitOf(limits.stdout, "slow")}; out/dl holds ${JSON.stringify(listOut("dl"))}`,
     );
 
+    const broken = await step(
+      "download-broken",
+      `tars script run download ${OUT} -- ${RAW}/short; echo "short $?"
+       tars script run download ${OUT} -- ${RAW}/cut; echo "cut $?"
+       tars script run download ${OUT} -- ${SITE}/ftp; echo "ftp $?"`,
+    );
+    const brokenEvidence = `${broken.stdout.trim().replaceAll("\n", " | ")}; raw server asked for ${JSON.stringify(raw.hits)}; out/dl holds ${JSON.stringify(listOut("dl"))}; ${broken.stderr.trim().slice(0, 400)}`;
+    check(
+      "download-short",
+      "a body that ends before its Content-Length ends download with the declared 1 and leaves nothing in --out",
+      exitOf(broken.stdout, "short") === 1 &&
+        raw.hits.includes("/short") &&
+        JSON.stringify(listOut("dl")) === '["file.bin"]',
+      brokenEvidence,
+    );
+    check(
+      "download-cut",
+      "a chunked body cut off before its last chunk ends download with the declared 1, no traceback, and nothing in --out",
+      exitOf(broken.stdout, "cut") === 1 &&
+        raw.hits.includes("/cut") &&
+        !broken.stderr.includes("Traceback") &&
+        JSON.stringify(listOut("dl")) === '["file.bin"]',
+      brokenEvidence,
+    );
+    check(
+      "download-redirect",
+      "download refuses a redirect to ftp:// with the declared 1 and says only http or https is followed",
+      exitOf(broken.stdout, "ftp") === 1 &&
+        hitCount("/ftp") === 1 &&
+        broken.stderr.includes("只跟隨 http 或 https"),
+      brokenEvidence,
+    );
+
     await gcalChecks(scripts, check);
   } finally {
     for (const s of servers) s.stop(true);
+    raw.stop();
   }
   printChecks(checks);
   return finishChecks(checks, host.work);
