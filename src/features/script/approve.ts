@@ -178,8 +178,10 @@ async function liveRun(
   const out = await terminal.ask("--out directory the script may write (empty line for none): ");
   if (out === undefined) return "end of input";
   try {
-    const outDir =
-      out.trim() === "" ? undefined : await prepareOutDir(out.trim(), ctx.outDirRules());
+    const rules = ctx.outDirRules();
+    // No shell reads this line, so a leading ~ would otherwise name a directory called "~".
+    const requested = out.trim().replace(/^~(?=\/|$)/, rules.realHome);
+    const outDir = requested === "" ? undefined : await prepareOutDir(requested, rules);
     const time = ctx.now().toISOString();
     const outcome = await ctx.runLive((await staged()).dir, submission.meta, {
       args,

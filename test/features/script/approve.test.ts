@@ -328,6 +328,14 @@ describe("approve: the live run", () => {
     expect(warnings(terminal).some((w) => w.includes("--out"))).toBe(true);
   });
 
+  test("a leading ~ in --out is the home, as a shell would read it", async () => {
+    const { scripts, home, live, context } = world();
+    await submitted(scripts, V1);
+    const { ctx } = context(["y", "", "~/data/workspace/out/dl", "n", "nope"]);
+    await approve("probe", ctx);
+    expect(live.map((l) => l.outDir)).toEqual([join(home, "data", "workspace", "out", "dl")]);
+  });
+
   test("end of input in the middle of it declines and leaves no staged version", async () => {
     const { scripts, live, go } = world();
     await submitted(scripts, V1);
