@@ -12,7 +12,6 @@ export interface TarsPaths {
   readonly skills: string;
   readonly workspace: string;
   readonly harness: string;
-  /** The script library, its submissions and their logs. */
   readonly scripts: string;
   /** Directory `tars install` copies the executable into. */
   readonly bin: string;
@@ -21,7 +20,6 @@ export interface TarsPaths {
 /** Set by tars for every harness it starts, so `tars` run inside a session finds the same data dir. */
 export const DATA_DIR_VAR = "TARS_DATA_DIR";
 
-/** Set by tars for every harness it starts: the directory the user started the session in. */
 export const LAUNCH_DIR_VAR = "TARS_LAUNCH_DIR";
 
 export function resolvePaths(env: Env): TarsPaths {

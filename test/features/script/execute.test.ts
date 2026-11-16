@@ -15,7 +15,6 @@ import { sha256 } from "../../../src/features/script/execute.ts";
 import { fakeSecrets, tempHome, testDeps } from "../../helpers.ts";
 import { installSample, sampleScript } from "./sample.ts";
 
-// Every case here is refused before the sandbox starts, so no test spawns bwrap.
 function setup(secrets = fakeSecrets()) {
   const home = tempHome();
   const data = join(home, "data");

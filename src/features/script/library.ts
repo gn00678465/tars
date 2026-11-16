@@ -4,10 +4,6 @@ import { join, sep } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 import { parseScriptMeta, ScriptMetaError, SLUG, type ScriptMeta } from "./metadata.ts";
 
-/**
- * <scripts>/library/<name>/current -> versions/<hash>; NOTES.md and runs.jsonl sit beside
- * `current` so they survive updates.
- */
 export interface ScriptsLayout {
   readonly library: string;
   readonly retired: string;
@@ -25,7 +21,6 @@ export function scriptsLayout(root: string): ScriptsLayout {
 export interface LibraryScript {
   readonly name: string;
   readonly dir: string;
-  /** The resolved versions/<hash> directory; callers use it, never `current`, so an update mid-run cannot mix versions. */
   readonly versionDir: string;
   readonly version: string;
   readonly source: string;
@@ -40,8 +35,7 @@ export interface BrokenScript {
 export interface RunRecord {
   readonly time: string;
   readonly version: string;
-  /** sha256 of the JSON argument list: repeated calls show up without logging what was passed. */
-  readonly args: string;
+  readonly argsSha256: string;
   readonly exit: number;
   readonly ms: number;
 }
@@ -49,7 +43,6 @@ export interface RunRecord {
 export async function loadScript(layout: ScriptsLayout, name: string): Promise<LibraryScript> {
   if (!SLUG.test(name)) throw new TarsError(`invalid script name ${JSON.stringify(name)}`);
   const dir = join(layout.library, name);
-  // A symlink at library/<name> would move the whole script, versions included, out of the library.
   const entry = await lstat(dir).catch(() => undefined);
   if (entry === undefined) throw gone(name);
   if (!entry.isDirectory()) throw new TarsError(`${name}: ${dir} is not a directory`);
@@ -76,8 +69,7 @@ export async function loadScript(layout: ScriptsLayout, name: string): Promise<L
 const gone = (name: string) =>
   new TarsError(`no script named ${name}. Find one with: tars script search <words>`);
 
-/** Another session may retire the script between loadScript and this write. */
-async function inScript<T>(script: LibraryScript, write: () => Promise<T>): Promise<T> {
+async function noScriptOnEnoent<T>(script: LibraryScript, write: () => Promise<T>): Promise<T> {
   try {
     return await write();
   } catch (err) {
@@ -114,7 +106,6 @@ export interface SearchHit {
   readonly matched: number;
 }
 
-/** Any term matches; more matched terms rank higher. Every search is logged to see what agents look for. */
 export async function searchScripts(
   layout: ScriptsLayout,
   terms: readonly string[],
@@ -140,7 +131,6 @@ export async function searchScripts(
 
 export async function recentRuns(script: LibraryScript, count: number): Promise<RunRecord[]> {
   const text = await readFile(join(script.dir, "runs.jsonl"), "utf8").catch(() => "");
-  // A run killed mid-write can leave a partial last line; skip it rather than hide every run.
   const runs = text.split("\n").flatMap((line) => {
     try {
       return [JSON.parse(line) as RunRecord];
@@ -153,10 +143,9 @@ export async function recentRuns(script: LibraryScript, count: number): Promise<
 
 export async function addNote(script: LibraryScript, text: string, now: Date): Promise<void> {
   const line = `- ${now.toISOString().slice(0, 10)} ${text}\n`;
-  await inScript(script, () => appendFile(join(script.dir, "NOTES.md"), line));
+  await noScriptOnEnoent(script, () => appendFile(join(script.dir, "NOTES.md"), line));
 }
 
-/** Moves the whole script, history included, out of the library. Returns where it went. */
 export async function retireScript(
   layout: ScriptsLayout,
   script: LibraryScript,
@@ -165,11 +154,10 @@ export async function retireScript(
   await mkdir(layout.retired, { recursive: true });
   const stamp = now.toISOString().replaceAll(/[-:]/g, "").slice(0, 15);
   const target = join(layout.retired, `${script.name}-${stamp}-${randomBytes(3).toString("hex")}`);
-  await inScript(script, () => rename(script.dir, target));
+  await noScriptOnEnoent(script, () => rename(script.dir, target));
   return target;
 }
 
-/** O_APPEND with one short write per line, so concurrent sessions never interleave lines. */
 async function appendJsonLine(path: string, value: unknown): Promise<void> {
   await mkdir(join(path, ".."), { recursive: true });
   await appendFile(path, `${JSON.stringify(value)}\n`);

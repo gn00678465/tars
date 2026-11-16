@@ -5,8 +5,8 @@ import { isIP } from "node:net";
 import { constants, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
+import { EXIT_TIMEOUT } from "./exit-codes.ts";
 
-/** none: no network. allow: only these hosts. open: anywhere except this machine and private ranges. */
 export type Network =
   | { readonly kind: "none" }
   | { readonly kind: "allow"; readonly hosts: readonly string[] }
@@ -16,7 +16,6 @@ export interface SandboxJob {
   readonly python: string;
   readonly script: string;
   readonly venv: string;
-  /** The script's own directory; sandbox-runtime scans the working directory with rg. */
   readonly cwd: string;
   readonly args: readonly string[];
   readonly network: Network;
@@ -26,7 +25,6 @@ export interface SandboxJob {
 }
 
 export interface SandboxHost {
-  /** From the account database: `tars agy` points HOME elsewhere. */
   readonly realHome: string;
   readonly data: string;
   readonly bins: readonly string[];
@@ -34,7 +32,6 @@ export interface SandboxHost {
 }
 
 export interface SandboxResult {
-  /** The script's code; 124 on timeout, 128+n when signal n stopped it. */
   readonly exit: number;
   readonly stdout: string;
   readonly stderr: string;
@@ -42,7 +39,6 @@ export interface SandboxResult {
   readonly ms: number;
 }
 
-export const EXIT_TIMEOUT = 124;
 const KILL_GRACE_MS = 2000;
 export const OUTPUT_LIMIT = 1024 * 1024;
 
@@ -61,7 +57,6 @@ const OPEN_DENIED_ADDRESSES = [
   "fe80::/10",
 ];
 
-/** domains "*" means names: an IP literal (127.0.0.2, 0.0.0.0, 10.0.0.1) would skip the address checks. */
 export async function openAsk({ host }: { host: string }) {
   return isIpLiteral(host)
     ? { allow: false as const, reason: 'domains "*" allows host names, not IP addresses' }
@@ -70,7 +65,6 @@ export async function openAsk({ host }: { host: string }) {
 
 function isIpLiteral(host: string): boolean {
   try {
-    // URL parsing turns inet_aton spellings (127.1, 2130706433) into dotted quads first.
     const name = new URL(`http://${isIP(host) === 6 ? `[${host}]` : host}/`).hostname;
     return isIP(name.replace(/^\[|\]$/g, "")) !== 0;
   } catch {
@@ -110,6 +104,8 @@ export async function runSandboxed(job: SandboxJob, host: SandboxHost): Promise<
   process.chdir(job.cwd);
   try {
     await SandboxManager.initialize(config, open ? openAsk : undefined);
+    // sandbox-runtime only warns when the seccomp helper is missing, then runs with Unix sockets
+    // unfiltered.
     const deps = SandboxManager.checkDependencies();
     const problems = [...deps.errors, ...deps.warnings];
     if (problems.length > 0)
@@ -126,7 +122,6 @@ export async function runSandboxed(job: SandboxJob, host: SandboxHost): Promise<
     // sandbox-runtime puts NO_PROXY with loopback and private ranges into the command it builds,
     // so clearing it in the spawn env has no effect; it must be cleared in the command itself.
     const command = `NO_PROXY= no_proxy= exec ${[job.python, job.script, ...job.args].map(quote).join(" ")}`;
-    // The full filesystem policy goes with every wrap: the bridge socket exists only now.
     const wrapped = await SandboxManager.wrapWithSandboxArgv(command, undefined, {
       filesystem: filesystem([socket]),
     });
@@ -173,14 +168,13 @@ async function spawnAndWait(
     timedOut = true;
     stop();
   }, timeoutMs);
-  // Ctrl-C reaches tars too; stop the script the same way instead of dying and leaving it.
   const onSignal = () => stop();
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   try {
     const [out, err, code] = await Promise.all([
-      capture(proc.stdout),
-      capture(proc.stderr),
+      keepHeadDrainRest(proc.stdout),
+      keepHeadDrainRest(proc.stderr),
       proc.exited,
     ]);
     const sig = proc.signalCode;
@@ -200,8 +194,7 @@ async function spawnAndWait(
   }
 }
 
-/** Keeps the first OUTPUT_LIMIT bytes and drains the rest, so the script never blocks on a full pipe. */
-async function capture(stream: ReadableStream<Uint8Array>) {
+async function keepHeadDrainRest(stream: ReadableStream<Uint8Array>) {
   const chunks: Uint8Array[] = [];
   let size = 0;
   let truncated = false;
@@ -230,11 +223,7 @@ function startTime(pid: number): string | undefined {
   }
 }
 
-/**
- * A tars killed with SIGKILL leaves its socat bridge and sockets behind (prototype round 2).
- * Only records whose process is gone are cleaned, and only a socat whose command line names the
- * recorded socket is killed, so another running tars and a reused pid are left alone.
- */
+/** A tars killed with SIGKILL leaves sandbox-runtime's socat bridge and sockets behind. */
 async function removeStaleRuns(runDir: string): Promise<void> {
   const names = await readdir(runDir).catch(() => [] as string[]);
   for (const name of names) {
@@ -245,7 +234,6 @@ async function removeStaleRuns(runDir: string): Promise<void> {
     } catch {
       continue;
     }
-    // An empty socket would match every socat's command line.
     if (
       typeof rec.pid !== "number" ||
       typeof rec.socket !== "string" ||
@@ -260,9 +248,7 @@ async function removeStaleRuns(runDir: string): Promise<void> {
       if (basename(cmdline.split("\0")[0] ?? "") === "socat" && cmdline.includes(rec.socket))
         try {
           process.kill(Number(pid), "SIGTERM");
-        } catch {
-          // Already gone.
-        }
+        } catch {}
     }
     await rm(rec.socket, { force: true });
     for (const f of await readdir(tmpdir()).catch(() => [] as string[]))

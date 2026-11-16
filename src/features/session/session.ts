@@ -63,7 +63,6 @@ async function startSession(
     Object.entries(deps.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
   env[DATA_DIR_VAR] = paths.data;
-  // The session runs in the workspace; `tars script run --out` may also write where the user started.
   env[LAUNCH_DIR_VAR] = deps.cwd;
   return deps.launch(adapter.plan({ paths, env, launchDir: deps.cwd, userArgs, boot, credential }));
 }

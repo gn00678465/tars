@@ -21,14 +21,12 @@ import { OUTPUT_LIMIT, type SandboxHost } from "./sandbox.ts";
 
 export interface ScriptCommandContext {
   readonly io: Io;
-  /** Called only when a script command runs, so `tars --help` works even when paths cannot resolve. */
   scriptsDir(): string;
   now(): Date;
   readonly secrets: SecretStore;
   sandboxHost(): Promise<SandboxHost>;
   outDirRules(): OutDirRules;
-  /** Python's major.minor, which picks the venv. */
-  python(): string;
+  pythonVersion(): string;
   exitWith(code: number): void;
 }
 
@@ -159,7 +157,7 @@ Examples:
   const executeOptions = async (args: string[], opts: RunOptions) => ({
     args,
     timeoutMs: opts.timeout * 1000,
-    python: ctx.python(),
+    pythonVersion: ctx.pythonVersion(),
     ...(opts.out === undefined ? {} : { outDir: await prepareOutDir(opts.out, ctx.outDirRules()) }),
   });
 

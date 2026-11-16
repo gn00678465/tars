@@ -1,6 +1,3 @@
-// End-to-end checks for `tars script run` and `trial`: the built dist/tars runs real scripts in
-// sandbox-runtime, inside the e2e sandbox (loopback-only netns, fake home, private keyring).
-// Run with `bun run e2e:script`. Not part of `bun test`.
 import {
   chmodSync,
   copyFileSync,
@@ -35,7 +32,6 @@ const ALLOWED_PORT = 18765;
 const OTHER_PORT = 18766;
 const SECRET = JSON.stringify({ url: `http://127.0.0.1:${ALLOWED_PORT}`, key: KEY });
 
-// Tries everything a hostile script would, and prints what worked.
 const PROBE = `# /// script
 # requires-python = ">=3.12"
 # dependencies = []
@@ -105,7 +101,6 @@ interface Check {
   readonly evidence: string;
 }
 
-/** The last stdout line as JSON, or {} so the checks still report what went wrong. */
 function lastJson(stdout: string): Record<string, unknown> {
   try {
     return JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
@@ -132,7 +127,6 @@ function outer(): number {
   return reexecInNetns(import.meta.path, { ...process.env, [INNER]: "1" }) ?? 1;
 }
 
-/** Installs an approved library script under the fake home, the way `approve` will. */
 function install(host: Host, name: string, source: string): string {
   const version = join(host.fakeHome, ".local/share/tars/scripts/library", name, "versions", "v1");
   mkdirSync(version, { recursive: true });
@@ -164,7 +158,6 @@ async function inner(): Promise<number> {
   copyFileSync(TARS_BIN, join(host.bin, "tars"));
   chmodSync(join(host.bin, "tars"), 0o755);
   const servers = [ALLOWED_PORT, OTHER_PORT].map((port) =>
-    // Every loopback address and family: an IP-literal bypass must have something to reach.
     Bun.serve({ hostname: "::", port, fetch: () => new Response("ok") }),
   );
   const checks: Check[] = [];
@@ -241,7 +234,6 @@ async function inner(): Promise<number> {
       String(report.other).startsWith("DENIED"),
       String(report.other),
     );
-    // Listing the home shows the bare path down to the script and venv; their files stay hidden.
     check(
       "home",
       "files in the real home and the data dir are unreadable",
@@ -288,7 +280,6 @@ async function inner(): Promise<number> {
       `exit ${outHome.exitCode}: ${outHome.stderr.trim()}`,
     );
 
-    // Launched from a project under the real home, which is itself in denyRead.
     const project = `${host.home}/projects/app`;
     const outOk = await step(
       "out-ok",
@@ -312,7 +303,6 @@ async function inner(): Promise<number> {
     );
 
     const agyHome = `${host.home}/.local/share/tars/harness/agy-home`;
-    // Only tars gets agy's HOME; the private keyring keeps the home it started with.
     const agy = await step(
       "run-agy-home",
       `mkdir -p ${agyHome} && HOME=${agyHome} TARS_DATA_DIR=${host.home}/.local/share/tars tars script run probe -- x`,
@@ -325,7 +315,6 @@ async function inner(): Promise<number> {
       `exit ${agy.exitCode}: ${JSON.stringify(agyReport.home)} ${agy.stderr.slice(0, 200)}`,
     );
 
-    // Started from the home, with HOME pointing at agy's: the real ~/.ssh must still be refused.
     const outSsh = await step(
       "out-ssh",
       `HOME=${agyHome} TARS_DATA_DIR=${host.home}/.local/share/tars TARS_LAUNCH_DIR=${host.home} tars script run probe --out ${host.home}/.ssh -- x`,

@@ -7,7 +7,6 @@ export interface SampleMeta {
   readonly tarsLines?: readonly string[];
 }
 
-/** A PEP 723 script whose [tool.tars] table is valid unless a test overrides its lines. */
 export function sampleScript(opts: SampleMeta = {}): string {
   const tars = opts.tarsLines ?? [
     `name = "${opts.name ?? "bark-push"}"`,
@@ -34,7 +33,6 @@ export function sampleScript(opts: SampleMeta = {}): string {
   ].join("\n");
 }
 
-/** Lays out library/<name>/versions/<version>/script.py with current pointing at it. */
 export function installSample(
   scriptsDir: string,
   name: string,

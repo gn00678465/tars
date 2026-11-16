@@ -1,7 +1,8 @@
+import { EXIT_TIMEOUT } from "./exit-codes.ts";
+
 export const EFFECTS = ["read-only", "external-write", "local-write"] as const;
 export type Effects = (typeof EFFECTS)[number];
 
-/** Where a script may connect. `any` is open network; `secret-url` takes the host from the secret. */
 export type Domain =
   | { readonly kind: "host"; readonly host: string; readonly port?: number }
   | { readonly kind: "secret-url" }
@@ -15,13 +16,11 @@ export interface ScriptMeta {
   readonly effects: Effects;
   readonly args: string;
   readonly outputs: string;
-  /** Exit code → meaning. Codes 124 and up belong to `tars script run`. */
   readonly exit: ReadonlyMap<number, string>;
   readonly requiresPython?: string;
   readonly dependencies: readonly string[];
 }
 
-/** Every problem found, so the author can fix them in one round. */
 export class ScriptMetaError extends Error {
   constructor(readonly problems: readonly string[]) {
     super(problems.join("\n"));
@@ -30,16 +29,17 @@ export class ScriptMetaError extends Error {
 }
 
 export const SLUG = /^[a-z0-9][a-z0-9-]*$/;
-export const MAX_SCRIPT_EXIT = 123;
+export const MAX_SCRIPT_EXIT = EXIT_TIMEOUT - 1;
 
-// The reference regex from the PEP 723 spec, so tars and uv see the same block.
+// The reference regex from PEP 723.
 const BLOCK = /^# \/\/\/ (?<type>[a-zA-Z0-9-]+)$\s(?<content>(?:^#(?:| .*)$\s)+)^# \/\/\/$/gm;
 
-// Name, optional extras, optional version clauses. No URL, path, `@` or environment marker,
-// because each of those can make uv fetch the package from somewhere other than PyPI.
 const VERSION = String.raw`(?:===|==|~=|!=|<=|>=|<|>)\s*[A-Za-z0-9.*+!_-]+`;
+const NAME = String.raw`[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?`;
+const EXTRA = String.raw`[A-Za-z0-9._-]+`;
+const EXTRAS = String.raw`\[${EXTRA}(?:\s*,\s*${EXTRA})*\]`;
 const DEPENDENCY = new RegExp(
-  String.raw`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?(?:\[[A-Za-z0-9._-]+(?:\s*,\s*[A-Za-z0-9._-]+)*\])?\s*(?:${VERSION}(?:\s*,\s*${VERSION})*)?$`,
+  String.raw`^${NAME}(?:${EXTRAS})?\s*(?:${VERSION}(?:\s*,\s*${VERSION})*)?$`,
 );
 
 const LABEL = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
@@ -59,9 +59,8 @@ const TARS_KEYS = new Set([
 ]);
 
 export function parseScriptMeta(source: string): ScriptMeta {
-  // Python reads the file with universal newlines and its `$` ends a line only at \n; JS `$`
-  // also ends one at \u2028 and \u2029. Normalizing and refusing those keeps the block tars
-  // reads identical to the one uv reads.
+  // PEP 723's reference parser is Python: universal newlines, and `$` ends a line only at \n.
+  // JS `$` also ends one at U+2028 and U+2029.
   if (/[\u2028\u2029]/.test(source))
     throw new ScriptMetaError(["U+2028 and U+2029 are not allowed in a script"]);
   const text = source.replaceAll(/\r\n?/g, "\n");
@@ -150,8 +149,7 @@ function parseDomains(
   const domains: Domain[] = [];
   for (const entry of entries) {
     if (entry === "*") {
-      if (secret !== undefined)
-        problems.push('domains "*" is only for scripts without a secret (r49)');
+      if (secret !== undefined) problems.push('domains "*" is only for scripts without a secret');
       domains.push({ kind: "any" });
     } else if (entry === "secret:url") {
       if (secret === undefined) problems.push('domains "secret:url" needs a secret');
@@ -191,7 +189,9 @@ function parseExit(value: unknown, problems: string[]): Map<number, string> {
   for (const [key, meaning] of Object.entries(value)) {
     const code = Number(key);
     if (!/^\d+$/.test(key) || code > MAX_SCRIPT_EXIT)
-      problems.push(`exit code ${key} must be 0 to ${MAX_SCRIPT_EXIT}; tars uses 124 and up`);
+      problems.push(
+        `exit code ${key} must be 0 to ${MAX_SCRIPT_EXIT}; tars uses ${EXIT_TIMEOUT} and up`,
+      );
     else if (typeof meaning !== "string" || meaning.trim() === "")
       problems.push(`exit code ${key} needs a description`);
     else exit.set(code, meaning);

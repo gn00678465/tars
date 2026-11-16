@@ -8,11 +8,6 @@ import { uniqueTemp } from "../../core/fs.ts";
 const ARCH = process.arch === "arm64" ? "arm64" : "x64";
 const VENDOR = `vendor/seccomp/${ARCH}/apply-seccomp`;
 
-/**
- * sandbox-runtime's seccomp helper, at a path the sandbox can exec. Without it sandbox-runtime
- * only warns and runs the command with Unix sockets unfiltered, so a missing helper is fatal.
- * The name carries the content hash, so two tars versions never overwrite each other's helper.
- */
 export async function seccompHelper(
   dataDir: string,
   embedded: ReadonlyArray<Blob & { readonly name?: string }>,
@@ -31,8 +26,6 @@ export async function seccompHelper(
   const tmp = uniqueTemp(path);
   try {
     await writeFile(tmp, bytes, { mode: 0o755 });
-    // rename replaces a wrong file or a dangling symlink in one step, so a concurrent tars
-    // reads either the old path or the right one.
     await rename(tmp, path);
   } finally {
     await rm(tmp, { force: true });

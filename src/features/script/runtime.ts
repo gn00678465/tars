@@ -6,7 +6,6 @@ import type { OutDirRules } from "./out-dir.ts";
 import type { SandboxHost } from "./sandbox.ts";
 import { seccompHelper } from "./seccomp.ts";
 
-/** The host facts `tars script run` needs; resolved only when a script actually runs. */
 export function scriptRuntime(env: Env, cwd: string) {
   const realHome = accountHome;
   const bins = () => [...new Set([resolvePaths(env).bin, join(realHome(), ".local", "bin")])];
@@ -30,7 +29,7 @@ export function scriptRuntime(env: Env, cwd: string) {
         bins: bins(),
       };
     },
-    python: (): string => {
+    pythonVersion: (): string => {
       const proc = Bun.spawnSync([
         "python3",
         "-c",

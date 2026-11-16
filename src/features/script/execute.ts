@@ -11,7 +11,6 @@ import { readSecretType, secretName, secretUrlHost } from "./secret.ts";
 
 export const LOCK_FILE = "script.py.lock";
 
-/** What approval.json records; `run` refuses a version whose files no longer match it. */
 export interface Approval {
   readonly script: string;
   readonly lock: string;
@@ -28,8 +27,7 @@ export interface ExecuteOptions {
   readonly args: readonly string[];
   readonly timeoutMs: number;
   readonly outDir?: string;
-  /** Python's major.minor; each version dir keeps one venv per Python it was built for. */
-  readonly python: string;
+  readonly pythonVersion: string;
 }
 
 export interface Outcome extends SandboxResult {
@@ -40,7 +38,6 @@ export interface Outcome extends SandboxResult {
 export const sha256 = (data: string | Uint8Array) =>
   createHash("sha256").update(data).digest("hex");
 
-/** Runs an approved library version, with its secret, and logs one line to runs.jsonl. */
 export async function runApproved(
   script: LibraryScript,
   opts: ExecuteOptions,
@@ -71,7 +68,7 @@ export async function runApproved(
   const record: RunRecord = {
     time: ctx.now.toISOString(),
     version: script.version,
-    args: sha256(JSON.stringify(opts.args)),
+    argsSha256: sha256(JSON.stringify(opts.args)),
     exit: outcome.exit,
     ms: outcome.ms,
   };
@@ -79,7 +76,6 @@ export async function runApproved(
   return outcome;
 }
 
-/** Runs a submitted script without any secret (r52), so a write to an outside service cannot happen. */
 export async function runTrial(
   pendingDir: string,
   opts: ExecuteOptions,
@@ -114,13 +110,13 @@ async function execute(
   secretHosts: readonly string[],
   secret: string | undefined,
 ): Promise<Outcome> {
-  const venv = join(dir, `venv-${opts.python}`);
+  const venv = join(dir, `venv-${opts.pythonVersion}`);
   const venvs = (await readdir(dir).catch(() => [] as string[])).filter((n) =>
     n.startsWith("venv-"),
   );
-  if (!venvs.includes(`venv-${opts.python}`))
+  if (!venvs.includes(`venv-${opts.pythonVersion}`))
     throw new TarsError(
-      `${meta.name} has no environment for Python ${opts.python} (found: ${venvs.join(", ") || "none"})`,
+      `${meta.name} has no environment for Python ${opts.pythonVersion} (found: ${venvs.join(", ") || "none"})`,
     );
   const result = await runSandboxed(
     {

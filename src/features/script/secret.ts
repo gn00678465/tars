@@ -7,13 +7,11 @@ import type { Io } from "../../core/io.ts";
 import type { SecretName, SecretStore } from "../../core/secrets.ts";
 import { SLUG } from "./metadata.ts";
 
-/** static: handed to the script as is. google-oauth: tars trades it for an access token (step 7). */
 export const SECRET_TYPES = ["static", "google-oauth"] as const;
 export type SecretType = (typeof SECRET_TYPES)[number];
 
 export const secretName = (kind: string): SecretName => `script:${kind}`;
 
-// One file per kind, so two sessions setting different kinds never overwrite each other.
 const typeFile = (scriptsDir: string, kind: string) => join(scriptsDir, "secrets", `${kind}.json`);
 
 export async function readSecretType(
@@ -33,7 +31,6 @@ export async function readSecretType(
   return SECRET_TYPES.includes(type as SecretType) ? (type as SecretType) : undefined;
 }
 
-/** The host (with port) a `"secret:url"` script may reach, or why the secret cannot give one. */
 export function secretUrlHost(value: string): string | Error {
   let parsed: unknown;
   try {
@@ -112,9 +109,9 @@ Examples:
     .argument("<kind>", "the `secret` a script declares", parseKind)
     .addHelpText("after", "\nExit codes: 0 deleted or already absent, 1 failure, 2 usage error.")
     .action(async (kind: string) => {
-      const existed = await ctx.secrets.delete(secretName(kind));
+      const result = await ctx.secrets.delete(secretName(kind));
       await rm(typeFile(ctx.scriptsDir(), kind), { force: true });
-      ctx.io.out(`${existed ? "deleted" : "already absent:"} ${secretName(kind)}`);
+      ctx.io.out(`${result === "deleted" ? "deleted" : "already absent:"} ${secretName(kind)}`);
     });
 }
 
