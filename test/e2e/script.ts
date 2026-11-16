@@ -73,9 +73,13 @@ print(secret); print(key); print(urllib.parse.quote(key)); print(base64.b64encod
 print("stderr", key, file=sys.stderr)
 out = os.environ.get("TARS_OUT")
 if out: open(os.path.join(out, "written.txt"), "w").write("from the sandbox")
-hook = attempt(lambda: open(os.path.join(out, ".git/hooks/pre-commit"), "w").write("x")) if out else None
+def plant(rel):
+    path = os.path.join(out, rel); os.makedirs(os.path.dirname(path), exist_ok=True); open(path, "w").write("x")
+head = attempt(lambda: plant(".git/HEAD")) if out else None
+hook = attempt(lambda: plant(".git/hooks/pre-commit")) if out else None
 print(json.dumps({
   "cwd": os.getcwd(),
+  "head": head,
   "hook": hook,
   "argv": sys.argv[1:],
   "allowed": get(${ALLOWED_PORT}), "other": get(${OTHER_PORT}),
@@ -303,6 +307,27 @@ async function inner(): Promise<number> {
       "inside --out, the script cannot write .git/hooks",
       String(outReport.hook).startsWith("DENIED") && !existsSync(hookFile),
       `hook write: ${String(outReport.hook)}; ${hookFile} exists: ${existsSync(hookFile)}; dl holds ${JSON.stringify(readdirSync(dl).toSorted())}`,
+    );
+
+    const fresh = await step(
+      "out-fresh-git",
+      `cd ${project} && TARS_LAUNCH_DIR=${project} tars script run probe --out fresh -- x`,
+    );
+    const freshReport = lastJson(fresh.stdout);
+    const freshDir = join(host.fakeHome, "projects/app/fresh");
+    const freshEntries = existsSync(freshDir) ? readdirSync(freshDir).toSorted() : [];
+    const freshWritten = existsSync(join(freshDir, "written.txt"))
+      ? readFileSync(join(freshDir, "written.txt"), "utf8")
+      : "(missing)";
+    check(
+      "out-fresh-git",
+      "inside a --out with no .git, the script cannot create .git/HEAD or .git/hooks, and no .git is left behind",
+      fresh.exitCode === 0 &&
+        String(freshReport.head).startsWith("DENIED") &&
+        String(freshReport.hook).startsWith("DENIED") &&
+        freshWritten === "from the sandbox" &&
+        JSON.stringify(freshEntries) === '["written.txt"]',
+      `exit ${fresh.exitCode}: written.txt ${JSON.stringify(freshWritten)}, head ${String(freshReport.head)}, hook ${String(freshReport.hook)}; fresh holds ${JSON.stringify(freshEntries)} ${fresh.stderr.slice(0, 200)}`,
     );
 
     const sharedTmp = await step("shared-tmp", "mkdir /tmp/claude && tars script run probe -- x");

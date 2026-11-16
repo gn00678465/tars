@@ -29,7 +29,8 @@ export async function prepareOutDir(requested: string, rules: OutDirRules): Prom
   const allowed = [realLaunch, realOutRoot];
   const forbidden = [realData, ...(await Promise.all(rules.bins.map(real)))];
   const check = (path: string) => {
-    if (!allowed.some((root) => within(path, root)))
+    const roots = allowed.filter((root) => within(path, root));
+    if (roots.length === 0)
       throw new TarsError(`--out ${requested} must be under ${rules.launchDir} or ${outRoot}`);
     // Dot directories in the home hold config, keys and autostart entries; refuse them all.
     const [first = ""] = relative(realHome, path).split(sep);
@@ -43,6 +44,13 @@ export async function prepareOutDir(requested: string, rules: OutDirRules): Prom
       if ((within(path, f) && !carvedOut) || within(f, path))
         throw new TarsError(`--out ${requested} overlaps ${f}`);
     }
+    // sandbox-runtime guards .git/hooks, .vscode and the like only below --out, never --out
+    // itself, so a dot directory anywhere below the allowed root cannot be the one handed out.
+    const dotted = (root: string) =>
+      relative(root, path)
+        .split(sep)
+        .some((s) => s.startsWith("."));
+    if (roots.every(dotted)) throw new TarsError(`--out ${requested} is inside a dot directory`);
   };
   check(await real(target));
   await mkdir(target, { recursive: true });

@@ -84,7 +84,11 @@ export async function runSandboxed(job: SandboxJob, host: SandboxHost): Promise<
     denyRead,
     allowRead: [...baseRead, ...extra],
     allowWrite: job.outDir ? [job.outDir] : [],
-    denyWrite: [],
+    // sandbox-runtime denies <cwd>/.git/hooks and .git/config only once <cwd>/.git exists, so a
+    // script could plant a repository whose hooks and core.fsmonitor run when the user's shell runs
+    // git in --out. Denying .git itself makes bwrap abort when .git exists, because the library
+    // still stubs .git/config inside the read-only .git.
+    denyWrite: job.outDir ? [join(job.outDir, ".git/hooks"), join(job.outDir, ".git/config")] : [],
   });
   const open = job.network.kind === "open";
   const config = {

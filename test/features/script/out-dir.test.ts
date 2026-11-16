@@ -32,6 +32,21 @@ describe("prepareOutDir", () => {
     expect(await prepareOutDir(join(r.launchDir, "dl"), r)).toBe(join(r.launchDir, "dl"));
   });
 
+  test.each([".git/hooks", ".vscode", "out/.git"])(
+    "a dot directory below the launch dir, <launch>/%s, is refused",
+    async (path) => {
+      const r = rules();
+      await expect(prepareOutDir(join(r.launchDir, path), r)).rejects.toThrow("--out");
+      expect(existsSync(join(r.launchDir, path))).toBe(false);
+    },
+  );
+
+  test("<launch>/out/files is allowed", async () => {
+    const r = rules();
+    const out = join(r.launchDir, "out/files");
+    expect(await prepareOutDir(out, r)).toBe(out);
+  });
+
   test.each([
     ["the home itself", (r: OutDirRules) => r.realHome],
     ["the data dir", (r: OutDirRules) => r.data],
