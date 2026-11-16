@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
-import { uniqueTemp } from "../../core/fs.ts";
+import { writeFileAtomic } from "../../core/fs.ts";
+import { sha256 } from "../../core/hash.ts";
 
 const ARCH = process.arch === "arm64" ? "arm64" : "x64";
 const VENDOR = `vendor/seccomp/${ARCH}/apply-seccomp`;
@@ -23,13 +23,7 @@ export async function seccompHelper(
   );
   if (existing !== undefined && sha256(existing) === hash && executable) return path;
   await mkdir(dirname(path), { recursive: true });
-  const tmp = uniqueTemp(path);
-  try {
-    await writeFile(tmp, bytes, { mode: 0o755 });
-    await rename(tmp, path);
-  } finally {
-    await rm(tmp, { force: true });
-  }
+  await writeFileAtomic(path, bytes, 0o755);
   if (sha256(await readFile(path)) !== hash)
     throw new TarsError(`${path} does not match the seccomp helper tars ships; delete it`);
   return path;
@@ -41,5 +35,3 @@ async function fromSource(): Promise<Uint8Array> {
   );
   return new Uint8Array(await readFile(join(root, VENDOR)));
 }
-
-const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");

@@ -7,7 +7,8 @@ import type { SandboxHost } from "./sandbox.ts";
 import { seccompHelper } from "./seccomp.ts";
 
 export function scriptRuntime(env: Env, cwd: string) {
-  const realHome = accountHome;
+  let home: string | undefined;
+  const realHome = () => (home ??= accountHome());
   const bins = () => [...new Set([resolvePaths(env).bin, join(realHome(), ".local", "bin")])];
   return {
     sandboxHost: async (): Promise<SandboxHost> => {

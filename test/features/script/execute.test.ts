@@ -11,9 +11,8 @@ import {
 import { join } from "node:path";
 import { run } from "../../../src/main.ts";
 import { seccompHelper } from "../../../src/features/script/seccomp.ts";
-import { sha256 } from "../../../src/features/script/execute.ts";
 import { fakeSecrets, tempHome, testDeps } from "../../helpers.ts";
-import { installSample, sampleScript } from "./sample.ts";
+import { approveSample, installSample, sampleScript } from "./sample.ts";
 
 function setup(secrets = fakeSecrets()) {
   const home = tempHome();
@@ -22,12 +21,7 @@ function setup(secrets = fakeSecrets()) {
   const deps = testDeps({ env: { HOME: home, TARS_DATA_DIR: data }, secrets });
   const dir = installSample(scripts, "bark-push");
   const version = join(dir, "versions", "0123456789abcdef");
-  const source = sampleScript({ name: "bark-push" });
-  writeFileSync(join(version, "script.py.lock"), "lock");
-  writeFileSync(
-    join(version, "approval.json"),
-    JSON.stringify({ script: sha256(source), lock: sha256("lock") }),
-  );
+  approveSample(version, sampleScript({ name: "bark-push" }), "lock");
   return { deps, version };
 }
 

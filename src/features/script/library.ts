@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { appendFile, lstat, mkdir, readdir, readFile, realpath, rename } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { TarsError } from "../../core/exit.ts";
-import { parseScriptMeta, ScriptMetaError, SLUG, type ScriptMeta } from "./metadata.ts";
+import { requireScriptMeta, SLUG, type ScriptMeta } from "./metadata.ts";
 
 export interface ScriptsLayout {
   readonly library: string;
@@ -55,13 +55,7 @@ export async function loadScript(layout: ScriptsLayout, name: string): Promise<L
   const source = await readFile(join(versionDir, "script.py"), "utf8").catch(() => {
     throw new TarsError(`${name}: cannot read ${join(versionDir, "script.py")}`);
   });
-  let meta: ScriptMeta;
-  try {
-    meta = parseScriptMeta(source);
-  } catch (err) {
-    if (err instanceof ScriptMetaError) throw new TarsError(`${name}: ${err.message}`);
-    throw err;
-  }
+  const meta = requireScriptMeta(source, `${name}: `);
   if (meta.name !== name) throw new TarsError(`${name}: script.py declares name ${meta.name}`);
   return { name, dir, versionDir, version: versionDir.slice(versions.length), source, meta };
 }
@@ -152,11 +146,13 @@ export async function retireScript(
   now: Date,
 ): Promise<string> {
   await mkdir(layout.retired, { recursive: true });
-  const stamp = now.toISOString().replaceAll(/[-:]/g, "").slice(0, 15);
-  const target = join(layout.retired, `${script.name}-${stamp}-${randomBytes(3).toString("hex")}`);
+  const target = join(layout.retired, `${script.name}-${uniqueStamp(now)}`);
   await noScriptOnEnoent(script, () => rename(script.dir, target));
   return target;
 }
+
+export const uniqueStamp = (now: Date) =>
+  `${now.toISOString().replaceAll(/[-:]/g, "").slice(0, 15)}-${randomBytes(3).toString("hex")}`;
 
 async function appendJsonLine(path: string, value: unknown): Promise<void> {
   await mkdir(join(path, ".."), { recursive: true });

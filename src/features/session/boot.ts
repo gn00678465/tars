@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { TarsError } from "../../core/exit.ts";
+import { sha256 } from "../../core/hash.ts";
 import type { TarsPaths } from "../../core/paths.ts";
 
 export type BootLabel = "SOUL.md" | "MEMORY.md";
@@ -33,5 +34,5 @@ async function readBootFile(label: BootLabel, path: string): Promise<BootFile> {
   if (!bytes || content.trim() === "") {
     throw new TarsError(`${label} is missing or empty at ${path}; run tars install`);
   }
-  return { label, content, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex") };
+  return { label, content, sha256: sha256(bytes) };
 }

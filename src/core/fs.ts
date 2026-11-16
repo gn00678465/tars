@@ -11,10 +11,14 @@ export function sibling(path: string, suffix: string): string {
 // temp name keeps one launch's rename from consuming another's temp file.
 export const uniqueTemp = (path: string) => sibling(path, `tmp-${randomUUID()}`);
 
-export async function writeFileAtomic(path: string, data: string): Promise<void> {
+export async function writeFileAtomic(
+  path: string,
+  data: string | Uint8Array,
+  mode = 0o666,
+): Promise<void> {
   const tmp = uniqueTemp(path);
   try {
-    await writeFile(tmp, data);
+    await writeFile(tmp, data, { mode });
     await rename(tmp, path);
   } finally {
     await rm(tmp, { force: true });

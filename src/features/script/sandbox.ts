@@ -5,7 +5,7 @@ import { isIP } from "node:net";
 import { constants, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
-import { EXIT_TIMEOUT } from "./exit-codes.ts";
+import { EXIT_TIMEOUT, OUTPUT_LIMIT } from "./metadata.ts";
 
 export type Network =
   | { readonly kind: "none" }
@@ -40,7 +40,6 @@ export interface SandboxResult {
 }
 
 const KILL_GRACE_MS = 2000;
-export const OUTPUT_LIMIT = 1024 * 1024;
 
 // The proxy checks the addresses a name resolves to against these, but lets "localhost" reach
 // loopback and never checks an IP literal at all; openAsk refuses the literals.
@@ -168,9 +167,8 @@ async function spawnAndWait(
     timedOut = true;
     stop();
   }, timeoutMs);
-  const onSignal = () => stop();
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
   try {
     const [out, err, code] = await Promise.all([
       keepHeadDrainRest(proc.stdout),
@@ -189,8 +187,8 @@ async function spawnAndWait(
   } finally {
     clearTimeout(timer);
     clearTimeout(forced);
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
   }
 }
 

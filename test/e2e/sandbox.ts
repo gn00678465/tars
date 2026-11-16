@@ -1,8 +1,30 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, rmSync } from "node:fs";
 import { basename, dirname } from "node:path";
 
 /** Exit code when a prerequisite is missing; the automake convention for a skipped test. */
 export const EXIT_SKIP = 77;
+
+export interface Check {
+  readonly id: string;
+  readonly claim: string;
+  readonly pass: boolean;
+  readonly evidence: string;
+}
+
+export function printChecks(checks: readonly Check[]): void {
+  console.log("Checks:");
+  for (const c of checks)
+    console.log(`  ${c.pass ? "PASS" : "FAIL"}  ${c.id}: ${c.claim}\n        ${c.evidence}`);
+}
+
+/** Prints the tally, removes the scratch dir unless a check failed or TARS_E2E_KEEP=1, returns the exit code. */
+export function finishChecks(checks: readonly Check[], work: string, tallySuffix = ""): number {
+  const failed = checks.filter((c) => !c.pass).length;
+  console.log(`\n${checks.length - failed}/${checks.length} checks passed${tallySuffix}`);
+  if (failed > 0 || process.env.TARS_E2E_KEEP === "1") console.log(`scratch dir kept: ${work}`);
+  else rmSync(work, { recursive: true, force: true });
+  return failed > 0 ? 1 : 0;
+}
 
 const SYSTEM_TOOLS = [
   "bwrap",

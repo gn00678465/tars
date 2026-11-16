@@ -31,13 +31,16 @@ import {
 import {
   binaryDirsFor,
   EXIT_SKIP,
+  finishChecks,
   HARNESSES,
   missingPrerequisites,
   namespacesWork,
   overrideVar,
+  printChecks,
   reexecInNetns,
   resolveHarness,
   runStep,
+  type Check,
   type Harness,
   type Host,
   type Step,
@@ -116,13 +119,6 @@ const agyPrint = (permissions?: { allow: string[] }) => [
 const AGY_PRINT = agyPrint();
 const AGY_ALLOW = { allow: ["command(tars memory remember)"] };
 
-interface Check {
-  readonly id: string;
-  readonly claim: string;
-  readonly pass: boolean;
-  readonly evidence: string;
-}
-
 interface Observation {
   readonly id: string;
   readonly question: string;
@@ -185,20 +181,15 @@ async function inner(): Promise<number> {
   } finally {
     api.stop();
   }
-  const failed = suite.checks.filter((c) => !c.pass);
   writeFileSync(
     join(work, "report.json"),
     `${JSON.stringify({ checks: suite.checks, observations: suite.observations }, null, 2)}\n`,
   );
-  printReport(suite.checks, suite.observations);
+  printChecks(suite.checks);
+  console.log("\nObservations:");
+  for (const o of suite.observations) console.log(`  ${o.id}: ${o.question}\n        ${o.answer}`);
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
-  console.log(
-    `\n${suite.checks.length - failed.length}/${suite.checks.length} checks passed in ${seconds}s`,
-  );
-  if (failed.length > 0 || process.env.TARS_E2E_KEEP === "1")
-    console.log(`scratch dir kept: ${work}`);
-  else rmSync(work, { recursive: true, force: true });
-  return failed.length > 0 ? 1 : 0;
+  return finishChecks(suite.checks, work, ` in ${seconds}s`);
 }
 
 class Suite {
@@ -819,14 +810,6 @@ function describeAtWorkspace(run: Run, workspace: string): string {
     .filter((line) => line.trim() !== "" && !/^[0-9a-f]{64} {2}/.test(line))
     .slice(0, 5);
   return `observed (${run.files}): exit ${run.result.exitCode}; ${run.requests.length} requests; workspace is ${listed}x a list item under "Additional working directories" (claude) or "Active Workspaces" (agy); stderr besides the sha256 lines: ${stderr.length === 0 ? "none" : JSON.stringify(stderr)}`;
-}
-
-function printReport(checks: readonly Check[], observations: readonly Observation[]) {
-  console.log("Checks:");
-  for (const c of checks)
-    console.log(`  ${c.pass ? "PASS" : "FAIL"}  ${c.id}: ${c.claim}\n        ${c.evidence}`);
-  console.log("\nObservations:");
-  for (const o of observations) console.log(`  ${o.id}: ${o.question}\n        ${o.answer}`);
 }
 
 // Last, so every declaration above is initialized before it runs.

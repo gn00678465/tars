@@ -1,4 +1,5 @@
-import { EXIT_TIMEOUT } from "./exit-codes.ts";
+import { InvalidArgumentError } from "commander";
+import { TarsError } from "../../core/exit.ts";
 
 export const EFFECTS = ["read-only", "external-write", "local-write"] as const;
 export type Effects = (typeof EFFECTS)[number];
@@ -29,7 +30,18 @@ export class ScriptMetaError extends Error {
 }
 
 export const SLUG = /^[a-z0-9][a-z0-9-]*$/;
+export const EXIT_TIMEOUT = 124;
 export const MAX_SCRIPT_EXIT = EXIT_TIMEOUT - 1;
+export const OUTPUT_LIMIT = 1024 * 1024;
+
+export const parseSlug = (example: string) => (value: string) => {
+  if (!SLUG.test(value))
+    throw new InvalidArgumentError(`use lowercase letters, digits and hyphens, e.g. ${example}.`);
+  return value;
+};
+
+export const hostText = (d: { readonly host: string; readonly port?: number }) =>
+  d.port === undefined ? d.host : `${d.host}:${d.port}`;
 
 // The reference regex from PEP 723.
 const BLOCK = /^# \/\/\/ (?<type>[a-zA-Z0-9-]+)$\s(?<content>(?:^#(?:| .*)$\s)+)^# \/\/\/$/gm;
@@ -83,6 +95,15 @@ export function parseScriptMeta(source: string): ScriptMeta {
     throw new ScriptMetaError([`metadata is not valid TOML: ${(err as Error).message}`]);
   }
   return validate(toml);
+}
+
+export function requireScriptMeta(source: string, prefix = ""): ScriptMeta {
+  try {
+    return parseScriptMeta(source);
+  } catch (err) {
+    if (err instanceof ScriptMetaError) throw new TarsError(`${prefix}${err.message}`);
+    throw err;
+  }
 }
 
 function validate(toml: unknown): ScriptMeta {
@@ -200,7 +221,7 @@ function parseExit(value: unknown, problems: string[]): Map<number, string> {
   return new Map([...exit].sort(([a], [b]) => a - b));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

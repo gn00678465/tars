@@ -1,26 +1,19 @@
-import { createHash, randomBytes } from "node:crypto";
 import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
+import { sha256 } from "../../core/hash.ts";
 import type { SecretStore } from "../../core/secrets.ts";
-import type { LibraryScript, RunRecord } from "./library.ts";
-import { parseScriptMeta, ScriptMetaError, type ScriptMeta } from "./metadata.ts";
+import { uniqueStamp, type LibraryScript, type RunRecord } from "./library.ts";
+import { hostText, requireScriptMeta, type ScriptMeta } from "./metadata.ts";
 import { redact, secretNeedles } from "./redact.ts";
 import { runSandboxed, type Network, type SandboxHost, type SandboxResult } from "./sandbox.ts";
 import { readSecretType, secretName, secretUrlHost } from "./secret.ts";
 
 export const LOCK_FILE = "script.py.lock";
 
-export interface Approval {
+interface Approval {
   readonly script: string;
   readonly lock: string;
-}
-
-export interface Runnable {
-  readonly name: string;
-  readonly dir: string;
-  readonly meta: ScriptMeta;
-  readonly version: string;
 }
 
 export interface ExecuteOptions {
@@ -30,19 +23,11 @@ export interface ExecuteOptions {
   readonly pythonVersion: string;
 }
 
-export interface Outcome extends SandboxResult {
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
-export const sha256 = (data: string | Uint8Array) =>
-  createHash("sha256").update(data).digest("hex");
-
 export async function runApproved(
   script: LibraryScript,
   opts: ExecuteOptions,
   ctx: { secrets: SecretStore; scriptsDir: string; host: SandboxHost; now: Date },
-): Promise<Outcome> {
+): Promise<SandboxResult> {
   await verifyApproval(script.versionDir, script.source);
   let secret: string | undefined;
   const hosts: string[] = [];
@@ -80,23 +65,16 @@ export async function runTrial(
   pendingDir: string,
   opts: ExecuteOptions,
   ctx: { host: SandboxHost; now: Date },
-): Promise<Outcome> {
+): Promise<SandboxResult> {
   const source = await readFile(join(pendingDir, "script.py"), "utf8").catch(() => {
     throw new TarsError(`nothing submitted at ${pendingDir}; run: tars script submit <draft dir>`);
   });
-  let meta: ScriptMeta;
-  try {
-    meta = parseScriptMeta(source);
-  } catch (err) {
-    if (err instanceof ScriptMetaError) throw new TarsError(err.message);
-    throw err;
-  }
+  const meta = requireScriptMeta(source);
   const outcome = await execute(pendingDir, meta, opts, ctx.host, [], undefined);
   const trials = join(pendingDir, "trials");
   await mkdir(trials, { recursive: true });
-  const stamp = ctx.now.toISOString().replaceAll(/[-:]/g, "");
   await writeFile(
-    join(trials, `${stamp}-${randomBytes(3).toString("hex")}.json`),
+    join(trials, `${uniqueStamp(ctx.now)}.json`),
     `${JSON.stringify({ time: ctx.now.toISOString(), script: sha256(source), args: opts.args, ...outcome }, null, 2)}\n`,
   );
   return outcome;
@@ -109,7 +87,7 @@ async function execute(
   host: SandboxHost,
   secretHosts: readonly string[],
   secret: string | undefined,
-): Promise<Outcome> {
+): Promise<SandboxResult> {
   const venv = join(dir, `venv-${opts.pythonVersion}`);
   const venvs = (await readdir(dir).catch(() => [] as string[])).filter((n) =>
     n.startsWith("venv-"),
@@ -144,9 +122,7 @@ async function execute(
 function network(meta: ScriptMeta, secretHosts: readonly string[]): Network {
   if (meta.domains.some((d) => d.kind === "any")) return { kind: "open" };
   const hosts = [
-    ...meta.domains.flatMap((d) =>
-      d.kind === "host" ? [d.port === undefined ? d.host : `${d.host}:${d.port}`] : [],
-    ),
+    ...meta.domains.flatMap((d) => (d.kind === "host" ? [hostText(d)] : [])),
     ...secretHosts,
   ];
   return hosts.length === 0 ? { kind: "none" } : { kind: "allow", hosts };

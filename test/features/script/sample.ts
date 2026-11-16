@@ -1,5 +1,6 @@
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { sha256 } from "../../../src/core/hash.ts";
 
 export interface SampleMeta {
   readonly name?: string;
@@ -44,4 +45,13 @@ export function installSample(
   writeFileSync(join(dir, "versions", version, "script.py"), source);
   symlinkSync(join("versions", version), join(dir, "current"));
   return dir;
+}
+
+/** Writes the lock file and an approval.json that matches it and `source`, as approval does. */
+export function approveSample(versionDir: string, source: string, lock = ""): void {
+  writeFileSync(join(versionDir, "script.py.lock"), lock);
+  writeFileSync(
+    join(versionDir, "approval.json"),
+    JSON.stringify({ script: sha256(source), lock: sha256(lock) }),
+  );
 }

@@ -1,11 +1,11 @@
-import { InvalidArgumentError, Option, type Command } from "commander";
+import { Option, type Command } from "commander";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 import { writeFileAtomic } from "../../core/fs.ts";
 import type { Io } from "../../core/io.ts";
 import type { SecretName, SecretStore } from "../../core/secrets.ts";
-import { SLUG } from "./metadata.ts";
+import { isRecord, parseSlug } from "./metadata.ts";
 
 export const SECRET_TYPES = ["static", "google-oauth"] as const;
 export type SecretType = (typeof SECRET_TYPES)[number];
@@ -93,7 +93,7 @@ Examples:
         } catch {
           throw new TarsError("the secret is not valid JSON; nothing saved");
         }
-        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+        if (!isRecord(parsed))
           throw new TarsError("the secret must be a JSON object; nothing saved");
       }
       await ctx.secrets.set(secretName(kind), value);
@@ -115,8 +115,4 @@ Examples:
     });
 }
 
-function parseKind(value: string): string {
-  if (!SLUG.test(value))
-    throw new InvalidArgumentError("use lowercase letters, digits and hyphens, e.g. bark.");
-  return value;
-}
+const parseKind = parseSlug("bark");

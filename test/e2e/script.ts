@@ -3,14 +3,22 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
-import { EXIT_SKIP, namespacesWork, reexecInNetns, runStep, type Host } from "./sandbox.ts";
+import { approveSample } from "../features/script/sample.ts";
+import {
+  EXIT_SKIP,
+  finishChecks,
+  namespacesWork,
+  printChecks,
+  reexecInNetns,
+  runStep,
+  type Check,
+  type Host,
+} from "./sandbox.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const TARS_BIN = join(ROOT, "dist", "tars");
@@ -94,13 +102,6 @@ hosts = ["127.0.0.1", "localhost", "localhost.", "LOCALHOST", "127.0.0.2", "127.
 print(json.dumps({h: get(f"http://{h}:${ALLOWED_PORT}/") for h in hosts}))
 `;
 
-interface Check {
-  readonly id: string;
-  readonly claim: string;
-  readonly pass: boolean;
-  readonly evidence: string;
-}
-
 function lastJson(stdout: string): Record<string, unknown> {
   try {
     return JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
@@ -111,8 +112,6 @@ function lastJson(stdout: string): Record<string, unknown> {
 
 const denied = (value: unknown) =>
   Array.isArray(value) && value.length > 0 && value.every((r) => String(r).startsWith("DENIED"));
-
-const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
 function outer(): number {
   const missing = TOOLS.filter((t) => !Bun.which(t));
@@ -131,11 +130,7 @@ function install(host: Host, name: string, source: string): string {
   const version = join(host.fakeHome, ".local/share/tars/scripts/library", name, "versions", "v1");
   mkdirSync(version, { recursive: true });
   writeFileSync(join(version, "script.py"), source);
-  writeFileSync(join(version, "script.py.lock"), "");
-  writeFileSync(
-    join(version, "approval.json"),
-    JSON.stringify({ script: sha(source), lock: sha("") }),
-  );
+  approveSample(version, source);
   symlinkSync(join("versions", "v1"), join(version, "..", "..", "current"));
   return join(host.home, ".local/share/tars/scripts/library", name, "versions", "v1");
 }
@@ -398,14 +393,8 @@ async function inner(): Promise<number> {
   } finally {
     for (const s of servers) s.stop(true);
   }
-  for (const c of checks)
-    console.log(`${c.pass ? "PASS" : "FAIL"} ${c.id}: ${c.claim}\n     ${c.evidence}`);
-  const failed = checks.filter((c) => !c.pass);
-  console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
-  if (failed.length > 0 || process.env.TARS_E2E_KEEP === "1")
-    console.log(`scratch dir kept: ${work}`);
-  else rmSync(work, { recursive: true, force: true });
-  return failed.length > 0 ? 1 : 0;
+  printChecks(checks);
+  return finishChecks(checks, work);
 }
 
 if (import.meta.main) process.exitCode = process.env[INNER] ? await inner() : outer();

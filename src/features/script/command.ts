@@ -2,7 +2,6 @@ import { InvalidArgumentError, type Command } from "commander";
 import { join } from "node:path";
 import type { Io } from "../../core/io.ts";
 import type { SecretStore } from "../../core/secrets.ts";
-import { runApproved, runTrial, type Outcome } from "./execute.ts";
 import {
   addNote,
   listScripts,
@@ -15,9 +14,9 @@ import {
   type LibraryScript,
   type ScriptsLayout,
 } from "./library.ts";
-import { SLUG, type Domain, type ScriptMeta } from "./metadata.ts";
+import { hostText, OUTPUT_LIMIT, parseSlug, type Domain, type ScriptMeta } from "./metadata.ts";
 import { prepareOutDir, type OutDirRules } from "./out-dir.ts";
-import { OUTPUT_LIMIT, type SandboxHost } from "./sandbox.ts";
+import type { SandboxHost, SandboxResult } from "./sandbox.ts";
 
 export interface ScriptCommandContext {
   readonly io: Io;
@@ -120,6 +119,7 @@ Examples:
     )
     .action(async (name: string, args: string[], opts: RunOptions) => {
       const s = await loadScript(layout(), name);
+      const { runApproved } = await import("./execute.ts");
       const outcome = await runApproved(s, await executeOptions(args, opts), {
         secrets: ctx.secrets,
         scriptsDir: ctx.scriptsDir(),
@@ -145,6 +145,7 @@ Examples:
   tars script trial download --out out/trial -- not-a-url`,
     )
     .action(async (name: string, args: string[], opts: RunOptions) => {
+      const { runTrial } = await import("./execute.ts");
       const outcome = await runTrial(
         join(ctx.scriptsDir(), "pending", name),
         await executeOptions(args, opts),
@@ -205,17 +206,13 @@ function parseTimeout(value: string): number {
   return n;
 }
 
-function report(io: Io, outcome: Outcome): void {
+function report(io: Io, outcome: SandboxResult): void {
   if (outcome.stdout !== "") io.out(outcome.stdout.replace(/\n$/, ""));
   if (outcome.stderr !== "") io.err(outcome.stderr.replace(/\n$/, ""));
   if (outcome.truncated) io.err(`tars: output past ${OUTPUT_LIMIT} bytes per stream was dropped`);
 }
 
-function parseName(value: string): string {
-  if (!SLUG.test(value))
-    throw new InvalidArgumentError("use lowercase letters, digits and hyphens, e.g. bark-push.");
-  return value;
-}
+const parseName = parseSlug("bark-push");
 
 function parseLine(value: string): string {
   const line = value.trim();
@@ -225,11 +222,7 @@ function parseLine(value: string): string {
 }
 
 const domainText = (d: Domain) =>
-  d.kind === "any"
-    ? "*"
-    : d.kind === "secret-url"
-      ? "secret:url"
-      : `${d.host}${d.port ? `:${d.port}` : ""}`;
+  d.kind === "any" ? "*" : d.kind === "secret-url" ? "secret:url" : hostText(d);
 
 function summaryJson(meta: ScriptMeta) {
   return {
