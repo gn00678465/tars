@@ -25,6 +25,16 @@ printf '%s' "$1" >&0
 IFS= read -r line || exit 3
 printf '%s' "$line"`;
 
+// The kernel's line editing has Backspace but no cursor keys: an arrow key puts its escape
+// sequence into the line, which would reach a path, a JSON array or a name as typed bytes.
+const hasControl = (line: string) =>
+  [...line].some((c) => {
+    const code = c.charCodeAt(0);
+    return (code < 0x20 && c !== "\t") || code === 0x7f;
+  });
+const CONTROL_NOTE =
+  "!! the line held a control key such as an arrow, which cannot move the cursor here; type it again (Backspace works)";
+
 /**
  * Reads in the terminal's own line mode: the kernel edits the line and hands over one line per
  * read, and with no raw mode there is nothing to restore when tars is killed at a prompt.
@@ -57,6 +67,10 @@ export function openTty(): Terminal {
       write(prompt);
       for (;;) {
         const line = bufferedLine();
+        if (line !== undefined && hasControl(line)) {
+          write(`${CONTROL_NOTE}\n${prompt}`);
+          continue;
+        }
         if (line !== undefined) return line;
         const n = readSync(fd, chunk);
         if (n === 0) return undefined;

@@ -528,6 +528,24 @@ async function inner(): Promise<number> {
         ],
       });
     const wrong = await answer("approve-tty-wrong", "prob\n");
+    const arrows = await runDialog(host, {
+      name: "approve-tty-arrows",
+      command: "tars script approve probe",
+      tty: true,
+      turns: [
+        { expect: "Run it once with the real secret before deciding? [y/N] ", send: "n\n" },
+        { expect: CONFIRM, send: "probe\x1b[D\n" },
+        { expect: "type it again", send: "prob\n" },
+      ],
+    });
+    check(
+      "approve-tty-arrows",
+      "a line that holds an arrow key's escape sequence is asked again, not taken as typed",
+      arrows.missed === undefined &&
+        arrows.exitCode === 1 &&
+        arrows.stderr.includes("name did not match"),
+      `exit ${arrows.exitCode}, missed ${arrows.missed}, stderr ${arrows.stderr.trim().slice(0, 300)}`,
+    );
     const eof = await answer("approve-tty-eof", "\x04");
     check(
       "approve-tty",
