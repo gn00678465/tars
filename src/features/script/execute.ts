@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 import { sha256 } from "../../core/hash.ts";
@@ -8,8 +8,7 @@ import { hostText, requireScriptMeta, type ScriptMeta } from "./metadata.ts";
 import { redact, secretNeedles } from "./redact.ts";
 import { runSandboxed, type Network, type SandboxHost, type SandboxResult } from "./sandbox.ts";
 import { readSecretType, secretName, secretUrlHost } from "./secret.ts";
-
-export const LOCK_FILE = "script.py.lock";
+import { ensureVenv, LOCK_FILE, type Toolchain } from "./supply.ts";
 
 interface Approval {
   readonly script: string;
@@ -20,13 +19,18 @@ export interface ExecuteOptions {
   readonly args: readonly string[];
   readonly timeoutMs: number;
   readonly outDir?: string;
-  readonly pythonVersion: string;
 }
 
 export async function runApproved(
   script: LibraryScript,
   opts: ExecuteOptions,
-  ctx: { secrets: SecretStore; scriptsDir: string; host: SandboxHost; now: Date },
+  ctx: {
+    secrets: SecretStore;
+    scriptsDir: string;
+    host: SandboxHost;
+    toolchain: Toolchain;
+    now: Date;
+  },
 ): Promise<SandboxResult> {
   await verifyApproval(script.versionDir, script.source);
   let secret: string | undefined;
@@ -49,7 +53,7 @@ export async function runApproved(
       hosts.push(host);
     }
   }
-  const outcome = await execute(script.versionDir, script.meta, opts, ctx.host, hosts, secret);
+  const outcome = await execute(script.versionDir, script.meta, opts, ctx, hosts, secret);
   const record: RunRecord = {
     time: ctx.now.toISOString(),
     version: script.version,
@@ -64,13 +68,13 @@ export async function runApproved(
 export async function runTrial(
   pendingDir: string,
   opts: ExecuteOptions,
-  ctx: { host: SandboxHost; now: Date },
+  ctx: { host: SandboxHost; toolchain: Toolchain; now: Date },
 ): Promise<SandboxResult> {
   const source = await readFile(join(pendingDir, "script.py"), "utf8").catch(() => {
     throw new TarsError(`nothing submitted at ${pendingDir}; run: tars script submit <draft dir>`);
   });
   const meta = requireScriptMeta(source);
-  const outcome = await execute(pendingDir, meta, opts, ctx.host, [], undefined);
+  const outcome = await execute(pendingDir, meta, opts, ctx, [], undefined);
   const trials = join(pendingDir, "trials");
   await mkdir(trials, { recursive: true });
   await writeFile(
@@ -84,23 +88,16 @@ async function execute(
   dir: string,
   meta: ScriptMeta,
   opts: ExecuteOptions,
-  host: SandboxHost,
+  { host, toolchain }: { host: SandboxHost; toolchain: Toolchain },
   secretHosts: readonly string[],
   secret: string | undefined,
 ): Promise<SandboxResult> {
-  const venv = join(dir, `venv-${opts.pythonVersion}`);
-  const venvs = (await readdir(dir).catch(() => [] as string[])).filter((n) =>
-    n.startsWith("venv-"),
-  );
-  if (!venvs.includes(`venv-${opts.pythonVersion}`))
-    throw new TarsError(
-      `${meta.name} has no environment for Python ${opts.pythonVersion} (found: ${venvs.join(", ") || "none"})`,
-    );
+  const venv = await ensureVenv(dir, toolchain);
   const result = await runSandboxed(
     {
-      python: join(venv, "bin", "python"),
+      python: venv.python,
       script: join(dir, "script.py"),
-      venv,
+      venv: venv.dir,
       cwd: dir,
       args: opts.args,
       network: network(meta, secretHosts),

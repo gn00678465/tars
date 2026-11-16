@@ -75,6 +75,23 @@ describe("tars script run refuses before the sandbox", () => {
   });
 });
 
+describe("tars script trial builds a missing venv", () => {
+  test("without uv on PATH it exits 1 and says to install uv", async () => {
+    const home = tempHome();
+    const data = join(home, "data");
+    const pending = join(data, "scripts", "pending", "bark-push");
+    mkdirSync(pending, { recursive: true });
+    writeFileSync(join(pending, "script.py"), sampleScript({ name: "bark-push" }));
+    writeFileSync(
+      join(pending, "script.py.lock"),
+      'version = 1\n\n[options]\nexclude-newer-span = "P7D"\n',
+    );
+    const deps = testDeps({ env: { HOME: home, TARS_DATA_DIR: data, PATH: tempHome() } });
+    expect(await run(["script", "trial", "bark-push"], deps)).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("uv is not on PATH");
+  });
+});
+
 describe("seccompHelper", () => {
   test("writes the helper once, executable, and replaces a tampered copy", async () => {
     const data = tempHome();

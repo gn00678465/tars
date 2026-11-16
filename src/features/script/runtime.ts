@@ -5,6 +5,9 @@ import { LAUNCH_DIR_VAR, resolvePaths, type Env } from "../../core/paths.ts";
 import type { OutDirRules } from "./out-dir.ts";
 import type { SandboxHost } from "./sandbox.ts";
 import { seccompHelper } from "./seccomp.ts";
+import { parsePythonVersion, SYSTEM_PYTHON, type Toolchain } from "./supply.ts";
+
+const PYPI_INDEX = "https://pypi.org/simple";
 
 export function scriptRuntime(env: Env, cwd: string) {
   let home: string | undefined;
@@ -30,16 +33,22 @@ export function scriptRuntime(env: Env, cwd: string) {
         bins: bins(),
       };
     },
-    pythonVersion: (): string => {
+    toolchain: (): Toolchain => {
       const proc = Bun.spawnSync([
-        "python3",
+        SYSTEM_PYTHON,
         "-c",
         "import sys; print('%d.%d' % sys.version_info[:2])",
       ]);
-      const version = proc.stdout.toString().trim();
-      if (proc.exitCode !== 0 || !/^\d+\.\d+$/.test(version))
-        throw new TarsError("python3 is not on PATH; scripts need it");
-      return version;
+      const version = parsePythonVersion(proc.stdout.toString().trim());
+      if (proc.exitCode !== 0 || version === undefined)
+        throw new TarsError(`${SYSTEM_PYTHON} is missing or broken; scripts need it`);
+      return {
+        index: PYPI_INDEX,
+        python: { path: SYSTEM_PYTHON, version },
+        path: env.PATH ?? "",
+        realHome: realHome(),
+        cacheDir: join(resolvePaths(env).data, "uv-cache"),
+      };
     },
   };
 }

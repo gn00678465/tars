@@ -17,6 +17,7 @@ import {
 import { hostText, OUTPUT_LIMIT, parseSlug, type Domain, type ScriptMeta } from "./metadata.ts";
 import { prepareOutDir, type OutDirRules } from "./out-dir.ts";
 import type { SandboxHost, SandboxResult } from "./sandbox.ts";
+import type { Toolchain } from "./supply.ts";
 
 export interface ScriptCommandContext {
   readonly io: Io;
@@ -25,7 +26,7 @@ export interface ScriptCommandContext {
   readonly secrets: SecretStore;
   sandboxHost(): Promise<SandboxHost>;
   outDirRules(): OutDirRules;
-  pythonVersion(): string;
+  toolchain(): Toolchain;
   exitWith(code: number): void;
 }
 
@@ -124,6 +125,7 @@ Examples:
         secrets: ctx.secrets,
         scriptsDir: ctx.scriptsDir(),
         host: await ctx.sandboxHost(),
+        toolchain: ctx.toolchain(),
         now: ctx.now(),
       });
       report(ctx.io, outcome);
@@ -149,7 +151,7 @@ Examples:
       const outcome = await runTrial(
         join(ctx.scriptsDir(), "pending", name),
         await executeOptions(args, opts),
-        { host: await ctx.sandboxHost(), now: ctx.now() },
+        { host: await ctx.sandboxHost(), toolchain: ctx.toolchain(), now: ctx.now() },
       );
       report(ctx.io, outcome);
       ctx.exitWith(outcome.exit);
@@ -158,7 +160,6 @@ Examples:
   const executeOptions = async (args: string[], opts: RunOptions) => ({
     args,
     timeoutMs: opts.timeout * 1000,
-    pythonVersion: ctx.pythonVersion(),
     ...(opts.out === undefined ? {} : { outDir: await prepareOutDir(opts.out, ctx.outDirRules()) }),
   });
 
