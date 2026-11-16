@@ -50,6 +50,10 @@ sys.exit(main())
   - 連本機服務時寫 IP 加 port，例如 `"127.0.0.1:5000"`。寫 `localhost` 時 gate 1 會拒絕。
   - 只有不用金鑰的腳本能寫 `"*"`，而且它要是唯一的一項。`"*"` 只放行主機名稱，IP 位址、loopback 與私有網段都連不到。
 - **金鑰。** 從環境變數 `TARS_SECRET` 讀，值是使用者用 `tars secret set` 存的原文，JSON 要自己解析。沒有就以宣告的結束碼結束。送審試跑（`trial`）時一定沒有金鑰，也連不到 `"secret:url"` 的主機；`external-write` 的腳本完全沒有網路。腳本要能乾淨地結束。不要印出金鑰，也不要印出含金鑰的 URL。
+- **Google 的服務。** `secret` 寫使用者登入時用的種類，例如 `gcal`。`TARS_SECRET` 是 access token 原文，不是 JSON，放進 `Authorization: Bearer <token>` 標頭，不放進 URL。
+  - `domains` 寫 API 的主機，行事曆是 `"www.googleapis.com"`。不能寫 `"secret:url"`，gate 1 會拒絕。
+  - token 的權限是使用者登入時同意的 scope，約一小時後失效。腳本拿不到 refresh token，不自己換 token。
+  - API 回 401 時以宣告的「金鑰被拒」結束碼結束；回 403 通常是 scope 不夠，或專案沒有啟用那個 API，在 stderr 說明。
 - **私人資訊。** 網址、帳號、ID 不寫死在腳本裡，從參數或金鑰取得。
 - **輸出。** 結果寫 stdout，錯誤與進度寫 stderr。給 agent 讀的結果用一行 JSON。
 - **檔案。** 只寫到環境變數 `TARS_OUT` 指的目錄，呼叫時加了 `--out` 才有。沒有 `TARS_OUT` 時，只能用 `tempfile` 寫暫存檔，執行結束就消失。其他地方都寫不進去。
