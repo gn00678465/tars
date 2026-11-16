@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { gcalChecks } from "./gcal.ts";
 import { runDialog } from "./pty.ts";
 import { finishChecks, printChecks, type Check } from "./sandbox.ts";
 import { enterScriptNetns, lastJson, scriptHost } from "./script-host.ts";
@@ -42,7 +43,8 @@ function zeros(chunks: number, hang: boolean): Response {
 }
 
 async function inner(): Promise<number> {
-  const { host, step, draft } = scriptHost("tars-e2e-pilots-");
+  const scripts = scriptHost("tars-e2e-pilots-");
+  const { host, step, draft } = scripts;
   const barkSource = readFileSync(join(EXAMPLES, "bark-push", "script.py"), "utf8");
   const downloadSource = readFileSync(join(EXAMPLES, "download", "script.py"), "utf8");
   const bark: BarkRequest[] = [];
@@ -340,6 +342,8 @@ async function inner(): Promise<number> {
       exitOf(limits.stdout, "slow") === 124 && JSON.stringify(listOut("dl")) === '["file.bin"]',
       `slow ${exitOf(limits.stdout, "slow")}; out/dl holds ${JSON.stringify(listOut("dl"))}`,
     );
+
+    await gcalChecks(scripts, check);
   } finally {
     for (const s of servers) s.stop(true);
   }
