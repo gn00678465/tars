@@ -1,5 +1,5 @@
-import { existsSync, realpathSync, rmSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 /** Exit code when a prerequisite is missing; the automake convention for a skipped test. */
 export const EXIT_SKIP = 77;
@@ -21,6 +21,9 @@ export function printChecks(checks: readonly Check[]): void {
 export function finishChecks(checks: readonly Check[], work: string, tallySuffix = ""): number {
   const failed = checks.filter((c) => !c.pass).length;
   console.log(`\n${checks.length - failed}/${checks.length} checks passed${tallySuffix}`);
+  const waits = join(work, BUS_WAITS);
+  if (existsSync(waits))
+    console.log(`bus address waits:\n${readFileSync(waits, "utf8").trimEnd()}`);
   if (failed > 0 || process.env.TARS_E2E_KEEP === "1") console.log(`scratch dir kept: ${work}`);
   else rmSync(work, { recursive: true, force: true });
   return failed > 0 ? 1 : 0;
@@ -137,11 +140,25 @@ export interface StepResult {
 }
 
 const KEYRING_PASSWORD = "e2e-keyring-password";
+const BUS_WAITS = "bus-waits.log";
 
 // The bus listens on an abstract socket, which exists only inside this network namespace.
 // gnome-keyring keeps its keyring under the fake home, so entries survive from step to step.
+//
+// Every step starts its own bus on the same address. Twice a step found the address still bound
+// (EADDRINUSE) right after the step before it had exited. What holds it at that moment is not
+// established and this wait has never been seen to fire, so it is bounded and each wait is
+// written to BUS_WAITS, which finishChecks prints: that line is the evidence for or against it.
 const WITH_PRIVATE_KEYRING = `set -e
-dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --print-pid >/dev/null
+busy=0
+until dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --print-pid >/dev/null 2>/tmp/e2e-bus-error; do
+  busy=$((busy + 1))
+  [ "$busy" -lt 50 ] || { cat /tmp/e2e-bus-error >&2; exit 70; }
+  sleep 0.1
+done
+[ "$busy" -eq 0 ] || echo "started after $busy busy tries: $(cat /tmp/e2e-bus-error)" >> "$E2E_BUS_WAITS"
+rm -f /tmp/e2e-bus-error
+unset E2E_BUS_WAITS
 printf '%s' "$E2E_KEYRING_PASSWORD" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
 unset E2E_KEYRING_PASSWORD
 i=0
@@ -212,7 +229,7 @@ export async function runStep(host: Host, step: Step): Promise<StepResult> {
   ];
   const started = performance.now();
   const child = Bun.spawn(bwrap, {
-    env: { ...baseEnv(host), ...step.env },
+    env: { ...baseEnv(host), E2E_BUS_WAITS: join(host.work, BUS_WAITS), ...step.env },
     stdin: step.stdin === undefined ? "ignore" : new TextEncoder().encode(step.stdin),
     stdout: "pipe",
     stderr: "pipe",

@@ -131,9 +131,15 @@ export async function runDialog(host: Host, dialog: Dialog): Promise<DialogResul
   try {
     report = JSON.parse(step.stdout);
   } catch {
-    throw new Error(
-      `pty driver for ${dialog.name} failed (exit ${step.exitCode}): ${step.stdout}${step.stderr}`,
-    );
+    // The driver or the sandbox around it failed. Reported as a failed dialog, like a failed
+    // step, so the run still prints every check instead of dying on this one.
+    return {
+      ...step,
+      stderr: `pty driver failed (exit ${step.exitCode}): ${step.stdout}${step.stderr}`,
+      transcript: "",
+      missed: "(the pty driver did not report)",
+      timedOut: false,
+    };
   }
   return {
     name: dialog.name,

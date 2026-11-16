@@ -6,11 +6,13 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
+import type { ApprovalRecord } from "../../src/features/script/library.ts";
 import { approveSample } from "../features/script/sample.ts";
 import { runDialog } from "./pty.ts";
 import {
@@ -131,6 +133,36 @@ import sys
 print("zero-dep ran on", sys.prefix)
 `;
 
+const gated = (mark: string) => `# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+#
+# [tool.tars]
+# name = "gated"
+# summary = "e2e script that goes through the three gates"
+# secret = "fake-bark"
+# domains = ["secret:url"]
+# effects = "external-write"
+# args = "<words> | sleep <seconds>"
+# outputs = "one line"
+# exit = { 0 = "ok", 3 = "no secret" }
+# ///
+import json, os, sys, time, urllib.parse, urllib.request
+MARK = "gated ${mark}"
+if sys.argv[1:2] == ["sleep"]:
+    time.sleep(float(sys.argv[2])); print(MARK, "woke"); sys.exit(0)
+secret = os.environ.get("TARS_SECRET")
+if not secret:
+    print(MARK, "no secret"); sys.exit(3)
+s = json.loads(secret)
+def tty():
+    try: open("/dev/tty").close(); return "OPENED"
+    except Exception as e: return "DENIED"
+query = urllib.parse.urlencode({"key": s["key"], "argv": json.dumps(sys.argv[1:])})
+status = urllib.request.urlopen(s["url"] + "/push?" + query, timeout=5).status
+print(MARK, "pushed", status, "key", s["key"], "tty", tty(), "prefix", sys.prefix)
+`;
+
 function lastJson(stdout: string): Record<string, unknown> {
   try {
     return JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
@@ -205,8 +237,17 @@ async function inner(): Promise<number> {
   copyFileSync(TARS_BIN, join(host.bin, "tars"));
   chmodSync(join(host.bin, "tars"), 0o755);
   symlinkSync(uv, join(host.bin, "uv"));
+  const pushes: URLSearchParams[] = [];
   const servers = [ALLOWED_PORT, OTHER_PORT].map((port) =>
-    Bun.serve({ hostname: "::", port, fetch: () => new Response("ok") }),
+    Bun.serve({
+      hostname: "::",
+      port,
+      fetch: (req) => {
+        const url = new URL(req.url);
+        if (url.pathname === "/push") pushes.push(url.searchParams);
+        return new Response("ok");
+      },
+    }),
   );
   const checks: Check[] = [];
   const check = (id: string, claim: string, pass: boolean, evidence: string) =>
@@ -243,6 +284,8 @@ async function inner(): Promise<number> {
       `exit ${set.exitCode}: ${set.stdout.trim()}`,
     );
 
+    const read = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : "");
+    const list = (path: string) => (existsSync(path) ? readdirSync(path) : ["(missing)"]);
     const draft = (name: string, source: string) => {
       const dir = join(host.fakeHome, ".local/share/tars/workspace/drafts", name);
       mkdirSync(dir, { recursive: true });
@@ -259,7 +302,7 @@ async function inner(): Promise<number> {
         submitted.stdout.trim().split("\n").at(-1) === "tars script approve probe" &&
         existsSync(join(current, "gate1.json")) &&
         existsSync(join(current, `venv-${python}`, "pyvenv.cfg")) &&
-        readFileSync(join(current, "script.py"), "utf8") === PROBE,
+        read(join(current, "script.py")) === PROBE,
       `exit ${submitted.exitCode}: ${submitted.stdout.trim().replaceAll("\n", " | ")} ${submitted.stderr.slice(0, 300)}`,
     );
 
@@ -273,9 +316,9 @@ async function inner(): Promise<number> {
       refused.exitCode === 1 &&
         refused.stderr.includes("gate 1: requires-python") &&
         refused.stdout === "" &&
-        readdirSync(pendingProbe).length === 2 &&
-        readFileSync(join(current, "script.py"), "utf8") === PROBE,
-      `exit ${refused.exitCode}: ${refused.stderr.trim().slice(0, 300)}; pending holds ${JSON.stringify(readdirSync(pendingProbe))}`,
+        list(pendingProbe).length === 2 &&
+        read(join(current, "script.py")) === PROBE,
+      `exit ${refused.exitCode}: ${refused.stderr.trim().slice(0, 300)}; pending holds ${JSON.stringify(list(pendingProbe))}`,
     );
 
     const run = await step(
@@ -586,6 +629,228 @@ async function inner(): Promise<number> {
       [wrong, eof]
         .map((r) => `${r.name}: exit ${r.exitCode}, missed ${r.missed}, ${r.stderr.trim()}`)
         .join(" | "),
+    );
+
+    const scriptsDir = join(host.fakeHome, ".local/share/tars/scripts");
+    const gatedHome = join(scriptsDir, "library/gated");
+    const gatedPending = join(scriptsDir, "pending/gated");
+    const V1 = gated("v1");
+    const V2 = gated("v2");
+    const currentVersion = () =>
+      existsSync(join(gatedHome, "current"))
+        ? (readlinkSync(join(gatedHome, "current")).split("/").at(-1) ?? "")
+        : "";
+    const approval = (version: string): ApprovalRecord =>
+      JSON.parse(
+        read(join(gatedHome, "versions", version, "approval.json")) ||
+          '{"script":"","gate2":{"trials":[],"ignoredTrials":-1,"review":null},"gate3":{"liveRuns":[],"replaced":"(none)"}}',
+      );
+    const runLines = () =>
+      read(join(gatedHome, "runs.jsonl"))
+        .trim()
+        .split("\n")
+        .flatMap((line) => (line === "" ? [] : [JSON.parse(line) as { version: string }]));
+
+    writeFileSync(join(host.fakeHome, "gated-review.md"), "GATED-REVIEW: no secret gives exit 3\n");
+    const gates = await step(
+      "gates-1-2",
+      `tars script submit ${draft("gated", V1)} && { tars script trial gated -- t; echo "trial-exit $?"; } && tars script review gated --report ~/gated-review.md`,
+    );
+    const trialDir = join(gatedPending, "current", "trials");
+    const v1Trials = existsSync(trialDir) ? readdirSync(trialDir) : [];
+    const v1Trial = read(join(trialDir, v1Trials[0] ?? "none"));
+    check(
+      "gates-1-2",
+      "a new script passes gate 1, its trial runs without the secret and sends nothing, and the report is attached",
+      gates.exitCode === 0 &&
+        gates.stdout.includes("submitted gated (a new script)") &&
+        gates.stdout.includes("gated v1 no secret") &&
+        gates.stdout.includes("trial-exit 3") &&
+        v1Trials.length === 1 &&
+        pushes.length === 0,
+      `exit ${gates.exitCode}: ${gates.stdout.trim().replaceAll("\n", " | ")} ${gates.stderr.slice(0, 300)}; pushes ${pushes.length}`,
+    );
+
+    const LIVE = "Run it once with the real secret before deciding? [y/N] ";
+    const flow = await runDialog(host, {
+      name: "approve-flow",
+      command: "tars script approve gated",
+      tty: true,
+      turns: [
+        { expect: LIVE, send: "y\n" },
+        { expect: "Arguments as a JSON array", send: '["hello", "", "two\\nlines"]\n' },
+        { expect: "--out directory", send: "\n" },
+        { expect: "Run it again? [y/N] ", send: "n\n" },
+        { expect: "Type gated to approve it", send: "gated\n" },
+      ],
+    });
+    const v1 = currentVersion();
+    check(
+      "approve-flow",
+      "in a pty, approve shows the script, the trial and the report, runs it live, takes the name and exits 0 with one line on stdout",
+      flow.exitCode === 0 &&
+        flow.missed === undefined &&
+        flow.stdout.trim() === `approved gated ${v1}` &&
+        flow.transcript.includes('  | MARK = "gated v1"') &&
+        flow.transcript.includes("trial 1:") &&
+        flow.transcript.includes("  | GATED-REVIEW: no secret gives exit 3") &&
+        flow.transcript.includes("gated v1 pushed 200") &&
+        !flow.transcript.includes("!!"),
+      `exit ${flow.exitCode}, missed ${flow.missed}, stdout ${JSON.stringify(flow.stdout)}, stderr ${flow.stderr.trim().slice(0, 300)}`,
+    );
+    check(
+      "approve-live-run",
+      "only the live run of gate 3 reaches the service, with the real key and the arguments as typed",
+      pushes.length === 1 &&
+        pushes[0]?.get("key") === KEY &&
+        JSON.stringify(JSON.parse(pushes[0]?.get("argv") ?? "null")) ===
+          JSON.stringify(["hello", "", "two\nlines"]),
+      `${pushes.length} push(es): ${pushes.map((p) => p.get("argv")).join(" ; ")}`,
+    );
+    const flowAll = flow.transcript + flow.stdout + flow.stderr;
+    const liveLine = (
+      flow.transcript.split("\n").find((l) => l.includes("gated v1 pushed")) ?? "(no output line)"
+    ).trim();
+    check(
+      "approve-redacted",
+      "the live run's output is masked before it reaches the terminal",
+      flow.transcript.includes("key [REDACTED]") && !flowAll.includes(KEY),
+      liveLine,
+    );
+    const ttyControl = await runDialog(host, {
+      name: "tty-control",
+      command: `python3 -c 'open("/dev/tty").close(); print("OPENED")'`,
+      tty: true,
+      turns: [],
+    });
+    check(
+      "approve-sandbox-tty",
+      "the script under review cannot open the terminal the user answers on, which a process outside the sandbox can",
+      liveLine.includes("tty DENIED") && ttyControl.stdout.trim() === "OPENED",
+      `in the sandbox: ${liveLine}; outside it: ${ttyControl.stdout.trim()}${ttyControl.stderr.trim()}`,
+    );
+    const record = approval(v1);
+    const staging = join(scriptsDir, "staging");
+    check(
+      "approve-installed",
+      "the approved version holds the reviewed bytes and the record of the three gates; nothing is left pending or staged, and no package was approved",
+      /^[0-9a-f]{16}$/.test(v1) &&
+        read(join(gatedHome, "versions", v1, "script.py")) === V1 &&
+        existsSync(join(gatedHome, "versions", v1, `venv-${python}`, "pyvenv.cfg")) &&
+        record.script === new Bun.CryptoHasher("sha256").update(V1).digest("hex") &&
+        record.gate2.trials.length === 1 &&
+        record.gate2.review?.report.includes("GATED-REVIEW") === true &&
+        record.gate3.liveRuns.length === 1 &&
+        record.gate3.replaced === null &&
+        !JSON.stringify(record).includes("hello") &&
+        !existsSync(join(gatedPending, "current")) &&
+        existsSync(staging) &&
+        list(staging).length === 0 &&
+        list(join(scriptsDir, "packages")).length === 0,
+      `version ${v1}; gate2 trials ${record.gate2.trials.length}, live runs ${record.gate3.liveRuns.length}; pending holds ${JSON.stringify(list(gatedPending))}; staging exists ${existsSync(staging)}`,
+    );
+
+    const afterApprove = await step(
+      "run-after-approve",
+      'tars script run gated -- hi && tars script note gated "E2E-NOTE: keep me"',
+    );
+    check(
+      "run-after-approve",
+      "the approved script runs from its version directory, in the venv built during approve",
+      afterApprove.exitCode === 0 &&
+        afterApprove.stdout.includes("gated v1 pushed 200") &&
+        afterApprove.stdout.includes(`/library/gated/versions/${v1}/venv-${python}`),
+      `exit ${afterApprove.exitCode}: ${afterApprove.stdout.trim()} ${afterApprove.stderr.slice(0, 300)}`,
+    );
+
+    const tamper = await step(
+      "gate1-mismatch-setup",
+      `tars script submit ${draft("gated", V2)} && echo "# after gate 1" >> ~/.local/share/tars/scripts/pending/gated/current/script.py; tars script trial gated -- t`,
+    );
+    const mismatch = await runDialog(host, {
+      name: "gate1-mismatch",
+      command: "tars script approve gated",
+      tty: true,
+      turns: [],
+    });
+    check(
+      "gate1-mismatch",
+      "a script.py changed after gate 1 is refused by trial and by approve, which shows and installs nothing",
+      tamper.exitCode === 1 &&
+        tamper.stderr.includes("script.py changed after gate 1") &&
+        !tamper.stdout.includes("gated v2") &&
+        mismatch.exitCode === 1 &&
+        mismatch.stderr.includes("script.py changed after gate 1") &&
+        mismatch.transcript === "" &&
+        currentVersion() === v1,
+      `trial exit ${tamper.exitCode}: ${tamper.stderr.trim().slice(0, 200)} | approve exit ${mismatch.exitCode}: ${mismatch.stderr.trim().slice(0, 200)}; terminal showed ${JSON.stringify(mismatch.transcript.slice(0, 80))}`,
+    );
+
+    const resubmit = await step("update-submit", `tars script submit ${draft("gated", V2)}`);
+    if (existsSync(join(gatedPending, "current"))) {
+      mkdirSync(join(gatedPending, "current", "trials"), { recursive: true });
+      writeFileSync(join(gatedPending, "current", "trials", "from-v1.json"), v1Trial);
+    }
+    const update = await runDialog(host, {
+      name: "update",
+      command: `tars script run gated -- sleep 6 > ~/slow.out 2>&1 & slow=$!
+        until pgrep -f '[s]cript.py sleep 6' > /dev/null; do sleep 0.2; done
+        tars script approve gated; code=$?
+        wait $slow; echo "slow-exit $?" >> ~/slow.out; exit $code`,
+      tty: true,
+      turns: [
+        { expect: LIVE, send: "n\n" },
+        { expect: "Type gated to approve it", send: "gated\n" },
+      ],
+    });
+    const v2 = currentVersion();
+    const v2VenvReady = existsSync(join(gatedHome, "versions", v2, `venv-${python}`, "pyvenv.cfg"));
+    const slow = read(join(host.fakeHome, "slow.out"));
+    const afterUpdate = await step("run-after-update", "tars script run gated -- again");
+    const updateWarnings = update.transcript.split("\n").filter((l) => l.startsWith("!!"));
+    check(
+      "stale-trial",
+      "a trial of the earlier script.py counts for nothing in the review of the new one, and approve says so",
+      resubmit.exitCode === 0 &&
+        resubmit.stdout.includes(`updates version ${v1}`) &&
+        updateWarnings.some((w) => w.includes("ignored 1 trial record(s)")) &&
+        updateWarnings.some((w) => w.includes("no trial ran this script.py")) &&
+        updateWarnings.some((w) => w.includes("no gate 2 report is attached")) &&
+        approval(v2).gate2.trials.length === 0 &&
+        approval(v2).gate2.ignoredTrials === 1,
+      updateWarnings.join(" | "),
+    );
+    const notes = read(join(gatedHome, "NOTES.md"));
+    const runs = runLines();
+    check(
+      "update-keeps-history",
+      "an update shows the diff, moves current to a version whose venv is already built, and keeps the notes, the runs and the earlier version",
+      update.exitCode === 0 &&
+        update.missed === undefined &&
+        v2 !== v1 &&
+        v2VenvReady &&
+        update.stdout.trim() === `approved gated ${v2}` &&
+        update.transcript.includes('  | -MARK = "gated v1"') &&
+        update.transcript.includes('  | +MARK = "gated v2"') &&
+        approval(v2).gate3.replaced === v1 &&
+        notes.includes("E2E-NOTE: keep me") &&
+        runs[0]?.version === v1 &&
+        read(join(gatedHome, "versions", v1, "script.py")) === V1,
+      `exit ${update.exitCode}, missed ${update.missed}, ${v1} -> ${v2}, venv ready ${v2VenvReady}; runs ${runs.map((r) => r.version).join(",")}; notes ${JSON.stringify(notes.trim())}; ${update.stderr.trim().slice(0, 200)}`,
+    );
+    check(
+      "update-during-run",
+      "a run that started before the update finishes on the whole earlier version; the next run gets the new one",
+      slow.includes("gated v1 woke") &&
+        !slow.includes("gated v2") &&
+        slow.includes("slow-exit 0") &&
+        runs.filter((r) => r.version === v1).length === 2 &&
+        afterUpdate.exitCode === 0 &&
+        afterUpdate.stdout.includes("gated v2 pushed 200") &&
+        runLines().at(-1)?.version === v2,
+      `slow run: ${slow.trim().replaceAll("\n", " | ")}; next run: ${afterUpdate.stdout.trim().slice(0, 80)}; runs ${runLines()
+        .map((r) => r.version)
+        .join(",")}`,
     );
 
     const lib = join(
