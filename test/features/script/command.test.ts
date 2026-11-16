@@ -18,6 +18,9 @@ import {
   addNote,
   scriptsLayout,
 } from "../../../src/features/script/library.ts";
+import { readEvidence, readSubmission } from "../../../src/features/script/pending.ts";
+import { approveCommand } from "../../../src/features/script/runtime.ts";
+import { draftDir, plainScript, submitted } from "./gates.ts";
 import { installSample, sampleScript } from "./sample.ts";
 
 function setup() {
@@ -238,5 +241,113 @@ describe("library boundaries", () => {
     await expect(loadScript(scriptsLayout(scripts), "../pending/x")).rejects.toThrow(
       "invalid script name",
     );
+  });
+});
+
+describe("tars script submit", () => {
+  test("a draft gate 1 refuses exits 1 with each problem on stderr and nothing on stdout", async () => {
+    const { scripts, deps } = setup();
+    const draft = draftDir(sampleScript({ name: "bark-push", extraTop: "[tool.uv]" }));
+    expect(await tars(deps, "submit", draft)).toBe(1);
+    expect(deps.io.stdout).toEqual([]);
+    expect(deps.io.stderr.join("\n")).toContain("gate 1: ");
+    expect(deps.io.stderr.join("\n")).toContain("tool.uv");
+    expect(existsSync(join(scripts, "pending"))).toBe(false);
+  });
+
+  test("a directory without script.py exits 1", async () => {
+    const { deps } = setup();
+    expect(await tars(deps, "submit", tempHome())).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("no script.py");
+  });
+});
+
+describe("approveCommand", () => {
+  test("is the bare command when the data directory is the account's default", () => {
+    expect(approveCommand("bark-push", "/home/u/.local/share/tars", "/home/u")).toBe(
+      "tars script approve bark-push",
+    );
+  });
+
+  test("pins any other data directory, quoted for a shell", () => {
+    expect(approveCommand("bark-push", "/srv/it's here/tars", "/home/u")).toBe(
+      "TARS_DATA_DIR='/srv/it'\\''s here/tars' tars script approve bark-push",
+    );
+  });
+});
+
+describe("tars script review", () => {
+  const reportFile = (content: string | Uint8Array) => {
+    const path = join(tempHome(), "review.md");
+    writeFileSync(path, content);
+    return path;
+  };
+
+  test("attaches the report to the submission under review", async () => {
+    const { scripts, deps } = setup();
+    const made = await submitted(scripts, plainScript("bark-push"));
+    expect(await tars(deps, "review", "bark-push", "--report", reportFile("tried x\n"))).toBe(0);
+    expect((await readEvidence(made)).review).toMatchObject({
+      kind: "attached",
+      report: "tried x\n",
+    });
+    expect(deps.io.stdout.join("\n")).toContain(made.scriptSha.slice(0, 12));
+  });
+
+  test("refuses a report that is too large, not UTF-8, or empty, and attaches nothing", async () => {
+    const { scripts, deps } = setup();
+    const made = await submitted(scripts, plainScript("bark-push"));
+    for (const bad of ["x".repeat(32 * 1024 + 1), new Uint8Array([0xff, 0xfe, 0x41]), " \n"])
+      expect(await tars(deps, "review", "bark-push", "--report", reportFile(bad))).toBe(1);
+    expect(await tars(deps, "review", "bark-push", "--report", "/no/such/file")).toBe(1);
+    expect((await readEvidence(made)).review).toEqual({ kind: "missing" });
+  });
+
+  test("with nothing submitted it exits 1", async () => {
+    const { deps } = setup();
+    expect(await tars(deps, "review", "bark-push", "--report", reportFile("r\n"))).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("nothing is submitted");
+  });
+
+  test("without --report it is a usage error", async () => {
+    const { deps } = setup();
+    expect(await tars(deps, "review", "bark-push")).toBe(2);
+  });
+});
+
+describe("tars script show --pending", () => {
+  test("prints the submission's dossier on stdout", async () => {
+    const { scripts, deps } = setup();
+    const source = plainScript("bark-push", "print('pending body')");
+    await submitted(scripts, source);
+    expect(await tars(deps, "show", "bark-push", "--pending")).toBe(0);
+    const out = deps.io.stdout.join("\n");
+    expect(out).toContain("  | print('pending body')");
+    expect(out).toContain("== gate 1 ==");
+    expect(out).toContain("!! no gate 2 report is attached");
+    expect((await readSubmission(scripts, "bark-push")).source).toBe(source);
+  });
+
+  test("shows the submission, not the library version of the same name", async () => {
+    const { scripts, deps } = setup();
+    installSample(scripts, "bark-push", plainScript("bark-push", "print('in library')"));
+    await submitted(scripts, plainScript("bark-push", "print('pending body')"));
+    expect(await tars(deps, "show", "bark-push", "--pending")).toBe(0);
+    expect(deps.io.stdout.join("\n")).toContain("  | +print('pending body')");
+  });
+
+  test("with nothing submitted it exits 1", async () => {
+    const { scripts, deps } = setup();
+    installSample(scripts, "bark-push");
+    expect(await tars(deps, "show", "bark-push", "--pending")).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("nothing is submitted");
+  });
+
+  test("with --source or --json it is a usage error", async () => {
+    const { scripts, deps } = setup();
+    await submitted(scripts, plainScript("bark-push"));
+    expect(await tars(deps, "show", "bark-push", "--pending", "--source")).toBe(2);
+    expect(await tars(deps, "show", "bark-push", "--pending", "--json")).toBe(2);
+    expect(deps.io.stdout).toEqual([]);
   });
 });

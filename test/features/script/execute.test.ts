@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -12,6 +13,7 @@ import { join } from "node:path";
 import { run } from "../../../src/main.ts";
 import { seccompHelper } from "../../../src/features/script/seccomp.ts";
 import { fakeSecrets, tempHome, testDeps } from "../../helpers.ts";
+import { plainScript, submitted } from "./gates.ts";
 import { approveSample, installSample, sampleScript } from "./sample.ts";
 
 function setup(secrets = fakeSecrets()) {
@@ -79,16 +81,30 @@ describe("tars script trial builds a missing venv", () => {
   test("without uv on PATH it exits 1 and says to install uv", async () => {
     const home = tempHome();
     const data = join(home, "data");
-    const pending = join(data, "scripts", "pending", "bark-push");
-    mkdirSync(pending, { recursive: true });
-    writeFileSync(join(pending, "script.py"), sampleScript({ name: "bark-push" }));
-    writeFileSync(
-      join(pending, "script.py.lock"),
-      'version = 1\n\n[options]\nexclude-newer-span = "P7D"\n',
-    );
+    await submitted(join(data, "scripts"), plainScript("bark-push"));
     const deps = testDeps({ env: { HOME: home, TARS_DATA_DIR: data, PATH: tempHome() } });
     expect(await run(["script", "trial", "bark-push"], deps)).toBe(1);
     expect(deps.io.stderr.join("\n")).toContain("uv is not on PATH");
+  });
+});
+
+describe("tars script trial refuses before the sandbox", () => {
+  test("a script.py changed after gate 1, and records no trial", async () => {
+    const home = tempHome();
+    const data = join(home, "data");
+    const made = await submitted(join(data, "scripts"), plainScript("bark-push"));
+    writeFileSync(join(made.dir, "script.py"), plainScript("bark-push", "print('swapped')"));
+    const deps = testDeps({ env: { HOME: home, TARS_DATA_DIR: data, PATH: tempHome() } });
+    expect(await run(["script", "trial", "bark-push"], deps)).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("script.py changed after gate 1");
+    expect(existsSync(join(made.dir, "trials"))).toBe(false);
+  });
+
+  test("a name with nothing submitted", async () => {
+    const home = tempHome();
+    const deps = testDeps({ env: { HOME: home, TARS_DATA_DIR: join(home, "data") } });
+    expect(await run(["script", "trial", "bark-push"], deps)).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("nothing is submitted for bark-push");
   });
 });
 

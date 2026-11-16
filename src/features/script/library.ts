@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { appendFile, lstat, mkdir, readdir, readFile, realpath, rename } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { TarsError } from "../../core/exit.ts";
+import { sha256 } from "../../core/hash.ts";
 import { requireScriptMeta, SLUG, type ScriptMeta } from "./metadata.ts";
 
 export interface ScriptsLayout {
@@ -26,6 +27,22 @@ export interface LibraryScript {
   readonly source: string;
   readonly meta: ScriptMeta;
 }
+
+declare const brand: unique symbol;
+
+/** Names versions/<id>/. Only versionId makes one, from the hashes of the two files in it. */
+export type VersionId = string & { readonly [brand]: "VersionId" };
+
+// Hashing the two digests, not the joined bytes, so moving bytes between the script and the lock
+// cannot produce the same id.
+export const versionId = (scriptSha: string, lockSha: string): VersionId =>
+  sha256(`${scriptSha}\n${lockSha}\n`).slice(0, 16) as VersionId;
+
+/** What a submission of `name` would replace. */
+export type LibraryBase =
+  | { readonly kind: "none" }
+  | { readonly kind: "current"; readonly script: LibraryScript }
+  | { readonly kind: "broken"; readonly reason: string };
 
 export interface BrokenScript {
   readonly name: string;
@@ -58,6 +75,17 @@ export async function loadScript(layout: ScriptsLayout, name: string): Promise<L
   const meta = requireScriptMeta(source, `${name}: `);
   if (meta.name !== name) throw new TarsError(`${name}: script.py declares name ${meta.name}`);
   return { name, dir, versionDir, version: versionDir.slice(versions.length), source, meta };
+}
+
+export async function libraryBase(layout: ScriptsLayout, name: string): Promise<LibraryBase> {
+  if ((await lstat(join(layout.library, name)).catch(() => undefined)) === undefined)
+    return { kind: "none" };
+  try {
+    return { kind: "current", script: await loadScript(layout, name) };
+  } catch (err) {
+    if (!(err instanceof TarsError)) throw err;
+    return { kind: "broken", reason: err.message };
+  }
 }
 
 const gone = (name: string) =>

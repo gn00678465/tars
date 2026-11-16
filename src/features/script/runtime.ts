@@ -1,13 +1,33 @@
 import { isAbsolute, join } from "node:path";
 import { accountHome } from "../../core/account.ts";
 import { TarsError } from "../../core/exit.ts";
-import { IN_SESSION_VAR, LAUNCH_DIR_VAR, resolvePaths, type Env } from "../../core/paths.ts";
+import {
+  DATA_DIR_VAR,
+  IN_SESSION_VAR,
+  LAUNCH_DIR_VAR,
+  resolvePaths,
+  type Env,
+} from "../../core/paths.ts";
+import type { OsvEndpoint } from "./osv.ts";
 import type { OutDirRules } from "./out-dir.ts";
 import type { SandboxHost } from "./sandbox.ts";
 import { seccompHelper } from "./seccomp.ts";
 import { parsePythonVersion, SYSTEM_PYTHON, type Toolchain } from "./supply.ts";
 
 const PYPI_INDEX = "https://pypi.org/simple";
+const OSV: OsvEndpoint = { url: "https://api.osv.dev", timeoutMs: 30_000 };
+
+/**
+ * The line `submit` tells the agent to hand to the user. The user's own shell resolves the data
+ * directory from their environment, so it is pinned whenever it is not the account's default.
+ */
+export function approveCommand(name: string, data: string, accountHome: string): string {
+  const pin =
+    data === join(accountHome, ".local", "share", "tars")
+      ? ""
+      : `${DATA_DIR_VAR}='${data.replaceAll("'", "'\\''")}' `;
+  return `${pin}tars script approve ${name}`;
+}
 
 export function scriptRuntime(env: Env, cwd: string) {
   let home: string | undefined;
@@ -15,6 +35,8 @@ export function scriptRuntime(env: Env, cwd: string) {
   const bins = () => [...new Set([resolvePaths(env).bin, join(realHome(), ".local", "bin")])];
   return {
     inSession: () => (env[IN_SESSION_VAR] ?? "") !== "",
+    osv: () => OSV,
+    approveCommand: (name: string) => approveCommand(name, resolvePaths(env).data, realHome()),
     sandboxHost: async (): Promise<SandboxHost> => {
       const { data } = resolvePaths(env);
       return {

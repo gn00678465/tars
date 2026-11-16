@@ -228,14 +228,9 @@ async function inner(): Promise<number> {
     .stdout.toString()
     .trim();
   try {
-    const pending = join(host.fakeHome, ".local/share/tars/scripts/pending/probe");
-    mkdirSync(pending, { recursive: true });
-    writeFileSync(join(pending, "script.py"), PROBE);
-    const venvs = [
-      install(host, "probe", PROBE),
-      install(host, "opener", OPEN),
-      join(host.home, ".local/share/tars/scripts/pending/probe"),
-    ].map((v) => `python3 -m venv --without-pip ${v}/venv-${python}`);
+    const venvs = [install(host, "probe", PROBE), install(host, "opener", OPEN)].map(
+      (v) => `python3 -m venv --without-pip ${v}/venv-${python}`,
+    );
     const setup = await step("setup", venvs.join(" && "));
     if (setup.exitCode !== 0) throw new Error(`setup failed: ${setup.stderr}`);
     const zeroDep = install(host, "zero-dep", ZERO_DEP, zeroDepLock(uv, work));
@@ -246,6 +241,41 @@ async function inner(): Promise<number> {
       "tars secret set reads stdin and never prints the value",
       set.exitCode === 0 && !(set.stdout + set.stderr).includes(KEY),
       `exit ${set.exitCode}: ${set.stdout.trim()}`,
+    );
+
+    const draft = (name: string, source: string) => {
+      const dir = join(host.fakeHome, ".local/share/tars/workspace/drafts", name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "script.py"), source);
+      return `~/.local/share/tars/workspace/drafts/${name}`;
+    };
+    const pendingProbe = join(host.fakeHome, ".local/share/tars/scripts/pending/probe");
+    const submitted = await step("submit", `tars script submit ${draft("probe", PROBE)}`);
+    const current = join(pendingProbe, "current");
+    check(
+      "submit",
+      "submit passes gate 1 offline for a script without dependencies, builds its venv, and ends with the command for the user",
+      submitted.exitCode === 0 &&
+        submitted.stdout.trim().split("\n").at(-1) === "tars script approve probe" &&
+        existsSync(join(current, "gate1.json")) &&
+        existsSync(join(current, `venv-${python}`, "pyvenv.cfg")) &&
+        readFileSync(join(current, "script.py"), "utf8") === PROBE,
+      `exit ${submitted.exitCode}: ${submitted.stdout.trim().replaceAll("\n", " | ")} ${submitted.stderr.slice(0, 300)}`,
+    );
+
+    const refused = await step(
+      "submit-refused",
+      `tars script submit ${draft("probe-next", PROBE.replace(">=3.12", ">=9.0"))}`,
+    );
+    check(
+      "submit-refused",
+      "a draft gate 1 refuses exits 1, and the earlier submission stays the one under review",
+      refused.exitCode === 1 &&
+        refused.stderr.includes("gate 1: requires-python") &&
+        refused.stdout === "" &&
+        readdirSync(pendingProbe).length === 2 &&
+        readFileSync(join(current, "script.py"), "utf8") === PROBE,
+      `exit ${refused.exitCode}: ${refused.stderr.trim().slice(0, 300)}; pending holds ${JSON.stringify(readdirSync(pendingProbe))}`,
     );
 
     const run = await step(
@@ -457,7 +487,7 @@ async function inner(): Promise<number> {
 
     const trial = await step(
       "trial",
-      "tars script trial probe -- t && ls ~/.local/share/tars/scripts/pending/probe/trials",
+      "tars script trial probe -- t && ls ~/.local/share/tars/scripts/pending/probe/current/trials",
     );
     const trialReport = lastJson(trial.stdout.split("\n").slice(0, -2).join("\n"));
     check(
@@ -468,6 +498,22 @@ async function inner(): Promise<number> {
         String(trialReport.allowed).startsWith("DENIED") &&
         (trial.stdout.trim().split("\n").at(-1) ?? "").endsWith(".json"),
       `exit ${trial.exitCode}: allowed=${trialReport.allowed} ${trial.stderr.slice(0, 200)}`,
+    );
+
+    writeFileSync(join(host.fakeHome, "review.md"), "REVIEW-MARK: tried an empty title\n");
+    const reviewed = await step(
+      "review",
+      "tars script review probe --report ~/review.md && tars script show probe --pending",
+    );
+    check(
+      "review",
+      "review attaches the report, and show --pending compares the script with the library and prints the trial and the report",
+      reviewed.exitCode === 0 &&
+        reviewed.stdout.includes("the same text as version v1") &&
+        reviewed.stdout.includes('args: ["t"]') &&
+        reviewed.stdout.includes("  | REVIEW-MARK: tried an empty title") &&
+        !reviewed.stdout.includes("!!"),
+      `exit ${reviewed.exitCode}: ${reviewed.stdout.split("\n").length} lines ${reviewed.stderr.slice(0, 300)}`,
     );
 
     const built = await step("venv-built", "tars script run zero-dep");

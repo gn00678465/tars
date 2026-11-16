@@ -1,5 +1,5 @@
-import { InvalidArgumentError, type Command } from "commander";
-import { join } from "node:path";
+import { InvalidArgumentError, Option, type Command } from "commander";
+import { readFile } from "node:fs/promises";
 import { EXIT, TarsError } from "../../core/exit.ts";
 import type { Io } from "../../core/io.ts";
 import type { SecretStore } from "../../core/secrets.ts";
@@ -16,8 +16,11 @@ import {
   type LibraryScript,
   type ScriptsLayout,
 } from "./library.ts";
+import { gatherDossier, renderDossier } from "./dossier.ts";
 import { hostText, OUTPUT_LIMIT, parseSlug, type Domain, type ScriptMeta } from "./metadata.ts";
+import type { OsvEndpoint } from "./osv.ts";
 import { prepareOutDir, type OutDirRules } from "./out-dir.ts";
+import { attachReview, readSubmission, REPORT_LIMIT } from "./pending.ts";
 import type { SandboxHost, SandboxResult } from "./sandbox.ts";
 import type { Toolchain } from "./supply.ts";
 
@@ -29,6 +32,9 @@ export interface ScriptCommandContext {
   sandboxHost(): Promise<SandboxHost>;
   outDirRules(): OutDirRules;
   toolchain(): Toolchain;
+  osv(): OsvEndpoint;
+  /** The command line the user runs in their own terminal to review `name`. */
+  approveCommand(name: string): string;
   /** Whether an agent session started this tars (TARS_IN_SESSION). */
   inSession(): boolean;
   /** Opens the user's terminal; a TarsError when the process has none. */
@@ -88,16 +94,28 @@ Examples:
     .argument("<name>", "script name", parseName)
     .option("--source", "print only the current script.py, to copy into a draft")
     .option("--json", "print the result as JSON")
+    .addOption(
+      new Option(
+        "--pending",
+        "print the submission under review instead: script, declarations, gate 1, trials, report",
+      ).conflicts(["source", "json"]),
+    )
     .addHelpText(
       "after",
       `
-Exit codes: 0 done, 1 no such script, 2 usage error.
+Exit codes: 0 done, 1 no such script or submission, 2 usage error.
 
 Examples:
   tars script show bark-push
-  tars script show bark-push --source > drafts/bark-push/script.py`,
+  tars script show bark-push --source > drafts/bark-push/script.py
+  tars script show bark-push --pending`,
     )
-    .action(async (name: string, opts: { source?: boolean; json?: boolean }) => {
+    .action(async (name: string, opts: { source?: boolean; json?: boolean; pending?: boolean }) => {
+      if (opts.pending) {
+        const submission = await readSubmission(ctx.scriptsDir(), name);
+        const dossier = await gatherDossier(ctx.scriptsDir(), submission, ctx.toolchain().index);
+        return ctx.io.out(renderDossier(dossier, ctx.now()).trimEnd());
+      }
       const s = await loadScript(layout(), name);
       if (opts.source) return ctx.io.out(s.source.trimEnd());
       const notes = (await readNotes(s)).trimEnd();
@@ -153,12 +171,13 @@ Examples:
   tars script trial download --out out/trial -- not-a-url`,
     )
     .action(async (name: string, args: string[], opts: RunOptions) => {
+      const submission = await readSubmission(ctx.scriptsDir(), name);
       const { runTrial } = await import("./execute.ts");
-      const outcome = await runTrial(
-        join(ctx.scriptsDir(), "pending", name),
-        await executeOptions(args, opts),
-        { host: await ctx.sandboxHost(), toolchain: ctx.toolchain(), now: ctx.now() },
-      );
+      const outcome = await runTrial(submission, await executeOptions(args, opts), {
+        host: await ctx.sandboxHost(),
+        toolchain: ctx.toolchain(),
+        now: ctx.now(),
+      });
       report(ctx.io, outcome);
       ctx.exitWith(outcome.exit);
     });
@@ -195,6 +214,79 @@ Examples:
     .action(async (name: string) => {
       const target = await retireScript(layout(), await loadScript(layout(), name), ctx.now());
       ctx.io.out(`retired ${name} to ${target}`);
+    });
+
+  script
+    .command("submit")
+    .description(
+      "Check a draft (gate 1) and put it up for review, replacing an earlier submission.",
+    )
+    .argument("<draft-dir>", "directory holding the draft's script.py")
+    .addHelpText(
+      "after",
+      `
+Locks the dependencies, asks OSV about them and builds the environment. A draft that fails
+changes nothing: an earlier submission of the same script stays the one under review.
+The last line printed is the command the user runs, in their own terminal, to approve it.
+
+Exit codes: 0 submitted, 1 gate 1 refused the draft or tars failed, 2 usage error.
+
+Examples:
+  tars script submit drafts/bark-push`,
+    )
+    .action(async (draftDir: string) => {
+      const { gate1ProblemText, submit } = await import("./gate1.ts");
+      const result = await submit(draftDir, {
+        scriptsDir: ctx.scriptsDir(),
+        secrets: ctx.secrets,
+        toolchain: ctx.toolchain(),
+        osv: ctx.osv(),
+        now: ctx.now(),
+      });
+      if (!result.ok) {
+        for (const problem of result.problems) ctx.io.err(`gate 1: ${gate1ProblemText(problem)}`);
+        ctx.io.err(
+          "gate 1 refused the draft; nothing changed. Fix it and submit again. An earlier submission, if any, is still under review.",
+        );
+        return ctx.exitWith(EXIT.failure);
+      }
+      const { submission, newPackages, base } = result;
+      const { name } = submission;
+      const replaces =
+        base.kind === "none"
+          ? "a new script"
+          : base.kind === "current"
+            ? `updates version ${base.script.version}`
+            : "replaces a library entry that does not load";
+      ctx.io.out(`submitted ${name} (${replaces})`);
+      if (newPackages.length > 0)
+        ctx.io.out(`packages the user has not approved yet: ${newPackages.join(", ")}`);
+      ctx.io.out(`test it:    tars script trial ${name} -- <args>`);
+      ctx.io.out(`report:     tars script review ${name} --report <file>`);
+      ctx.io.out("then ask the user to run this in their own terminal:");
+      ctx.io.out(ctx.approveCommand(name));
+    });
+
+  script
+    .command("review")
+    .description("Attach the gate 2 report to a submission; a later report replaces it.")
+    .argument("<name>", "script name", parseName)
+    .requiredOption("--report <file>", `the report: UTF-8 text, at most ${REPORT_LIMIT} bytes`)
+    .addHelpText(
+      "after",
+      `
+The report is tied to the script.py it reviewed; after another submit it no longer counts.
+
+Exit codes: 0 attached, 1 nothing submitted or an unusable report, 2 usage error.
+
+Examples:
+  tars script review bark-push --report drafts/bark-push/review.md`,
+    )
+    .action(async (name: string, opts: { report: string }) => {
+      const report = await readReport(opts.report);
+      const submission = await readSubmission(ctx.scriptsDir(), name);
+      await attachReview(submission, report, ctx.now());
+      ctx.io.out(`attached the review to ${name} (script.py ${submission.scriptSha.slice(0, 12)})`);
     });
 
   script
@@ -252,6 +344,18 @@ function report(io: Io, outcome: SandboxResult): void {
   if (outcome.stdout !== "") io.out(outcome.stdout.replace(/\n$/, ""));
   if (outcome.stderr !== "") io.err(outcome.stderr.replace(/\n$/, ""));
   if (outcome.truncated) io.err(`tars: output past ${OUTPUT_LIMIT} bytes per stream was dropped`);
+}
+
+async function readReport(path: string): Promise<string> {
+  const bytes = await readFile(path).catch(() => {
+    throw new TarsError(`cannot read the report at ${path}`);
+  });
+  if (bytes.length > REPORT_LIMIT)
+    throw new TarsError(`the report is ${bytes.length} bytes; the limit is ${REPORT_LIMIT}`);
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) throw new TarsError("the report is not UTF-8");
+  if (text.trim() === "") throw new TarsError("the report is empty");
+  return text;
 }
 
 const parseName = parseSlug("bark-push");

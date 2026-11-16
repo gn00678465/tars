@@ -6,6 +6,10 @@ export interface SampleMeta {
   readonly name?: string;
   readonly extraTop?: string;
   readonly tarsLines?: readonly string[];
+  readonly dependencies?: readonly string[];
+  readonly requiresPython?: string;
+  /** Python after the metadata block. */
+  readonly body?: string;
 }
 
 export function sampleScript(opts: SampleMeta = {}): string {
@@ -21,15 +25,14 @@ export function sampleScript(opts: SampleMeta = {}): string {
   ];
   return [
     "# /// script",
-    '# requires-python = ">=3.12"',
-    '# dependencies = ["httpx[http2]==0.28.1"]',
+    `# requires-python = "${opts.requiresPython ?? ">=3.12"}"`,
+    `# dependencies = ${JSON.stringify(opts.dependencies ?? ["httpx[http2]==0.28.1"])}`,
     ...(opts.extraTop ? [`# ${opts.extraTop}`] : []),
     "#",
     "# [tool.tars]",
     ...tars.map((l) => `# ${l}`),
     "# ///",
-    "import sys",
-    "sys.exit(0)",
+    opts.body ?? "import sys\nsys.exit(0)",
     "",
   ].join("\n");
 }

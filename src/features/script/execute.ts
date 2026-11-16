@@ -1,10 +1,11 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 import { sha256 } from "../../core/hash.ts";
 import type { SecretStore } from "../../core/secrets.ts";
-import { uniqueStamp, type LibraryScript, type RunRecord } from "./library.ts";
-import { hostText, requireScriptMeta, type ScriptMeta } from "./metadata.ts";
+import type { LibraryScript, RunRecord } from "./library.ts";
+import { hostText, type ScriptMeta } from "./metadata.ts";
+import { recordTrial, type Submission } from "./pending.ts";
 import { redact, secretNeedles } from "./redact.ts";
 import { runSandboxed, type Network, type SandboxHost, type SandboxResult } from "./sandbox.ts";
 import { readSecretType, secretName, secretUrlHost } from "./secret.ts";
@@ -65,22 +66,18 @@ export async function runApproved(
   return outcome;
 }
 
+/**
+ * Takes a Submission, which cannot exist without the gate1.json comparison. The sandbox still
+ * runs the file on disk; one swapped after the check runs without a secret, and its record
+ * carries the hash of the bytes that were checked.
+ */
 export async function runTrial(
-  pendingDir: string,
+  submission: Submission,
   opts: ExecuteOptions,
   ctx: { host: SandboxHost; toolchain: Toolchain; now: Date },
 ): Promise<SandboxResult> {
-  const source = await readFile(join(pendingDir, "script.py"), "utf8").catch(() => {
-    throw new TarsError(`nothing submitted at ${pendingDir}; run: tars script submit <draft dir>`);
-  });
-  const meta = requireScriptMeta(source);
-  const outcome = await execute(pendingDir, meta, opts, ctx, [], undefined);
-  const trials = join(pendingDir, "trials");
-  await mkdir(trials, { recursive: true });
-  await writeFile(
-    join(trials, `${uniqueStamp(ctx.now)}.json`),
-    `${JSON.stringify({ time: ctx.now.toISOString(), script: sha256(source), args: opts.args, ...outcome }, null, 2)}\n`,
-  );
+  const outcome = await execute(submission.dir, submission.meta, opts, ctx, [], undefined);
+  await recordTrial(submission, opts.args, outcome, ctx.now);
   return outcome;
 }
 
