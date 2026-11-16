@@ -1,48 +1,21 @@
 import {
-  chmodSync,
-  copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   readlinkSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import type { ApprovalRecord } from "../../src/features/script/library.ts";
 import { approveSample } from "../features/script/sample.ts";
 import { runDialog } from "./pty.ts";
-import {
-  binaryDirsFor,
-  EXIT_SKIP,
-  finishChecks,
-  namespacesWork,
-  printChecks,
-  reexecInNetns,
-  resolveTool,
-  runStep,
-  type Check,
-  type Host,
-} from "./sandbox.ts";
+import { finishChecks, printChecks, type Check, type Host } from "./sandbox.ts";
+import { enterScriptNetns, lastJson, scriptHost } from "./script-host.ts";
 
-const ROOT = join(import.meta.dir, "..", "..");
-const TARS_BIN = join(ROOT, "dist", "tars");
 const INNER = "TARS_E2E_SCRIPT_INNER";
-const TOOLS = [
-  "bwrap",
-  "unshare",
-  "ip",
-  "dbus-daemon",
-  "dbus-send",
-  "gnome-keyring-daemon",
-  "socat",
-  "python3",
-  "rg",
-  "uv",
-];
 
 const KEY = "E2E-FAKE-BARK-KEY-0123456789";
 /** The run step's bus listens here, so the probe knows which live socket it must fail to reach. */
@@ -165,29 +138,8 @@ status = urllib.request.urlopen(s["url"] + "/push?" + query, timeout=5).status
 print(MARK, "pushed", status, "key", s["key"], "tty", tty(), "prefix", sys.prefix)
 `;
 
-function lastJson(stdout: string): Record<string, unknown> {
-  try {
-    return JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
-  } catch {
-    return {};
-  }
-}
-
 const denied = (value: unknown) =>
   Array.isArray(value) && value.length > 0 && value.every((r) => String(r).startsWith("DENIED"));
-
-function outer(): number {
-  const missing = TOOLS.filter((t) => !Bun.which(t));
-  if (missing.length > 0) {
-    console.error(`e2e:script SKIP, missing: ${missing.join(", ")}`);
-    return EXIT_SKIP;
-  }
-  if (!namespacesWork()) {
-    console.error("e2e:script SKIP, user or network namespaces are disabled");
-    return EXIT_SKIP;
-  }
-  return reexecInNetns(import.meta.path, { ...process.env, [INNER]: "1" }) ?? 1;
-}
 
 function install(host: Host, name: string, source: string, lock = ""): string {
   const version = join(host.fakeHome, ".local/share/tars/scripts/library", name, "versions", "v1");
@@ -220,25 +172,8 @@ function zeroDepLock(uv: string, work: string): string {
 }
 
 async function inner(): Promise<number> {
-  const home = userInfo().homedir;
-  const work = mkdtempSync(join(tmpdir(), "tars-e2e-script-"));
-  const uv = resolveTool("uv", process.env);
-  if (!uv) throw new Error("uv is on PATH but its binary could not be resolved");
-  const host: Host = {
-    uid: process.getuid?.() ?? 0,
-    user: userInfo().username,
-    home,
-    work,
-    fakeHome: join(work, "home"),
-    bin: join(work, "bin"),
-    binaryDirs: binaryDirsFor([uv]),
-    apiUrl: "",
-  };
-  mkdirSync(host.fakeHome, { recursive: true });
-  mkdirSync(host.bin, { recursive: true });
-  copyFileSync(TARS_BIN, join(host.bin, "tars"));
-  chmodSync(join(host.bin, "tars"), 0o755);
-  symlinkSync(uv, join(host.bin, "uv"));
+  const { host, uv, python, step, draft } = scriptHost("tars-e2e-script-");
+  const { work } = host;
   const pushes: URLSearchParams[] = [];
   const servers = [ALLOWED_PORT, OTHER_PORT].map((port) =>
     Bun.serve({
@@ -254,22 +189,6 @@ async function inner(): Promise<number> {
   const checks: Check[] = [];
   const check = (id: string, claim: string, pass: boolean, evidence: string) =>
     checks.push({ id, claim, pass, evidence });
-  const step = (name: string, script: string, env: Record<string, string> = {}, stdin?: string) =>
-    runStep(host, {
-      name,
-      argv: ["sh", "-c", script],
-      cwd: host.home,
-      env,
-      timeoutMs: 120_000,
-      ...(stdin === undefined ? {} : { stdin }),
-    });
-  const python = Bun.spawnSync([
-    "/usr/bin/python3",
-    "-c",
-    "import sys;print('%d.%d'%sys.version_info[:2])",
-  ])
-    .stdout.toString()
-    .trim();
   try {
     const venvs = [install(host, "probe", PROBE), install(host, "opener", OPEN)].map(
       (v) => `python3 -m venv --without-pip ${v}/venv-${python}`,
@@ -288,12 +207,6 @@ async function inner(): Promise<number> {
 
     const read = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : "");
     const list = (path: string) => (existsSync(path) ? readdirSync(path) : ["(missing)"]);
-    const draft = (name: string, source: string) => {
-      const dir = join(host.fakeHome, ".local/share/tars/workspace/drafts", name);
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "script.py"), source);
-      return `~/.local/share/tars/workspace/drafts/${name}`;
-    };
     const pendingProbe = join(host.fakeHome, ".local/share/tars/scripts/pending/probe");
     const submitted = await step("submit", `tars script submit ${draft("probe", PROBE)}`);
     const current = join(pendingProbe, "current");
@@ -875,4 +788,7 @@ async function inner(): Promise<number> {
   return finishChecks(checks, work);
 }
 
-if (import.meta.main) process.exitCode = process.env[INNER] ? await inner() : outer();
+if (import.meta.main)
+  process.exitCode = process.env[INNER]
+    ? await inner()
+    : enterScriptNetns(import.meta.path, INNER, "e2e:script");
