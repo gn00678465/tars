@@ -65,3 +65,4 @@ description: tars 這個 repo 寫 TypeScript 與 Bun 程式時的慣例：用哪
 3. `tsc --noEmit`
 4. `bun test`
 5. `gitleaks dir .`
+6. `osv-scanner scan source -L bun.lock`：查 OSV 線上資料庫，連不上時以 127 結束，check 不通過。只掃 `bun.lock`，測試用的鎖檔不掃
