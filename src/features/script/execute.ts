@@ -75,7 +75,7 @@ export async function runWithSecret(
       hosts.push(host);
     }
   }
-  return execute(dir, meta, opts, ctx, hosts, secret);
+  return execute(dir, meta, opts, ctx, network(meta, hosts), secret);
 }
 
 /**
@@ -88,7 +88,14 @@ export async function runTrial(
   opts: ExecuteOptions,
   ctx: { host: SandboxHost; toolchain: Toolchain; now: Date },
 ): Promise<SandboxResult> {
-  const outcome = await execute(submission.dir, submission.meta, opts, ctx, [], undefined);
+  const outcome = await execute(
+    submission.dir,
+    submission.meta,
+    opts,
+    ctx,
+    trialNetwork(submission.meta),
+    undefined,
+  );
   await recordTrial(submission, opts.args, outcome, ctx.now);
   return outcome;
 }
@@ -98,7 +105,7 @@ async function execute(
   meta: ScriptMeta,
   opts: ExecuteOptions,
   { host, toolchain }: { host: SandboxHost; toolchain: Toolchain },
-  secretHosts: readonly string[],
+  net: Network,
   secret: string | undefined,
 ): Promise<SandboxResult> {
   const venv = await ensureVenv(dir, toolchain);
@@ -109,7 +116,7 @@ async function execute(
       venv: venv.dir,
       cwd: dir,
       args: opts.args,
-      network: network(meta, secretHosts),
+      network: net,
       ...(secret === undefined ? {} : { secret }),
       ...(opts.outDir === undefined ? {} : { outDir: opts.outDir }),
       timeoutMs: opts.timeoutMs,
@@ -123,6 +130,14 @@ async function execute(
     stdout: redact(result.stdout, needles),
     stderr: redact(result.stderr, needles),
   };
+}
+
+/**
+ * Gate 2 must not write to the outside world (r52). Withholding the secret is not enough for an
+ * external-write script that needs none, so such a script gets no network at all.
+ */
+export function trialNetwork(meta: ScriptMeta): Network {
+  return meta.effects === "external-write" ? { kind: "none" } : network(meta, []);
 }
 
 function network(meta: ScriptMeta, secretHosts: readonly string[]): Network {

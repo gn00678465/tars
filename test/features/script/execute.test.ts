@@ -10,6 +10,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { trialNetwork } from "../../../src/features/script/execute.ts";
+import { requireScriptMeta } from "../../../src/features/script/metadata.ts";
 import { run } from "../../../src/main.ts";
 import { seccompHelper } from "../../../src/features/script/seccomp.ts";
 import { fakeSecrets, tempHome, testDeps } from "../../helpers.ts";
@@ -140,5 +142,34 @@ describe("seccompHelper", () => {
   test("without an embedded copy it reads the one in node_modules", async () => {
     const path = await seccompHelper(tempHome(), []);
     expect(statSync(path).size).toBeGreaterThan(1000);
+  });
+});
+
+describe("trialNetwork", () => {
+  const meta = (effects: string, domains: string) =>
+    requireScriptMeta(
+      sampleScript({
+        tarsLines: [
+          'name = "probe"',
+          'summary = "s"',
+          `effects = "${effects}"`,
+          `domains = ${domains}`,
+          'args = "a"',
+          'outputs = "o"',
+          'exit = { 0 = "ok" }',
+        ],
+      }),
+    );
+
+  test("an external-write script gets no network in a trial, even for hosts it declares", () => {
+    expect(trialNetwork(meta("external-write", '["api.example.com"]'))).toEqual({ kind: "none" });
+  });
+
+  test("other scripts keep the hosts they declare", () => {
+    expect(trialNetwork(meta("read-only", '["api.example.com"]'))).toEqual({
+      kind: "allow",
+      hosts: ["api.example.com"],
+    });
+    expect(trialNetwork(meta("local-write", '["*"]'))).toEqual({ kind: "open" });
   });
 });

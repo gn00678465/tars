@@ -163,7 +163,9 @@ Examples:
     .addHelpText(
       "after",
       `
-The output is also saved under the submission's trials/ for the approver to read.
+No secret, no "secret:url" host, and no network at all for an external-write script, so a
+trial never writes to the outside world. The output is also saved under the submission's
+trials/ for the approver to read.
 Exit codes: as tars script run.
 
 Examples:
