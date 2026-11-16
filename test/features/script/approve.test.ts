@@ -414,6 +414,7 @@ describe("approve: updates", () => {
     expect(await approve("probe", ctx)).toEqual({
       kind: "already-approved",
       version: first.version,
+      pending: "removed",
     });
     expect(terminal.transcript).toEqual([]);
     await expectInstalled(scripts, V1);

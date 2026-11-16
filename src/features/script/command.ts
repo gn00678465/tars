@@ -312,10 +312,11 @@ Examples:
       const terminal = ctx.terminal();
       try {
         const { approve } = await import("./approve.ts");
+        const toolchain = ctx.toolchain();
         const outcome = await approve(name, {
           scriptsDir: ctx.scriptsDir(),
           terminal,
-          toolchain: ctx.toolchain(),
+          toolchain,
           osv: ctx.osv(),
           outDirRules: ctx.outDirRules,
           now: ctx.now,
@@ -325,7 +326,7 @@ Examples:
               secrets: ctx.secrets,
               scriptsDir: ctx.scriptsDir(),
               host: await ctx.sandboxHost(),
-              toolchain: ctx.toolchain(),
+              toolchain,
             });
           },
         });
@@ -333,10 +334,10 @@ Examples:
           ctx.io.err(`not approved (${outcome.reason}); ${name} is still pending`);
           return ctx.exitWith(EXIT.failure);
         }
-        if (outcome.kind === "already-approved")
-          return ctx.io.out(`${name} ${outcome.version} is already in the library`);
         ctx.io.out(
-          `approved ${name} ${outcome.version}${outcome.reused ? " (a version already in the library)" : ""}`,
+          outcome.kind === "already-approved"
+            ? `${name} ${outcome.version} is already in the library`
+            : `approved ${name} ${outcome.version}${outcome.reused ? " (a version already in the library)" : ""}`,
         );
         if (outcome.pending === "newer")
           ctx.io.err(

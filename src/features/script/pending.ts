@@ -204,8 +204,10 @@ export async function recordTrial(
   };
   const trials = join(submission.dir, "trials");
   try {
-    await lstat(submission.dir);
-    await mkdir(trials, { recursive: true });
+    // Not recursive: a submission removed while the trial ran must stay removed.
+    await mkdir(trials).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== "EEXIST") throw err;
+    });
     await writeFile(
       join(trials, `${uniqueStamp(now)}.json`),
       `${JSON.stringify(record, null, 2)}\n`,

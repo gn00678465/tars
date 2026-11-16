@@ -62,17 +62,17 @@ export function renderDossier(dossier: Dossier, now: Date): string {
     ...sourceSection(dossier),
     "",
     "== what it declares ==",
-    `name:     ${visible(meta.name)}`,
-    `summary:  ${visible(meta.summary)}`,
-    `call:     tars script run ${visible(meta.name)} -- ${visible(meta.args)}`,
-    `outputs:  ${visible(meta.outputs)}`,
+    `name:     ${inline(meta.name)}`,
+    `summary:  ${inline(meta.summary)}`,
+    `call:     tars script run ${inline(meta.name)} -- ${inline(meta.args)}`,
+    `outputs:  ${inline(meta.outputs)}`,
     `effects:  ${meta.effects}`,
-    `secret:   ${visible(meta.secret ?? "(none)")}`,
-    `domains:  ${visible(meta.domains.map(domainText).join(", ")) || "(no network)"}`,
-    `python:   ${visible(meta.requiresPython ?? "(any)")}`,
-    `requires: ${visible(meta.dependencies.join(", ")) || "(nothing)"}`,
+    `secret:   ${inline(meta.secret ?? "(none)")}`,
+    `domains:  ${inline(meta.domains.map(domainText).join(", ")) || "(no network)"}`,
+    `python:   ${inline(meta.requiresPython ?? "(any)")}`,
+    `requires: ${inline(meta.dependencies.join(", ")) || "(nothing)"}`,
     "exit codes:",
-    ...[...meta.exit].map(([code, meaning]) => `  ${code}  ${visible(meaning)}`),
+    ...[...meta.exit].map(([code, meaning]) => `  ${code}  ${inline(meaning)}`),
     "",
     "== gate 1 ==",
     `passed at ${visible(submission.gate1Time)} (${age(submission.gate1Time, now)})`,
@@ -121,6 +121,9 @@ export function visible(text: string): string {
     },
   );
 }
+
+/** For text placed inside one of tars's own lines, where a newline would start a line tars did not write. */
+export const inline = (text: string) => visible(text).replaceAll("\n", "\\n");
 
 const LINE = /[^\n]*\n|[^\n]+$/g;
 
@@ -218,7 +221,7 @@ function sourceSection({ submission, base }: Dossier): string[] {
   if (base.kind === "broken")
     return [
       "== script.py ==",
-      `!! the library already has ${submission.name}, but it does not load (${visible(base.reason)}); showing the whole text`,
+      `!! the library already has ${submission.name}, but it does not load (${inline(base.reason)}); showing the whole text`,
       ...whole,
     ];
   const { version, source } = base.script;

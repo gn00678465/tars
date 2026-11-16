@@ -1,7 +1,7 @@
 import { TarsError } from "../../core/exit.ts";
 import { sha256 } from "../../core/hash.ts";
 import type { Terminal } from "../../core/terminal.ts";
-import { gatherDossier, quoted, renderDossier, visible, type Dossier } from "./dossier.ts";
+import { gatherDossier, inline, quoted, renderDossier, type Dossier } from "./dossier.ts";
 import type { ExecuteOptions } from "./execute.ts";
 import { gate1ProblemText, pythonProblems } from "./gate1.ts";
 import {
@@ -35,7 +35,11 @@ export type ApproveOutcome =
       readonly pending: "removed" | "newer" | "stuck";
     }
   /** The library already runs these exact bytes: an earlier approve stopped before removing pending. */
-  | { readonly kind: "already-approved"; readonly version: VersionId }
+  | {
+      readonly kind: "already-approved";
+      readonly version: VersionId;
+      readonly pending: "removed" | "newer";
+    }
   | { readonly kind: "declined"; readonly reason: "end of input" | "name did not match" };
 
 export interface ApproveContext {
@@ -69,8 +73,12 @@ export async function approve(name: string, ctx: ApproveContext): Promise<Approv
     base.script.version === version &&
     typeof (await checkApproval(base.script.versionDir, base.script.source)) !== "string"
   ) {
-    await removeSubmission(scriptsDir, submission);
-    return { kind: "already-approved", version };
+    const left = await removeSubmission(scriptsDir, submission);
+    return {
+      kind: "already-approved",
+      version,
+      pending: left === "removed" ? "removed" : "newer",
+    };
   }
   await recheck(dossier, ctx);
   terminal.write(renderDossier(dossier, ctx.now()));
@@ -191,7 +199,7 @@ async function liveRun(
     return summary(time, args, outcome.exit);
   } catch (err) {
     if (!(err instanceof TarsError)) throw err;
-    terminal.write(`!! the run did not start: ${visible(err.message)}\n`);
+    terminal.write(`!! the run did not start: ${inline(err.message)}\n`);
     return undefined;
   }
 }

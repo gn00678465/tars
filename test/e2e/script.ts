@@ -45,6 +45,8 @@ const TOOLS = [
 ];
 
 const KEY = "E2E-FAKE-BARK-KEY-0123456789";
+/** The run step's bus listens here, so the probe knows which live socket it must fail to reach. */
+const PROBE_BUS = "tars-e2e-probe-bus";
 const ALLOWED_PORT = 18765;
 const OTHER_PORT = 18766;
 const SECRET = JSON.stringify({ url: `http://127.0.0.1:${ALLOWED_PORT}`, key: KEY });
@@ -72,7 +74,7 @@ def attempt(f):
 def get(port):
     return attempt(lambda: urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5).status)
 def bus():
-    s = socket.socket(socket.AF_UNIX); s.connect("\\0tars-e2e-session-bus"); return "CONNECTED"
+    s = socket.socket(socket.AF_UNIX); s.connect("\\0${PROBE_BUS}"); return "CONNECTED"
 secret = os.environ.get("TARS_SECRET", "")
 key = json.loads(secret)["key"] if secret else ""
 print(secret); print(key); print(urllib.parse.quote(key)); print(base64.b64encode(key.encode()).decode())
@@ -324,6 +326,7 @@ async function inner(): Promise<number> {
     const run = await step(
       "run",
       `echo CANARY > /tmp/canary.txt && echo CANARY > ~/canary.txt && echo MEMORY > ~/.local/share/tars/MEMORY.md && tars script run probe -- '$(whoami)' 'a;b' "it's"`,
+      { DBUS_SESSION_BUS_ADDRESS: `unix:abstract=${PROBE_BUS}` },
     );
     const all = run.stdout + run.stderr;
     const lines = run.stdout.trim().split("\n");

@@ -13,7 +13,7 @@ import { attachReview, recordTrial } from "../../../src/features/script/pending.
 import type { SandboxResult } from "../../../src/features/script/sandbox.ts";
 import { tempHome } from "../../helpers.ts";
 import { NO_INDEX, plainScript, submitted } from "./gates.ts";
-import { installSample } from "./sample.ts";
+import { installSample, sampleScript } from "./sample.ts";
 
 const NOW = new Date("2026-11-16T12:00:00Z");
 const RESULT: SandboxResult = { exit: 0, stdout: "", stderr: "", truncated: false, ms: 5 };
@@ -73,6 +73,26 @@ describe("renderDossier", () => {
     expect(lines.filter((l) => l === "== gate 2 report ==")).toHaveLength(1);
     expect(lines.filter((l) => l === "== gate 1 ==")).toHaveLength(1);
     expect(lines.filter((l) => l.includes("nothing to see"))).toEqual([]);
+  });
+
+  test("a declaration that holds newlines stays on its own line", async () => {
+    const forged = "one line\n== gate 1 ==\n!! nothing to see";
+    const source = sampleScript({
+      dependencies: [],
+      body: "pass",
+      tarsLines: [
+        'name = "probe"',
+        'summary = "prints one line"',
+        'effects = "read-only"',
+        `args = ${JSON.stringify(forged)}`,
+        `outputs = ${JSON.stringify(forged)}`,
+        `exit = { 0 = ${JSON.stringify(forged)} }`,
+      ],
+    });
+    const lines = tarsLines(render(await dossierOf(source)));
+    expect(lines.filter((l) => l === "== gate 1 ==")).toHaveLength(1);
+    expect(lines.filter((l) => l.startsWith("!!") && l.includes("nothing to see"))).toEqual([]);
+    expect(lines).toContain("outputs:  one line\\n== gate 1 ==\\n!! nothing to see");
   });
 
   test("a new script is shown whole, with what it declares and its hashes", async () => {
