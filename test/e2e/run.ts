@@ -100,6 +100,9 @@ const SESSION_MARKERS = {
   },
 } as const;
 const PROMPT = "Reply with OK.";
+/** The words tars-mode routes to the script playbook by, in its description and its route table. */
+const SCRIPT_ROUTE = "推播、下載、呼叫外部 API 或服務";
+const SCRIPT_FILES = ["playbooks/script.md", "reference/script-writing.md"];
 const remember = (id: string, text: string) =>
   `tars memory remember --id ${id} --section 偏好 --text '${text}' --source user`;
 const WRITEBACK = {
@@ -239,6 +242,7 @@ class Suite {
     const userConfig = snapshotUserConfig(this.host);
 
     await this.setup();
+    this.scriptPlaybook();
     await this.claude();
     await this.claudeInteractive();
     await this.agy();
@@ -363,6 +367,36 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
       "tars install and tars auth claude succeed inside the sandbox; the fake Google login is planted",
       install.result.exitCode === 0 && auth.result.exitCode === 0 && plant.result.exitCode === 0,
       `exit codes ${install.result.exitCode}/${auth.result.exitCode}/${plant.result.exitCode}; ${auth.files}/stdout.txt: ${auth.result.stdout.trim()}`,
+    );
+  }
+
+  scriptPlaybook() {
+    const installed = join(this.l.dataDir, "skills", "tars-mode");
+    const read = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : undefined);
+    const files = SCRIPT_FILES.map((file) => {
+      const got = read(onHost(this.host, join(installed, file)));
+      const want = read(join(ROOT, "tars-skills", "tars-mode", file));
+      const verdict =
+        got === undefined ? "missing" : got === want ? "same as the repo" : "differs from the repo";
+      return { file, ok: verdict === "same as the repo", verdict };
+    });
+    this.check(
+      "install-script-playbook",
+      "tars install puts tars-mode's script playbook and its writing reference in the data dir",
+      files.every((f) => f.ok),
+      files.map((f) => `${join(installed, f.file)}: ${f.verdict}`).join("; "),
+    );
+    const skill = read(onHost(this.host, join(installed, "SKILL.md"))) ?? "";
+    const description = skill.match(/^description: (.*)$/m)?.[1] ?? "";
+    const row = new RegExp(
+      `^\\| [^|\\n]*${RegExp.escape(SCRIPT_ROUTE)}[^|\\n]* \\| \`playbooks/script\\.md\` \\|$`,
+      "m",
+    ).test(skill);
+    this.check(
+      "install-tars-mode-script-route",
+      `the installed tars-mode routes ${SCRIPT_ROUTE} to playbooks/script.md and names them in its description`,
+      row && description.includes(SCRIPT_ROUTE),
+      `${join(installed, "SKILL.md")}: route row ${row ? "present" : "absent"}; description ${description.includes(SCRIPT_ROUTE) ? "has" : "lacks"} the words`,
     );
   }
 
@@ -654,6 +688,14 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
       "the main request lists the tars skills memory and tars-mode",
       main !== undefined && missing.length === 0,
       `${run.files}/requests.jsonl main request: ${missing.length === 0 ? "both descriptions present" : `missing ${missing.map(([name]) => name).join(", ")}`}`,
+    );
+    // A request without "hey tars" reaches the script playbook only if the model sees these words.
+    const listed = mainText.match(/^- tars-mode(?: \([^)\n]*\))?: (.*)$/m)?.[1];
+    this.check(
+      `${harness}-script-route`,
+      `the main request's tars-mode entry names ${SCRIPT_ROUTE}`,
+      listed?.includes(SCRIPT_ROUTE) === true,
+      `${run.files}/requests.jsonl main request: ${listed === undefined ? "no tars-mode entry" : `tars-mode entry ${listed.includes(SCRIPT_ROUTE) ? "has" : "lacks"} the words`}`,
     );
     this.check(
       `${harness}-launch-dir`,
