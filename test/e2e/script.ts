@@ -94,7 +94,7 @@ import json, urllib.request
 def get(url):
     try: return urllib.request.urlopen(url, timeout=5).status
     except Exception as e: return "DENIED " + type(e).__name__
-hosts = ["127.0.0.1", "localhost", "127.0.0.2", "127.1", "2130706433", "0.0.0.0", "[::ffff:127.0.0.1]", "[::1]"]
+hosts = ["127.0.0.1", "localhost", "localhost.", "LOCALHOST", "127.0.0.2", "127.1", "2130706433", "0.0.0.0", "[::ffff:127.0.0.1]", "[::1]"]
 print(json.dumps({h: get(f"http://{h}:${ALLOWED_PORT}/") for h in hosts}))
 `;
 

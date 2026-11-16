@@ -151,7 +151,6 @@ function sandboxEnv(wrapped: NodeJS.ProcessEnv, job: SandboxJob): Record<string,
   env.PATH = "/usr/bin:/bin";
   env.LANG = "C.UTF-8";
   env.HOME = "/tmp";
-  env.TMPDIR = "/tmp";
   if (job.secret !== undefined) env.TARS_SECRET = job.secret;
   if (job.outDir !== undefined) env.TARS_OUT = job.outDir;
   return env;
