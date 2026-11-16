@@ -1,4 +1,4 @@
-import { closeSync, openSync, readSync, writeSync } from "node:fs";
+import { closeSync, openSync, writeSync } from "node:fs";
 import { TarsError } from "./exit.ts";
 
 /**
@@ -14,10 +14,20 @@ export interface Terminal {
   close(): void;
 }
 
-// Runs with /dev/tty as stdin and the prompt as $1. The read is a child's so that a process with
-// a trap is what turns echo back on: Ctrl-C reaches tars and the child together, and tars cannot
-// run a handler while it waits in a blocking read. The child prints the prompt, and only once
-// echo is off, so nothing typed in answer to it can show.
+// Both reads run in a child with /dev/tty as stdin and the prompt as $1, so that the process that
+// changes the terminal's mode is the one that puts it back: Ctrl-C reaches tars and the child
+// together, and tars cannot run a handler while it waits in a blocking read. Exit 3 is end of
+// input.
+
+// bash's readline gives the line its cursor keys and restores the terminal itself on Ctrl-C. On
+// a terminal without TERM, or a dumb one, readline cannot move the cursor and scrolls a long
+// prompt out of sight, so the kernel's own line editing reads it there.
+const LINE_READ = `exec 3>&1 >&0 2>&0
+case "$TERM" in ""|dumb) edit= ;; *) edit=-e ;; esac
+IFS= read $edit -r -p "$1" line || exit 3
+printf '%s' "$line" >&3`;
+
+// The prompt is printed only once echo is off, so nothing typed in answer to it can show.
 const HIDDEN_READ = `trap 'stty echo' EXIT
 trap 'exit 130' INT TERM HUP
 stty -echo || exit 1
@@ -25,20 +35,6 @@ printf '%s' "$1" >&0
 IFS= read -r line || exit 3
 printf '%s' "$line"`;
 
-// The kernel's line editing has Backspace but no cursor keys: an arrow key puts its escape
-// sequence into the line, which would reach a path, a JSON array or a name as typed bytes.
-const hasControl = (line: string) =>
-  [...line].some((c) => {
-    const code = c.charCodeAt(0);
-    return (code < 0x20 && c !== "\t") || code === 0x7f;
-  });
-const CONTROL_NOTE =
-  "!! the line held a control key such as an arrow, which cannot move the cursor here; type it again (Backspace works)";
-
-/**
- * Reads in the terminal's own line mode: the kernel edits the line and hands over one line per
- * read, and with no raw mode there is nothing to restore when tars is killed at a prompt.
- */
 export function openTty(): Terminal {
   let fd: number;
   try {
@@ -48,61 +44,38 @@ export function openTty(): Terminal {
       "this command reads only from your terminal (/dev/tty), and this process has none. Run it in your own terminal.",
     );
   }
-  const chunk = new Uint8Array(4096);
-  let buffered: number[] = [];
   const write = (text: string) => {
     let rest = new TextEncoder().encode(text);
     while (rest.length > 0) rest = rest.subarray(writeSync(fd, rest));
   };
-  const bufferedLine = () => {
-    const end = buffered.indexOf(10);
-    if (end === -1) return undefined;
-    const line = new TextDecoder().decode(new Uint8Array(buffered.slice(0, end)));
-    buffered = buffered.slice(end + 1);
-    return line;
+  const read = (argv: readonly string[], failure: string) => {
+    // With a listener the signal no longer kills tars, so the child restores the terminal while
+    // tars still holds its foreground.
+    const keepAlive = () => {};
+    process.on("SIGINT", keepAlive);
+    try {
+      const child = Bun.spawnSync([...argv], { stdin: fd, stdout: "pipe", stderr: "ignore" });
+      if (child.exitCode === 0) return child.stdout.toString();
+      if (child.exitCode === 3) return undefined;
+      throw new TarsError(
+        child.exitCode === 130 || child.signalCode === "SIGINT" ? "cancelled" : failure,
+      );
+    } finally {
+      process.off("SIGINT", keepAlive);
+    }
   };
   return {
     write,
     ask: async (prompt) => {
-      write(prompt);
-      for (;;) {
-        const line = bufferedLine();
-        if (line !== undefined && hasControl(line)) {
-          write(`${CONTROL_NOTE}\n${prompt}`);
-          continue;
-        }
-        if (line !== undefined) return line;
-        const n = readSync(fd, chunk);
-        if (n === 0) return undefined;
-        buffered.push(...chunk.subarray(0, n));
-      }
+      const line = read(["bash", "-c", LINE_READ, "bash", prompt], "cannot read from the terminal");
+      if (line === undefined) write("\n");
+      return line;
     },
     askHidden: async (prompt) => {
-      const typedAhead = bufferedLine();
-      if (typedAhead !== undefined) {
-        write(prompt);
-        return typedAhead;
-      }
-      // With a listener the signal no longer kills tars, so the child restores echo while tars
-      // still holds the terminal's foreground.
-      const keepAlive = () => {};
-      process.on("SIGINT", keepAlive);
       try {
-        const child = Bun.spawnSync(["sh", "-c", HIDDEN_READ, "sh", prompt], {
-          stdin: fd,
-          stdout: "pipe",
-          stderr: "ignore",
-        });
-        write("\n");
-        if (child.exitCode === 0) return child.stdout.toString();
-        if (child.exitCode === 3) return undefined;
-        throw new TarsError(
-          child.exitCode === 130 || child.signalCode === "SIGINT"
-            ? "cancelled"
-            : "cannot turn off the terminal's echo",
-        );
+        return read(["sh", "-c", HIDDEN_READ, "sh", prompt], "cannot turn off the terminal's echo");
       } finally {
-        process.off("SIGINT", keepAlive);
+        write("\n");
       }
     },
     close: () => closeSync(fd),

@@ -528,24 +528,6 @@ async function inner(): Promise<number> {
         ],
       });
     const wrong = await answer("approve-tty-wrong", "prob\n");
-    const arrows = await runDialog(host, {
-      name: "approve-tty-arrows",
-      command: "tars script approve probe",
-      tty: true,
-      turns: [
-        { expect: "Run it once with the real secret before deciding? [y/N] ", send: "n\n" },
-        { expect: CONFIRM, send: "probe\x1b[D\n" },
-        { expect: "type it again", send: "prob\n" },
-      ],
-    });
-    check(
-      "approve-tty-arrows",
-      "a line that holds an arrow key's escape sequence is asked again, not taken as typed",
-      arrows.missed === undefined &&
-        arrows.exitCode === 1 &&
-        arrows.stderr.includes("name did not match"),
-      `exit ${arrows.exitCode}, missed ${arrows.missed}, stderr ${arrows.stderr.trim().slice(0, 300)}`,
-    );
     const eof = await answer("approve-tty-eof", "\x04");
     check(
       "approve-tty",
@@ -615,13 +597,14 @@ async function inner(): Promise<number> {
         { expect: "Arguments as a JSON array", send: '["hello", "", "two\\nlines"]\n' },
         { expect: "--out directory", send: "\n" },
         { expect: "Run it again? [y/N] ", send: "n\n" },
-        { expect: "Type gated to approve it", send: "gated\n" },
+        // "gted", the cursor back past "ted", then "a": the line is "gated".
+        { expect: "Type gated to approve it", send: "gted\x1b[D\x1b[D\x1b[Da\n" },
       ],
     });
     const v1 = currentVersion();
     check(
       "approve-flow",
-      "in a pty, approve shows the script, the trial and the report, runs it live, takes the name and exits 0 with one line on stdout",
+      "in a pty, approve shows the script, the trial and the report, runs it live, takes the name typed with cursor keys and exits 0 with one line on stdout",
       flow.exitCode === 0 &&
         flow.missed === undefined &&
         flow.stdout.trim() === `approved gated ${v1}` &&

@@ -30,7 +30,7 @@ export interface DialogResult extends StepResult {
 // stdin is /dev/null and stdout, stderr are pipes, so the pty is reachable only as /dev/tty:
 // a command that answered from stdin or showed its questions on stdout would fail the dialog.
 const DRIVER = `
-import fcntl, json, os, select, signal, sys, termios, time
+import fcntl, json, os, select, signal, struct, sys, termios, time
 cfg = json.loads(sys.argv[1])
 master, slave = os.openpty() if cfg["tty"] else (None, None)
 out_r, out_w = os.pipe()
@@ -40,6 +40,9 @@ if pid == 0:
     os.setsid()
     if slave is not None:
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        # What a terminal window gives: a size and a TERM, which readline needs to edit a line.
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 160, 0, 0))
+        os.environ["TERM"] = "xterm-256color"
     os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
     os.dup2(out_w, 1)
     os.dup2(err_w, 2)
