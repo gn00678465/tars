@@ -13,11 +13,13 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { approveSample } from "../features/script/sample.ts";
 import {
+  binaryDirsFor,
   EXIT_SKIP,
   finishChecks,
   namespacesWork,
   printChecks,
   reexecInNetns,
+  resolveTool,
   runStep,
   type Check,
   type Host,
@@ -36,6 +38,7 @@ const TOOLS = [
   "socat",
   "python3",
   "rg",
+  "uv",
 ];
 
 const KEY = "E2E-FAKE-BARK-KEY-0123456789";
@@ -111,6 +114,22 @@ hosts = ["127.0.0.1", "localhost", "localhost.", "LOCALHOST", "127.0.0.2", "127.
 print(json.dumps({h: get(f"http://{h}:${ALLOWED_PORT}/") for h in hosts}))
 `;
 
+const ZERO_DEP = `# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+#
+# [tool.tars]
+# name = "zero-dep"
+# summary = "e2e script whose venv tars builds"
+# effects = "read-only"
+# args = ""
+# outputs = "one line"
+# exit = { 0 = "ok" }
+# ///
+import sys
+print("zero-dep ran on", sys.prefix)
+`;
+
 function lastJson(stdout: string): Record<string, unknown> {
   try {
     return JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
@@ -135,18 +154,41 @@ function outer(): number {
   return reexecInNetns(import.meta.path, { ...process.env, [INNER]: "1" }) ?? 1;
 }
 
-function install(host: Host, name: string, source: string): string {
+function install(host: Host, name: string, source: string, lock = ""): string {
   const version = join(host.fakeHome, ".local/share/tars/scripts/library", name, "versions", "v1");
   mkdirSync(version, { recursive: true });
   writeFileSync(join(version, "script.py"), source);
-  approveSample(version, source);
+  approveSample(version, source, lock);
   symlinkSync(join("versions", "v1"), join(version, "..", "..", "current"));
   return join(host.home, ".local/share/tars/scripts/library", name, "versions", "v1");
+}
+
+/** The lock `uv lock` writes for a script without dependencies; it needs no network. */
+function zeroDepLock(uv: string, work: string): string {
+  const dir = join(work, "zero-dep-lock");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "script.py"), ZERO_DEP);
+  const proc = Bun.spawnSync(
+    [uv, "lock", "--script", join(dir, "script.py"), "--exclude-newer", "P7D", "--no-build"],
+    {
+      env: {
+        PATH: "/usr/bin:/bin",
+        HOME: dir,
+        UV_CACHE_DIR: join(dir, "cache"),
+        UV_NO_CONFIG: "1",
+        UV_PYTHON_DOWNLOADS: "never",
+      },
+    },
+  );
+  if (proc.exitCode !== 0) throw new Error(`uv lock failed: ${proc.stderr}`);
+  return readFileSync(join(dir, "script.py.lock"), "utf8");
 }
 
 async function inner(): Promise<number> {
   const home = userInfo().homedir;
   const work = mkdtempSync(join(tmpdir(), "tars-e2e-script-"));
+  const uv = resolveTool("uv", process.env);
+  if (!uv) throw new Error("uv is on PATH but its binary could not be resolved");
   const host: Host = {
     uid: process.getuid?.() ?? 0,
     user: userInfo().username,
@@ -154,13 +196,14 @@ async function inner(): Promise<number> {
     work,
     fakeHome: join(work, "home"),
     bin: join(work, "bin"),
-    binaryDirs: [],
+    binaryDirs: binaryDirsFor([uv]),
     apiUrl: "",
   };
   mkdirSync(host.fakeHome, { recursive: true });
   mkdirSync(host.bin, { recursive: true });
   copyFileSync(TARS_BIN, join(host.bin, "tars"));
   chmodSync(join(host.bin, "tars"), 0o755);
+  symlinkSync(uv, join(host.bin, "uv"));
   const servers = [ALLOWED_PORT, OTHER_PORT].map((port) =>
     Bun.serve({ hostname: "::", port, fetch: () => new Response("ok") }),
   );
@@ -176,7 +219,11 @@ async function inner(): Promise<number> {
       timeoutMs: 120_000,
       ...(stdin === undefined ? {} : { stdin }),
     });
-  const python = Bun.spawnSync(["python3", "-c", "import sys;print('%d.%d'%sys.version_info[:2])"])
+  const python = Bun.spawnSync([
+    "/usr/bin/python3",
+    "-c",
+    "import sys;print('%d.%d'%sys.version_info[:2])",
+  ])
     .stdout.toString()
     .trim();
   try {
@@ -190,6 +237,7 @@ async function inner(): Promise<number> {
     ].map((v) => `python3 -m venv --without-pip ${v}/venv-${python}`);
     const setup = await step("setup", venvs.join(" && "));
     if (setup.exitCode !== 0) throw new Error(`setup failed: ${setup.stderr}`);
+    const zeroDep = install(host, "zero-dep", ZERO_DEP, zeroDepLock(uv, work));
 
     const set = await step("secret-set", "tars secret set fake-bark", {}, SECRET);
     check(
@@ -419,6 +467,18 @@ async function inner(): Promise<number> {
         String(trialReport.allowed).startsWith("DENIED") &&
         (trial.stdout.trim().split("\n").at(-1) ?? "").endsWith(".json"),
       `exit ${trial.exitCode}: allowed=${trialReport.allowed} ${trial.stderr.slice(0, 200)}`,
+    );
+
+    const built = await step("venv-built", "tars script run zero-dep");
+    const venv = join(zeroDep.replace(host.home, host.fakeHome), `venv-${python}`);
+    check(
+      "venv-built",
+      "an approved script with a lock and no venv gets one built by uv, then runs in it",
+      built.exitCode === 0 &&
+        built.stdout.includes(`zero-dep ran on ${zeroDep}/venv-${python}`) &&
+        existsSync(join(venv, "pyvenv.cfg")) &&
+        readFileSync(join(venv, "pyvenv.cfg"), "utf8").includes("uv = "),
+      `exit ${built.exitCode}: ${built.stdout.trim()} ${built.stderr.slice(0, 300)}`,
     );
 
     const lib = join(

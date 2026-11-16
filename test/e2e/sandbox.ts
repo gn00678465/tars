@@ -41,17 +41,25 @@ export type Harness = (typeof HARNESSES)[number];
 
 export const overrideVar = (harness: Harness) => `TARS_E2E_${harness.toUpperCase()}`;
 
-/**
- * The real binary behind `harness`: the override variable, else the one on PATH. A mise
- * command wrapper resolves to the mise executable itself, which needs mise's config from the
- * real home, so it is asked for the tool's own binary instead.
- */
+/** The real binary behind `harness`: the override variable, else the one on PATH. */
 export function resolveHarness(harness: Harness, env: NodeJS.ProcessEnv): string | undefined {
-  const given = env[overrideVar(harness)] || Bun.which(harness);
+  return resolveTool(harness, env, env[overrideVar(harness)] || undefined);
+}
+
+/**
+ * The real binary behind `tool` on PATH, or behind `given`. A mise command wrapper resolves to
+ * the mise executable itself, which needs mise's config from the real home, so it is asked for
+ * the tool's own binary instead.
+ */
+export function resolveTool(
+  tool: string,
+  env: NodeJS.ProcessEnv,
+  given = Bun.which(tool),
+): string | undefined {
   if (!given || !existsSync(given)) return undefined;
   const real = realpathSync(given);
   if (basename(real) !== "mise") return real;
-  const found = Bun.spawnSync([real, "which", harness], { env }).stdout.toString().trim();
+  const found = Bun.spawnSync([real, "which", tool], { env }).stdout.toString().trim();
   return found && existsSync(found) ? realpathSync(found) : undefined;
 }
 
