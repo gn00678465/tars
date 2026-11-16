@@ -12,7 +12,7 @@
     "ts-bun-conventions": {
       "source": "./.agents/skills/ts-bun-conventions",
       "sourceType": "local",
-      "computedHash": "82f0b7885e93aed3e029fb2592ab2153c74bd60a26dc37714ecb57b4251da030",
+      "computedHash": "b6d1b6136a72a894172d98331a979c0dc1b5bfb8768b9eac545dbf9526d8bc07",
       "installMode": "copy"
     },
     "typescript-magician": {
