@@ -59,7 +59,13 @@ const TARS_KEYS = new Set([
 ]);
 
 export function parseScriptMeta(source: string): ScriptMeta {
-  const blocks = [...source.matchAll(BLOCK)].filter((m) => m.groups?.type === "script");
+  // Python reads the file with universal newlines and its `$` ends a line only at \n; JS `$`
+  // also ends one at \u2028 and \u2029. Normalizing and refusing those keeps the block tars
+  // reads identical to the one uv reads.
+  if (/[\u2028\u2029]/.test(source))
+    throw new ScriptMetaError(["U+2028 and U+2029 are not allowed in a script"]);
+  const text = source.replaceAll(/\r\n?/g, "\n");
+  const blocks = [...text.matchAll(BLOCK)].filter((m) => m.groups?.type === "script");
   if (blocks.length !== 1) {
     throw new ScriptMetaError([
       blocks.length === 0
@@ -166,7 +172,8 @@ function parseHost(entry: string): Domain | string {
   if (rest.length > 0) return `domain "${entry}": IPv6 is not supported; use a name or IPv4`;
   if (host === "localhost" || host.endsWith(".localhost"))
     return `domain "${entry}": the sandbox never reaches localhost; write 127.0.0.1:<port>`;
-  if (!HOSTNAME.test(host) && !IPV4.test(host))
+  const numeric = /^[\d.]+$/.test(host);
+  if (numeric ? !IPV4.test(host) : !HOSTNAME.test(host))
     return `domain "${entry}" is not a lowercase host name or IPv4 address`;
   if (port === undefined) return { kind: "host", host };
   const n = Number(port);

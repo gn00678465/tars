@@ -118,4 +118,35 @@ describe("parseScriptMeta", () => {
     expect(message).toContain("unknown key `efects`");
     expect(message).toContain("effects must be one of");
   });
+
+  test("CRLF line endings read the same block as LF", () => {
+    expect(parseScriptMeta(sampleScript().replaceAll("\n", "\r\n")).name).toBe("bark-push");
+  });
+
+  test("a second block hidden behind CRLF is still counted", () => {
+    const hidden = sampleScript({ extraTop: "[tool.uv]" }).replaceAll("\n", "\r\n");
+    expect(problems(sampleScript() + hidden)).toContain("2 `# /// script` blocks");
+  });
+
+  test("U+2028 is rejected because JS and Python split lines on it differently", () => {
+    expect(problems(sampleScript().replace("import sys", "x = 1\u2028"))).toContain("U+2028");
+  });
+
+  test.each([
+    ["999.999.999.999", "not a lowercase host name or IPv4"],
+    ["127.1", "not a lowercase host name or IPv4"],
+    ["api.example.com:0", "port must be 1 to 65535"],
+    ["api.example.com:65536", "port must be 1 to 65535"],
+    ["::1", "IPv6 is not supported"],
+  ])("domain %p is rejected", (domain, message) => {
+    expect(problems(sampleScript({ tarsLines: [...TARS, `domains = ["${domain}"]`] }))).toContain(
+      message,
+    );
+  });
+
+  test('"*" next to another domain is rejected', () => {
+    expect(
+      problems(sampleScript({ tarsLines: [...TARS, 'domains = ["*", "example.com"]'] })),
+    ).toContain('"*" must be the only entry');
+  });
 });

@@ -1,8 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { run } from "../../../src/main.ts";
 import { tempHome, testDeps, type TestDeps } from "../../helpers.ts";
+import {
+  loadScript,
+  recentRuns,
+  retireScript,
+  addNote,
+  scriptsLayout,
+} from "../../../src/features/script/library.ts";
 import { installSample, sampleScript } from "./sample.ts";
 
 function setup() {
@@ -72,16 +87,16 @@ describe("tars script search", () => {
       }),
     );
     writeFileSync(join(dl, "NOTES.md"), "- 2026-11-16 大檔案也能推播完成通知\n");
-    expect(await tars(deps, "search", "推播", "通知", "--json")).toBe(0);
+    expect(await tars(deps, "search", "推播", "通知", "網址", "--json")).toBe(0);
     const hits = JSON.parse(deps.io.stdout.join(""));
     expect(hits.map((h: { name: string; matched: number }) => [h.name, h.matched])).toEqual([
+      ["download", 3],
       ["bark-push", 2],
-      ["download", 2],
     ]);
     const log = readFileSync(join(scripts, "searches.jsonl"), "utf8").trim().split("\n");
     expect(JSON.parse(log[0] ?? "")).toMatchObject({
-      terms: ["推播", "通知"],
-      hits: ["bark-push", "download"],
+      terms: ["推播", "通知", "網址"],
+      hits: ["download", "bark-push"],
     });
   });
 
@@ -162,5 +177,66 @@ describe("tars script retire", () => {
     expect(retired).toHaveLength(2);
     expect(retired.every((n) => n.startsWith("bark-push-"))).toBe(true);
     expect(await tars(deps, "show", "bark-push")).toBe(1);
+  });
+});
+
+describe("library boundaries", () => {
+  test("library/<name> as a symlink is refused, even to a valid script", async () => {
+    const { scripts, deps } = setup();
+    const elsewhere = installSample(join(scripts, "..", "elsewhere"), "bark-push");
+    mkdirSync(join(scripts, "library"), { recursive: true });
+    symlinkSync(elsewhere, join(scripts, "library", "bark-push"));
+    expect(await tars(deps, "show", "bark-push")).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("is not a directory");
+  });
+
+  test("a script.py that declares another name is skipped by list", async () => {
+    const { scripts, deps } = setup();
+    installSample(scripts, "bark-push", sampleScript({ name: "other" }));
+    expect(await tars(deps, "list", "--json")).toBe(0);
+    expect(JSON.parse(deps.io.stdout.join(""))).toEqual([]);
+    expect(deps.io.stderr.join("\n")).toContain("declares name other");
+  });
+
+  test("a version without script.py is listed as broken instead of failing list", async () => {
+    const { scripts, deps } = setup();
+    const dir = installSample(scripts, "bark-push");
+    installSample(scripts, "other");
+    rmSync(join(dir, "versions", "0123456789abcdef", "script.py"));
+    expect(await tars(deps, "list", "--json")).toBe(0);
+    expect(JSON.parse(deps.io.stdout.join("")).map((s: { name: string }) => s.name)).toEqual([
+      "other",
+    ]);
+  });
+
+  test("retire and note after another session retired the script fail with exit 1", async () => {
+    const { scripts, deps } = setup();
+    installSample(scripts, "bark-push");
+    const layout = scriptsLayout(scripts);
+    const script = await loadScript(layout, "bark-push");
+    await retireScript(layout, script, new Date());
+    await expect(retireScript(layout, script, new Date())).rejects.toThrow(
+      "no script named bark-push",
+    );
+    await expect(addNote(script, "late", new Date())).rejects.toThrow("no script named bark-push");
+    expect(await tars(deps, "list")).toBe(0);
+  });
+
+  test("a partial line in runs.jsonl does not hide the other runs", async () => {
+    const { scripts } = setup();
+    const dir = installSample(scripts, "bark-push");
+    writeFileSync(
+      join(dir, "runs.jsonl"),
+      '{"time":"t1","version":"v","exit":0,"ms":1}\n{"time":"t2","version":"v","exit":3,"ms":2}\n{"time":"t3","ver',
+    );
+    const runs = await recentRuns(await loadScript(scriptsLayout(scripts), "bark-push"), 5);
+    expect(runs.map((r) => r.time)).toEqual(["t1", "t2"]);
+  });
+
+  test("loadScript refuses a path as the name", async () => {
+    const { scripts } = setup();
+    await expect(loadScript(scriptsLayout(scripts), "../pending/x")).rejects.toThrow(
+      "invalid script name",
+    );
   });
 });

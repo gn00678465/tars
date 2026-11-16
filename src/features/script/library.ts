@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { appendFile, mkdir, readdir, readFile, realpath, rename } from "node:fs/promises";
+import { appendFile, lstat, mkdir, readdir, readFile, realpath, rename } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { TarsError } from "../../core/exit.ts";
-import { parseScriptMeta, ScriptMetaError, type ScriptMeta } from "./metadata.ts";
+import { parseScriptMeta, ScriptMetaError, SLUG, type ScriptMeta } from "./metadata.ts";
 
 /**
  * <scripts>/library/<name>/current -> versions/<hash>; NOTES.md and runs.jsonl sit beside
@@ -45,17 +45,21 @@ export interface RunRecord {
 }
 
 export async function loadScript(layout: ScriptsLayout, name: string): Promise<LibraryScript> {
+  if (!SLUG.test(name)) throw new TarsError(`invalid script name ${JSON.stringify(name)}`);
   const dir = join(layout.library, name);
-  let versionDir: string;
-  try {
-    versionDir = await realpath(join(dir, "current"));
-  } catch {
-    throw new TarsError(`no script named ${name}. Find one with: tars script search <words>`);
-  }
+  // A symlink at library/<name> would move the whole script, versions included, out of the library.
+  const entry = await lstat(dir).catch(() => undefined);
+  if (entry === undefined) throw gone(name);
+  if (!entry.isDirectory()) throw new TarsError(`${name}: ${dir} is not a directory`);
   const versions = (await realpath(dir)) + sep + "versions" + sep;
+  const versionDir = await realpath(join(dir, "current")).catch(() => {
+    throw new TarsError(`${name}: ${join(dir, "current")} does not resolve`);
+  });
   if (!versionDir.startsWith(versions) || versionDir.slice(versions.length).includes(sep))
     throw new TarsError(`${name}: current points outside ${versions}`);
-  const source = await readFile(join(versionDir, "script.py"), "utf8");
+  const source = await readFile(join(versionDir, "script.py"), "utf8").catch(() => {
+    throw new TarsError(`${name}: cannot read ${join(versionDir, "script.py")}`);
+  });
   let meta: ScriptMeta;
   try {
     meta = parseScriptMeta(source);
@@ -65,6 +69,19 @@ export async function loadScript(layout: ScriptsLayout, name: string): Promise<L
   }
   if (meta.name !== name) throw new TarsError(`${name}: script.py declares name ${meta.name}`);
   return { name, dir, versionDir, version: versionDir.slice(versions.length), source, meta };
+}
+
+const gone = (name: string) =>
+  new TarsError(`no script named ${name}. Find one with: tars script search <words>`);
+
+/** Another session may retire the script between loadScript and this write. */
+async function inScript<T>(script: LibraryScript, write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") throw gone(script.name);
+    throw err;
+  }
 }
 
 export async function listScripts(
@@ -121,15 +138,20 @@ export async function searchScripts(
 
 export async function recentRuns(script: LibraryScript, count: number): Promise<RunRecord[]> {
   const text = await readFile(join(script.dir, "runs.jsonl"), "utf8").catch(() => "");
-  return text
-    .split("\n")
-    .filter((line) => line.trim() !== "")
-    .slice(-count)
-    .map((line) => JSON.parse(line) as RunRecord);
+  // A run killed mid-write can leave a partial last line; skip it rather than hide every run.
+  const runs = text.split("\n").flatMap((line) => {
+    try {
+      return [JSON.parse(line) as RunRecord];
+    } catch {
+      return [];
+    }
+  });
+  return runs.slice(-count);
 }
 
 export async function addNote(script: LibraryScript, text: string, now: Date): Promise<void> {
-  await appendFile(join(script.dir, "NOTES.md"), `- ${now.toISOString().slice(0, 10)} ${text}\n`);
+  const line = `- ${now.toISOString().slice(0, 10)} ${text}\n`;
+  await inScript(script, () => appendFile(join(script.dir, "NOTES.md"), line));
 }
 
 /** Moves the whole script, history included, out of the library. Returns where it went. */
@@ -141,7 +163,7 @@ export async function retireScript(
   await mkdir(layout.retired, { recursive: true });
   const stamp = now.toISOString().replaceAll(/[-:]/g, "").slice(0, 15);
   const target = join(layout.retired, `${script.name}-${stamp}-${randomBytes(3).toString("hex")}`);
-  await rename(script.dir, target);
+  await inScript(script, () => rename(script.dir, target));
   return target;
 }
 
