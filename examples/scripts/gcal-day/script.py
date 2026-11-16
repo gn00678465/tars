@@ -12,7 +12,7 @@
 # outputs = "成功時 stdout 印一行 JSON 陣列，照開始時間排序：[{\"start\": <RFC 3339 時間，全天行程是日期>, \"end\": <同上>, \"summary\": <標題>}]"
 # exit = { 0 = "列出了（沒有行程時是 []）", 1 = "連不上 Google、Google 出錯或拒絕這個請求", 2 = "參數錯：日期、時區或 --api 不合法", 3 = "沒有金鑰，或 Google 不接受這個 access token" }
 # ///
-import argparse, datetime, json, os, sys, urllib.error, urllib.parse, urllib.request, zoneinfo
+import argparse, datetime, http.client, json, os, sys, urllib.error, urllib.parse, urllib.request, zoneinfo
 
 MAX_PAGES = 20
 
@@ -39,8 +39,8 @@ def main() -> int:
         p.error("--tz 要是 IANA 時區名稱，例如 Asia/Taipei")
     api = urllib.parse.urlsplit(a.api)
     # access token 放在標頭裡，明文的 http 只留給測試用的本機假伺服器。
-    if not (api.scheme == "https" or (api.scheme == "http" and api.hostname == "127.0.0.1")):
-        p.error("--api 要是 https")
+    if not api.hostname or not (api.scheme == "https" or (api.scheme == "http" and api.hostname == "127.0.0.1")):
+        p.error("--api 要是有主機名稱的 https 網址")
 
     token = os.environ.get("TARS_SECRET")
     if not token:
@@ -72,7 +72,7 @@ def main() -> int:
                 return 1
             print(f"Google 回 HTTP {e.code}", file=sys.stderr)
             return 1
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
             print(f"連不上 Google：{getattr(e, 'reason', e)}", file=sys.stderr)
             return 1
         except ValueError:

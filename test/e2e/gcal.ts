@@ -7,6 +7,7 @@ import { fakeGoogle, granted } from "../features/script/fake-google.ts";
 import { draftDir, testToolchain } from "../features/script/gates.ts";
 import { fakeSecrets } from "../helpers.ts";
 import { runDialog } from "./pty.ts";
+import { rawHttp } from "./raw-http.ts";
 import type { ScriptHost } from "./script-host.ts";
 
 const SOURCE = readFileSync(
@@ -15,6 +16,7 @@ const SOURCE = readFileSync(
 );
 const CAL_PORT = 18777;
 const CAL = `http://127.0.0.1:${CAL_PORT}`;
+const CUT_PORT = 18779;
 const TOKEN = "E2E-FAKE-ACCESS-TOKEN/with+chars=0123456789";
 const WRONG_TOKEN = "E2E-WRONG-ACCESS-TOKEN-9876543210";
 const CLIENT_ID = "e2e-client.apps.example";
@@ -57,7 +59,8 @@ interface CalendarRequest {
 
 /**
  * events.list as Google documents it: two pages joined by nextPageToken, a timed and two all-day
- * events, and Google's 401 body for any other bearer token.
+ * events, and Google's 401 body for any other bearer token. 2026-11-17 has no events, and
+ * 2026-11-18 gets Google's 403 for a token without the calendar scope.
  */
 function fakeCalendar(bearer: () => string) {
   const requests: CalendarRequest[] = [];
@@ -88,6 +91,25 @@ function fakeCalendar(bearer: () => string) {
           },
         );
       const head = { kind: "calendar#events", timeZone: "Asia/Taipei", accessRole: "owner" };
+      if (query.timeMin?.startsWith("2026-11-17")) return Response.json({ ...head, items: [] });
+      if (query.timeMin?.startsWith("2026-11-18"))
+        return Response.json(
+          {
+            error: {
+              code: 403,
+              message: "Request had insufficient authentication scopes. LEAK-CANARY",
+              errors: [
+                {
+                  message: "Insufficient Permission",
+                  domain: "global",
+                  reason: "insufficientPermissions",
+                },
+              ],
+              status: "PERMISSION_DENIED",
+            },
+          },
+          { status: 403 },
+        );
       return query.pageToken === "PAGE-2"
         ? Response.json({ ...head, items: [ALL_DAY, UNTITLED] })
         : Response.json({ ...head, items: [MEETING], nextPageToken: "PAGE-2" });
@@ -109,10 +131,14 @@ export async function gcalChecks(
     Number(new RegExp(`^${label} (\\d+)$`, "m").exec(stdout)?.[1] ?? -1);
   let accepted = TOKEN;
   const calendar = fakeCalendar(() => accepted);
+  const cutOff = rawHttp(CUT_PORT, {
+    "/calendar/v3/calendars/primary/events":
+      'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\n{"kin\r\n',
+  });
   const { requests } = calendar;
   const local = SOURCE.replace(
     'domains = ["www.googleapis.com"]',
-    `domains = ["127.0.0.1:${CAL_PORT}"]`,
+    `domains = ["127.0.0.1:${CAL_PORT}", "127.0.0.1:${CUT_PORT}"]`,
   );
   const DAY = `--date 2026-11-16 --tz Asia/Taipei --api ${CAL}`;
   try {
@@ -285,18 +311,20 @@ export async function gcalChecks(
       `tars script run gcal-day -- --date 2026-11-01 --tz America/New_York --api ${CAL} >/dev/null; echo "dst $?"
        tars script run gcal-day -- --date 2026-11-31 --api ${CAL}; echo "date $?"
        tars script run gcal-day -- --date 2026-11-16 --tz Mars/Olympus --api ${CAL}; echo "tz $?"
-       tars script run gcal-day -- --date 2026-11-16 --api http://www.googleapis.com; echo "plain $?"`,
+       tars script run gcal-day -- --date 2026-11-16 --api http://www.googleapis.com; echo "plain $?"
+       tars script run gcal-day -- --date 2026-11-16 --api https://; echo "nohost $?"`,
     );
     const dst = requests[0]?.query;
     check(
       "gcal-args",
-      "a day on which the clocks change is asked for with each midnight's own offset; a bad date, time zone or plain-http --api ends with 2 before any request",
+      "a day on which the clocks change is asked for with each midnight's own offset; a bad date, time zone, plain-http or hostless --api ends with 2 before any request",
       exitOf(args.stdout, "dst") === 0 &&
         dst?.timeMin === "2026-11-01T00:00:00-04:00" &&
         dst.timeMax === "2026-11-02T00:00:00-05:00" &&
         exitOf(args.stdout, "date") === 2 &&
         exitOf(args.stdout, "tz") === 2 &&
         exitOf(args.stdout, "plain") === 2 &&
+        exitOf(args.stdout, "nohost") === 2 &&
         requests.length === 2,
       `${args.stdout.trim().replaceAll("\n", " | ")}; dst asked ${JSON.stringify(dst)}; ${requests.length} request(s)`,
     );
@@ -312,6 +340,37 @@ export async function gcalChecks(
         !rejected.stderr.includes("LEAK-CANARY") &&
         !rejected.stderr.includes("Traceback"),
       `exit ${rejected.exitCode}: ${rejected.stderr.trim().slice(0, 200)}`,
+    );
+
+    const odd = await step(
+      "gcal-odd-days",
+      `tars script run gcal-day -- --date 2026-11-17 --tz Asia/Taipei --api ${CAL}; echo "empty $?"
+       tars script run gcal-day -- --date 2026-11-18 --tz Asia/Taipei --api ${CAL}; echo "forbidden $?"
+       tars script run gcal-day -- --date 2026-11-16 --api http://127.0.0.1:${CUT_PORT}; echo "cut $?"`,
+    );
+    const oddEvidence = `${odd.stdout.trim().replaceAll("\n", " | ")}; cut-off server asked for ${JSON.stringify(cutOff.hits)}; ${odd.stderr.trim().slice(0, 400)}`;
+    check(
+      "gcal-empty",
+      "a day without events ends gcal-day with 0 and prints []",
+      exitOf(odd.stdout, "empty") === 0 && odd.stdout.split("\n").includes("[]"),
+      oddEvidence,
+    );
+    check(
+      "gcal-forbidden",
+      "a 403 from the Calendar API ends gcal-day with 1 and says the scope or the API is missing, without the response body",
+      exitOf(odd.stdout, "forbidden") === 1 &&
+        odd.stderr.includes("HTTP 403") &&
+        odd.stderr.includes("scope") &&
+        !odd.stderr.includes("LEAK-CANARY"),
+      oddEvidence,
+    );
+    check(
+      "gcal-cut",
+      "a Calendar reply cut off mid-body ends gcal-day with 1 and no traceback",
+      exitOf(odd.stdout, "cut") === 1 &&
+        cutOff.hits.length === 1 &&
+        !odd.stderr.includes("Traceback"),
+      oddEvidence,
     );
 
     const malformed = await step(
@@ -399,6 +458,7 @@ export async function gcalChecks(
     await tokenTrade(host.work, local, check, requests);
   } finally {
     calendar.stop();
+    cutOff.stop();
   }
 }
 
