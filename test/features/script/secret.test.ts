@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { secretUrlHost } from "../../../src/features/script/secret.ts";
 import { run } from "../../../src/main.ts";
 import { fakeSecrets, tempHome, testDeps } from "../../helpers.ts";
+import { CREDENTIAL } from "./fake-google.ts";
 
 function setup(stdin: string) {
   const home = tempHome();
@@ -41,6 +42,46 @@ describe("tars secret set", () => {
       expect(secrets.entries.size).toBe(0);
     },
   );
+
+  test.each([
+    ['{"client_id":"a","client_secret":"b","refresh_token":"c"}', '"scope"'],
+    ['{"url":"https://x.example","key":"k-123456"}', '"client_id"'],
+  ])("a google-oauth secret without its four fields (%s) is refused", async (value, field) => {
+    const { deps, secrets } = setup(value);
+    expect(await run(["secret", "set", "gcal", "--type", "google-oauth"], deps)).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain(field);
+    expect(secrets.entries.size).toBe(0);
+  });
+
+  test("a google-oauth credential is typed on disk before it reaches the keyring", async () => {
+    const { deps, secrets, typeFile } = setup(CREDENTIAL);
+    const gcalType = typeFile.replace("bark.json", "gcal.json");
+    let typeAtWrite: string | undefined;
+    const set = secrets.set;
+    secrets.set = async (name, value) => {
+      typeAtWrite = existsSync(gcalType) ? readFileSync(gcalType, "utf8") : undefined;
+      await set(name, value);
+    };
+    expect(await run(["secret", "set", "gcal", "--type", "google-oauth"], deps)).toBe(0);
+    expect(JSON.parse(typeAtWrite ?? "null")).toEqual({ type: "google-oauth" });
+    expect(secrets.entries.get("script:gcal")).toBe(CREDENTIAL);
+    expect(deps.io.stdout.join("\n")).toBe("saved script:gcal (google-oauth)");
+  });
+
+  test("a static value replacing a google-oauth one keeps that type until the value is in", async () => {
+    const { deps, secrets, typeFile } = setup(CREDENTIAL);
+    const gcalType = typeFile.replace("bark.json", "gcal.json");
+    await run(["secret", "set", "gcal", "--type", "google-oauth"], deps);
+    let typeAtWrite = "";
+    const set = secrets.set;
+    secrets.set = async (name, value) => {
+      typeAtWrite = readFileSync(gcalType, "utf8");
+      await set(name, value);
+    };
+    expect(await run(["secret", "set", "gcal"], deps)).toBe(0);
+    expect(JSON.parse(typeAtWrite)).toEqual({ type: "google-oauth" });
+    expect(JSON.parse(readFileSync(gcalType, "utf8"))).toEqual({ type: "static" });
+  });
 
   test("an empty value is refused", async () => {
     const { deps } = setup("  \n");

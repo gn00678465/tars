@@ -1,16 +1,27 @@
 import { Option, type Command } from "commander";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { TarsError } from "../../core/exit.ts";
+import { EXIT, TarsError } from "../../core/exit.ts";
 import { writeFileAtomic } from "../../core/fs.ts";
 import type { Io } from "../../core/io.ts";
 import type { SecretName, SecretStore } from "../../core/secrets.ts";
+import type { Terminal } from "../../core/terminal.ts";
+import {
+  credentialJson,
+  DEFAULT_SCOPE,
+  parseGoogleCredential,
+  type GoogleEndpoints,
+} from "./google.ts";
 import { isRecord, parseSlug } from "./metadata.ts";
 
 export const SECRET_TYPES = ["static", "google-oauth"] as const;
 export type SecretType = (typeof SECRET_TYPES)[number];
 
 export const secretName = (kind: string): SecretName => `script:${kind}`;
+
+/** The command that puts a secret of this type into the keyring; only the user runs it. */
+export const obtainCommand = (kind: string, type: SecretType | undefined): string =>
+  type === "google-oauth" ? `tars secret login ${kind}` : `tars secret set ${kind}`;
 
 const typeFile = (scriptsDir: string, kind: string) => join(scriptsDir, "secrets", `${kind}.json`);
 
@@ -52,11 +63,45 @@ export function secretUrlHost(value: string): string | Error {
   return parsedUrl.host;
 }
 
+/**
+ * The type file decides whether a script gets the value whole (static) or never sees it
+ * (google-oauth). The two writes are ordered so that a kill between them leaves the keyring's
+ * value under the google-oauth type, which refuses anything that is not a credential, and never
+ * leaves a credential under the static type.
+ */
+async function storeSecret(
+  ctx: { readonly secrets: SecretStore; scriptsDir(): string },
+  kind: string,
+  type: SecretType,
+  value: string,
+): Promise<void> {
+  const writeType = async () => {
+    const file = typeFile(ctx.scriptsDir(), kind);
+    await mkdir(join(file, ".."), { recursive: true });
+    await writeFileAtomic(file, `${JSON.stringify({ type })}\n`);
+  };
+  const writeValue = () => ctx.secrets.set(secretName(kind), value);
+  if (type === "google-oauth") {
+    await writeType();
+    await writeValue();
+  } else {
+    await writeValue();
+    await writeType();
+  }
+}
+
+const LOGIN_WAIT_MS = 5 * 60_000;
+
 export interface SecretCommandContext {
   readonly io: Io;
   readonly secrets: SecretStore;
   scriptsDir(): string;
   readSecret(prompt: string): Promise<string>;
+  google(): GoogleEndpoints;
+  /** Whether an agent session started this tars (TARS_IN_SESSION). */
+  inSession(): boolean;
+  /** Opens the user's terminal; a TarsError when the process has none. */
+  terminal(): Terminal;
 }
 
 export function registerSecretCommands(program: Command, ctx: SecretCommandContext): void {
@@ -76,17 +121,23 @@ export function registerSecretCommands(program: Command, ctx: SecretCommandConte
       `
 Leading and trailing whitespace is dropped. A value starting with { must be valid JSON.
 A script with domains = ["secret:url"] needs {"url": "<service url>", "key": "<key>"}.
+--type google-oauth needs {"client_id": …, "client_secret": …, "refresh_token": …, "scope": …};
+tars secret login signs in and stores exactly that.
 
 Exit codes: 0 saved, 1 failure, 2 usage error.
 
 Examples:
   tars secret set bark
-  printf '%s' "$TOKEN" | tars secret set gcal --type google-oauth`,
+  printf '%s' "$CREDENTIAL_JSON" | tars secret set gcal --type google-oauth`,
     )
     .action(async (kind: string, opts: { type: SecretType }) => {
       const value = (await ctx.readSecret(`${secretName(kind)}: `)).trim();
       if (value === "") throw new TarsError("empty secret; nothing saved");
-      if (value.startsWith("{") || opts.type === "google-oauth") {
+      if (opts.type === "google-oauth") {
+        const credential = parseGoogleCredential(value);
+        if (credential instanceof Error)
+          throw new TarsError(`${credential.message}; nothing saved`);
+      } else if (value.startsWith("{")) {
         let parsed: unknown;
         try {
           parsed = JSON.parse(value);
@@ -96,11 +147,56 @@ Examples:
         if (!isRecord(parsed))
           throw new TarsError("the secret must be a JSON object; nothing saved");
       }
-      await ctx.secrets.set(secretName(kind), value);
-      const file = typeFile(ctx.scriptsDir(), kind);
-      await mkdir(join(file, ".."), { recursive: true });
-      await writeFileAtomic(file, `${JSON.stringify({ type: opts.type })}\n`);
+      await storeSecret(ctx, kind, opts.type, value);
       ctx.io.out(`saved ${secretName(kind)} (${opts.type})`);
+    });
+
+  secret
+    .command("login")
+    .description("For the user: sign in to Google in your browser and store a google-oauth secret.")
+    .argument("<kind>", "the `secret` a script declares, e.g. gcal", parseKind)
+    .option("--scope <scope>", "the access to ask for; space-separated for several", DEFAULT_SCOPE)
+    .addHelpText(
+      "after",
+      `
+Needs an OAuth client of type "Desktop app" from your own Google Cloud project, with the
+API enabled and the app published ("In production"); a "Testing" app's sign-in ends after
+7 days. Asks for the client ID and secret on /dev/tty (the secret is not shown), prints an
+address to open, and waits up to 5 minutes for the browser to come back to a port on
+127.0.0.1. Stores the client, the refresh token and the granted scope in the keyring and
+prints none of them. Scripts only ever get a short-lived access token. Refuses inside a
+tars session.
+
+Exit codes: 0 saved, 1 not signed in or failure, 2 usage error.
+
+Examples:
+  tars secret login gcal
+  tars secret login gcal --scope https://www.googleapis.com/auth/calendar.events.readonly`,
+    )
+    .action(async (kind: string, opts: { scope: string }) => {
+      if (ctx.inSession())
+        throw new TarsError(
+          "login is for the user: run it in your own terminal, outside the tars session",
+        );
+      if (opts.scope.trim() === "") throw new TarsError("--scope is empty", EXIT.usage);
+      const terminal = ctx.terminal();
+      try {
+        const id = (await terminal.ask("OAuth client ID: "))?.trim() ?? "";
+        const clientSecret =
+          id === "" ? "" : ((await terminal.askHidden("OAuth client secret: "))?.trim() ?? "");
+        if (id === "" || clientSecret === "")
+          throw new TarsError("no client ID or secret given; nothing saved");
+        const { googleLogin } = await import("./google-login.ts");
+        const credential = await googleLogin({ id, secret: clientSecret }, opts.scope.trim(), {
+          endpoints: ctx.google(),
+          show: terminal.write,
+          waitMs: LOGIN_WAIT_MS,
+        });
+        await storeSecret(ctx, kind, "google-oauth", credentialJson(credential));
+        ctx.io.out(`saved ${secretName(kind)} (google-oauth)`);
+      } finally {
+        terminal.close();
+      }
     });
 
   secret

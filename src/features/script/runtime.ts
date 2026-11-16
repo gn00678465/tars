@@ -8,6 +8,7 @@ import {
   resolvePaths,
   type Env,
 } from "../../core/paths.ts";
+import type { GoogleEndpoints } from "./google.ts";
 import type { OsvEndpoint } from "./osv.ts";
 import type { OutDirRules } from "./out-dir.ts";
 import type { SandboxHost } from "./sandbox.ts";
@@ -16,6 +17,13 @@ import { parsePythonVersion, SYSTEM_PYTHON, type Toolchain } from "./supply.ts";
 
 const PYPI_INDEX = "https://pypi.org/simple";
 const OSV: OsvEndpoint = { url: "https://api.osv.dev", timeoutMs: 30_000 };
+// Constants on purpose: an address read from the environment or the keyring could send the
+// refresh token and the client secret somewhere else.
+const GOOGLE: GoogleEndpoints = {
+  auth: "https://accounts.google.com/o/oauth2/v2/auth",
+  token: "https://oauth2.googleapis.com/token",
+  timeoutMs: 30_000,
+};
 
 /**
  * The line `submit` tells the agent to hand to the user. The user's own shell resolves the data
@@ -36,6 +44,7 @@ export function scriptRuntime(env: Env, cwd: string) {
   return {
     inSession: () => (env[IN_SESSION_VAR] ?? "") !== "",
     osv: () => OSV,
+    google: () => GOOGLE,
     approveCommand: (name: string) => approveCommand(name, resolvePaths(env).data, realHome()),
     sandboxHost: async (): Promise<SandboxHost> => {
       const { data } = resolvePaths(env);

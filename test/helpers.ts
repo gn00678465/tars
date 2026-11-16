@@ -78,17 +78,19 @@ export function scriptedTerminal(answers: readonly Answer[]): ScriptedTerminal {
   const transcript: string[] = [];
   let next = 0;
   let closed = false;
+  const ask = async (prompt: string) => {
+    transcript.push(prompt);
+    const answer = answers[next++];
+    return typeof answer === "function" ? answer() : answer;
+  };
   return {
     transcript,
     get closed() {
       return closed;
     },
     write: (text) => void transcript.push(text),
-    ask: async (prompt) => {
-      transcript.push(prompt);
-      const answer = answers[next++];
-      return typeof answer === "function" ? answer() : answer;
-    },
+    ask,
+    askHidden: ask,
     close: () => {
       closed = true;
     },

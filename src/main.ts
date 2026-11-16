@@ -56,12 +56,13 @@ Examples:
   registerAuth(program, deps);
   registerSessions(program, deps, exitWith);
   registerMemoryCommands(program, { io: deps.io, memoryPath: () => resolvePaths(deps.env).memory });
+  const runtime = scriptRuntime(deps.env, deps.cwd);
   registerScriptCommands(program, {
     io: deps.io,
     scriptsDir: () => resolvePaths(deps.env).scripts,
     now: () => new Date(),
     secrets: deps.secrets,
-    ...scriptRuntime(deps.env, deps.cwd),
+    ...runtime,
     terminal: deps.openTerminal,
     exitWith,
   });
@@ -70,6 +71,9 @@ Examples:
     secrets: deps.secrets,
     scriptsDir: () => resolvePaths(deps.env).scripts,
     readSecret: deps.readSecret,
+    google: runtime.google,
+    inSession: runtime.inSession,
+    terminal: deps.openTerminal,
   });
   return program;
 }
