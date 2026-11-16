@@ -28,12 +28,7 @@ export type LockProblem =
 
 export type ParsedLock =
   | { readonly ok: true; readonly lock: Lock }
-  /** `pins` still lists what parsed, so the caller can check advisories and report everything at once. */
-  | {
-      readonly ok: false;
-      readonly pins: readonly Pin[];
-      readonly problems: readonly LockProblem[];
-    };
+  | { readonly ok: false; readonly problems: readonly LockProblem[] };
 
 /** uv skips versions uploaded within this span. Lock and export must both pass it or `--locked` fails. */
 export const QUARANTINE = "P7D";
@@ -70,7 +65,7 @@ export function parseLock(text: string, index: string): ParsedLock {
     if (wheels.length === 0) problems.push({ kind: "no-wheel", name });
     for (const file of sdist === undefined ? wheels : [...wheels, sdist]) {
       const hashed =
-        isRecord(file) && typeof file.hash === "string" && file.hash.startsWith("sha256:");
+        isRecord(file) && typeof file.hash === "string" && /^sha256:[0-9a-f]{64}$/.test(file.hash);
       if (!hashed)
         problems.push({
           kind: "no-hash",
@@ -80,7 +75,7 @@ export function parseLock(text: string, index: string): ParsedLock {
     }
   }
   pins.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  if (problems.length > 0) return { ok: false, pins, problems };
+  if (problems.length > 0) return { ok: false, problems };
   return { ok: true, lock: { text, pins } as unknown as Lock };
 }
 
@@ -89,5 +84,5 @@ export function normalizeName(raw: string): PackageName {
 }
 
 function malformed(detail: string): ParsedLock {
-  return { ok: false, pins: [], problems: [{ kind: "malformed", detail }] };
+  return { ok: false, problems: [{ kind: "malformed", detail }] };
 }

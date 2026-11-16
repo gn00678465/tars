@@ -1,4 +1,5 @@
 import type { Pin } from "./lock.ts";
+import { isRecord } from "./metadata.ts";
 
 export interface OsvEndpoint {
   /** https://api.osv.dev in production. */
@@ -98,7 +99,7 @@ function parseResults(json: unknown, expected: number): BatchResult[] | undefine
   if (!Array.isArray(results) || results.length !== expected) return undefined;
   const parsed: BatchResult[] = [];
   for (const r of results) {
-    if (typeof r !== "object" || r === null) return undefined;
+    if (!isRecord(r)) return undefined;
     const { vulns = [], next_page_token: next } = r as {
       vulns?: unknown;
       next_page_token?: unknown;

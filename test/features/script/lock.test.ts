@@ -69,6 +69,9 @@ describe("parseLock", () => {
     expect(
       problems(HEADER + pkg("alpha", { sdist: `{ url = "s.tar.gz", hash = "md5:00" }` })),
     ).toEqual([{ kind: "no-hash", name: "alpha", file: "s.tar.gz" }] as never);
+    expect(
+      problems(HEADER + pkg("alpha", { wheels: `[{ url = "w.whl", hash = "sha256:ab" }]` })),
+    ).toEqual([{ kind: "no-hash", name: "alpha", file: "w.whl" }] as never);
   });
 
   test("refuses a package without a wheel", () => {

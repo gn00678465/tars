@@ -319,7 +319,7 @@ describe("vetDependencies", () => {
     expect(later.ok && later.newPackages).toEqual(["beta"] as never);
   });
 
-  test("reports every lock policy problem together with the advisories", async () => {
+  test("reports every lock policy problem and sends none of the names to OSV", async () => {
     pypi.wheel("nohash", "1.0", { hashed: false });
     const url = pypi.index.replace(/simple$/, "files/alpha-1.0-py3-none-any.whl");
     const dir = scriptDir(
@@ -332,7 +332,8 @@ describe("vetDependencies", () => {
       problems(await vet(dir))
         .map((p) => p.kind)
         .sort(),
-    ).toEqual(["advisory", "foreign-source", "no-hash"]);
+    ).toEqual(["foreign-source", "no-hash"]);
+    expect(osv.requests).toEqual([]);
   });
 
   test("locks from scratch, not from a lock already in the directory", async () => {

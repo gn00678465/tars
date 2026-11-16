@@ -39,6 +39,9 @@ describe("findAdvisories", () => {
   test("a body of the wrong shape is unavailable", async () => {
     osv = fakeOsv({}, { body: { results: [] } });
     expect((await findAdvisories([pin("alpha")], osv.endpoint)).kind).toBe("unavailable");
+    osv.stop();
+    osv = fakeOsv({}, { body: { results: [[]] } });
+    expect((await findAdvisories([pin("alpha")], osv.endpoint)).kind).toBe("unavailable");
   });
 
   test("a server that never answers is unavailable once the deadline passes", async () => {

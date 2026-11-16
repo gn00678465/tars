@@ -89,19 +89,17 @@ export async function vetDependencies(
   if (locked.exit !== 0)
     return { ok: false, problems: [{ kind: "unresolvable", detail: locked.stderr.trim() }] };
   const parsed = parseLock(await readFile(lockPath, "utf8"), ctx.toolchain.index);
-  const pins = parsed.ok ? parsed.lock.pins : parsed.pins;
+  // A lock that breaks the policy may name private packages; their names never go to OSV.
+  if (!parsed.ok) return { ok: false, problems: parsed.problems };
+  const { pins } = parsed.lock;
   const verdict = await findAdvisories(pins, ctx.osv);
-  const problems: SupplyProblem[] = parsed.ok ? [] : [...parsed.problems];
   if (verdict.kind === "unavailable")
-    problems.push({ kind: "osv-unavailable", detail: verdict.detail });
-  else for (const a of verdict.advisories) problems.push({ kind: "advisory", ...a });
-  if (!parsed.ok || problems.length > 0) return { ok: false, problems };
+    return { ok: false, problems: [{ kind: "osv-unavailable", detail: verdict.detail }] };
+  if (verdict.advisories.length > 0)
+    return { ok: false, problems: verdict.advisories.map((a) => ({ kind: "advisory", ...a })) };
   const approved = await readApproved(ctx.scriptsDir);
-  return {
-    ok: true,
-    lock: parsed.lock,
-    newPackages: pins.map((p) => p.name).filter((name) => !approved.has(name)),
-  };
+  const names = new Set(pins.map((p) => p.name));
+  return { ok: true, lock: parsed.lock, newPackages: [...names].filter((n) => !approved.has(n)) };
 }
 
 /** One empty file per name, so two approvals running at once never drop each other's names. */
