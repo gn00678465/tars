@@ -8,6 +8,7 @@
     "e2e": "bun scripts/build.ts && bun test/e2e/run.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.81",
     "commander": "15.1.0"
   },
   "devDependencies": {
