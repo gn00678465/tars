@@ -159,12 +159,14 @@ function network(meta: ScriptMeta, secretHosts: readonly string[]): Network {
 async function verifyApproval(versionDir: string, source: string): Promise<void> {
   const refuse = (why: string) =>
     new TarsError(`${versionDir}: ${why}; refusing to run. Submit the script for review again.`);
-  let approval: Approval;
+  let approval: Partial<Approval> | null;
   try {
     approval = JSON.parse(await readFile(join(versionDir, "approval.json"), "utf8"));
   } catch {
     throw refuse("approval.json is missing or unreadable");
   }
+  if (typeof approval !== "object" || approval === null)
+    throw refuse("approval.json is not an object");
   const lock = await readFile(join(versionDir, LOCK_FILE)).catch(() => undefined);
   if (lock === undefined) throw refuse(`${LOCK_FILE} is missing`);
   if (approval.script !== sha256(source)) throw refuse("script.py changed after approval");

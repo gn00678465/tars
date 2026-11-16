@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { run } from "../../../src/main.ts";
 import { seccompHelper } from "../../../src/features/script/seccomp.ts";
@@ -52,6 +60,22 @@ describe("tars script run refuses before the sandbox", () => {
     expect(deps.io.stderr.join("\n")).not.toContain("just-a-token");
   });
 
+  test("an approval.json that is not an object", async () => {
+    const { deps, version } = setup();
+    writeFileSync(join(version, "approval.json"), "null");
+    expect(await run(["script", "run", "bark-push"], deps)).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("approval.json is not an object");
+  });
+
+  test("a broken secret type file, with the command that fixes it", async () => {
+    const { deps } = setup(fakeSecrets({ "script:bark": "token-value" }));
+    const types = join(deps.env.TARS_DATA_DIR ?? "", "scripts/secrets");
+    mkdirSync(types, { recursive: true });
+    writeFileSync(join(types, "bark.json"), "{");
+    expect(await run(["script", "run", "bark-push"], deps)).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("tars secret set bark");
+  });
+
   test("--timeout outside 1 to 3600 is a usage error", async () => {
     const { deps } = setup();
     expect(await run(["script", "run", "bark-push", "--timeout", "0"], deps)).toBe(2);
@@ -73,6 +97,18 @@ describe("seccompHelper", () => {
     writeFileSync(path, "tampered");
     expect(await seccompHelper(data, embedded)).toBe(path);
     expect(readFileSync(path, "utf8")).toBe("helper-bytes");
+  });
+
+  test("a right copy without the execute bit, or a dangling symlink, is replaced", async () => {
+    const data = tempHome();
+    const path = await seccompHelper(data, []);
+    chmodSync(path, 0o644);
+    expect(await seccompHelper(data, [])).toBe(path);
+    expect(statSync(path).mode & 0o111).not.toBe(0);
+    rmSync(path);
+    symlinkSync(join(data, "nowhere"), path);
+    expect(await seccompHelper(data, [])).toBe(path);
+    expect(statSync(path).size).toBeGreaterThan(1000);
   });
 
   test("without an embedded copy it reads the one in node_modules", async () => {

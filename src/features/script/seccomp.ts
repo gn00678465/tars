@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { link, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
@@ -22,16 +22,18 @@ export async function seccompHelper(
   const hash = sha256(bytes);
   const path = join(dataDir, "lib", `apply-seccomp-${hash.slice(0, 16)}`);
   const existing = await readFile(path).catch(() => undefined);
-  if (existing !== undefined && sha256(existing) === hash) return path;
+  const executable = await stat(path).then(
+    (s) => (s.mode & 0o111) !== 0,
+    () => false,
+  );
+  if (existing !== undefined && sha256(existing) === hash && executable) return path;
   await mkdir(dirname(path), { recursive: true });
   const tmp = uniqueTemp(path);
   try {
     await writeFile(tmp, bytes, { mode: 0o755 });
-    // A wrong file at path (truncated, edited) is replaced; link() alone would keep it.
-    if (existing !== undefined) await rm(path, { force: true });
-    await link(tmp, path).catch((err: NodeJS.ErrnoException) => {
-      if (err.code !== "EEXIST") throw err;
-    });
+    // rename replaces a wrong file or a dangling symlink in one step, so a concurrent tars
+    // reads either the old path or the right one.
+    await rename(tmp, path);
   } finally {
     await rm(tmp, { force: true });
   }

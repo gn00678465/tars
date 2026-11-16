@@ -63,7 +63,11 @@ def bus():
 secret = os.environ.get("TARS_SECRET", "")
 key = json.loads(secret)["key"] if secret else ""
 print(secret); print(key); print(urllib.parse.quote(key)); print(base64.b64encode(key.encode()).decode())
+print("stderr", key, file=sys.stderr)
+out = os.environ.get("TARS_OUT")
+if out: open(os.path.join(out, "written.txt"), "w").write("from the sandbox")
 print(json.dumps({
+  "cwd": os.getcwd(),
   "argv": sys.argv[1:],
   "allowed": get(${ALLOWED_PORT}), "other": get(${OTHER_PORT}),
   "home": [attempt(lambda: open(p).read()) for p in (${JSON.stringify(`${userInfo().homedir}/canary.txt`)}, ${JSON.stringify(`${userInfo().homedir}/.local/share/tars/MEMORY.md`)})],
@@ -90,7 +94,8 @@ import json, urllib.request
 def get(url):
     try: return urllib.request.urlopen(url, timeout=5).status
     except Exception as e: return "DENIED " + type(e).__name__
-print(json.dumps({u: get(u) for u in ["http://127.0.0.1:${ALLOWED_PORT}/", "http://localhost:${ALLOWED_PORT}/"]}))
+hosts = ["127.0.0.1", "localhost", "127.0.0.2", "127.1", "2130706433", "0.0.0.0", "[::ffff:127.0.0.1]", "[::1]"]
+print(json.dumps({h: get(f"http://{h}:${ALLOWED_PORT}/") for h in hosts}))
 `;
 
 interface Check {
@@ -159,7 +164,8 @@ async function inner(): Promise<number> {
   copyFileSync(TARS_BIN, join(host.bin, "tars"));
   chmodSync(join(host.bin, "tars"), 0o755);
   const servers = [ALLOWED_PORT, OTHER_PORT].map((port) =>
-    Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("ok") }),
+    // Every loopback address and family: an IP-literal bypass must have something to reach.
+    Bun.serve({ hostname: "::", port, fetch: () => new Response("ok") }),
   );
   const checks: Check[] = [];
   const check = (id: string, claim: string, pass: boolean, evidence: string) =>
@@ -261,6 +267,50 @@ async function inner(): Promise<number> {
       JSON.stringify(report.env),
     );
 
+    check(
+      "stderr",
+      "the secret is masked on stderr too",
+      !run.stderr.includes(KEY) && run.stderr.includes(`stderr ${"[REDACTED]"}`),
+      run.stderr.trim().slice(0, 200),
+    );
+    check(
+      "cwd",
+      "the script runs in its own version directory",
+      report.cwd === join(host.home, ".local/share/tars/scripts/library/probe/versions/v1"),
+      String(report.cwd),
+    );
+
+    const outHome = await step("out-home", "tars script run probe --out ~ -- x");
+    check(
+      "out-home",
+      "--out ~ is refused before the script runs",
+      outHome.exitCode === 1 && outHome.stderr.includes("--out") && outHome.stdout === "",
+      `exit ${outHome.exitCode}: ${outHome.stderr.trim()}`,
+    );
+
+    // Launched from a project under the real home, which is itself in denyRead.
+    const project = `${host.home}/projects/app`;
+    const outOk = await step(
+      "out-ok",
+      `mkdir -p ${project} && cd ${project} && TARS_LAUNCH_DIR=${project} tars script run probe --out dl -- x && cat ${project}/dl/written.txt`,
+    );
+    check(
+      "out-ok",
+      "a --out under the launch dir is writable, though its parent is hidden",
+      outOk.exitCode === 0 && outOk.stdout.trim().endsWith("from the sandbox"),
+      `exit ${outOk.exitCode}: ${outOk.stdout.trim().split("\n").at(-1)} ${outOk.stderr.slice(0, 200)}`,
+    );
+
+    const sharedTmp = await step("shared-tmp", "mkdir /tmp/claude && tars script run probe -- x");
+    check(
+      "shared-tmp",
+      "a host /tmp/claude, which sandbox-runtime would bind in, stops the run",
+      sharedTmp.exitCode === 1 &&
+        sharedTmp.stderr.includes("/tmp/claude") &&
+        sharedTmp.stdout === "",
+      `exit ${sharedTmp.exitCode}: ${sharedTmp.stderr.trim()}`,
+    );
+
     const agyHome = `${host.home}/.local/share/tars/harness/agy-home`;
     // Only tars gets agy's HOME; the private keyring keeps the home it started with.
     const agy = await step(
@@ -273,6 +323,18 @@ async function inner(): Promise<number> {
       "with HOME pointing at agy's home, the real home stays unreadable",
       agy.exitCode === 0 && denied(agyReport.home),
       `exit ${agy.exitCode}: ${JSON.stringify(agyReport.home)} ${agy.stderr.slice(0, 200)}`,
+    );
+
+    // Started from the home, with HOME pointing at agy's: the real ~/.ssh must still be refused.
+    const outSsh = await step(
+      "out-ssh",
+      `HOME=${agyHome} TARS_DATA_DIR=${host.home}/.local/share/tars TARS_LAUNCH_DIR=${host.home} tars script run probe --out ${host.home}/.ssh -- x`,
+    );
+    check(
+      "out-ssh",
+      "with HOME pointing at agy's home, --out <real home>/.ssh is refused",
+      outSsh.exitCode === 1 && outSsh.stderr.includes("--out") && outSsh.stdout === "",
+      `exit ${outSsh.exitCode}: ${outSsh.stderr.trim()}`,
     );
 
     const open = await step("open", "tars script run opener");

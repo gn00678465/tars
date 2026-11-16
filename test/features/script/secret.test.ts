@@ -33,6 +33,15 @@ describe("tars secret set", () => {
     expect(existsSync(typeFile)).toBe(false);
   });
 
+  test.each(["123", "null", "[1]"])(
+    "a google-oauth secret that is JSON but not an object (%s) is refused",
+    async (value) => {
+      const { deps, secrets } = setup(value);
+      expect(await run(["secret", "set", "gcal", "--type", "google-oauth"], deps)).toBe(1);
+      expect(secrets.entries.size).toBe(0);
+    },
+  );
+
   test("an empty value is refused", async () => {
     const { deps } = setup("  \n");
     expect(await run(["secret", "set", "bark"], deps)).toBe(1);

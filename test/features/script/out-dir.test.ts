@@ -55,6 +55,20 @@ describe("prepareOutDir", () => {
     );
   });
 
+  test.each([".ssh", ".config", ".local/share/tars"])(
+    "launched from the home, a symlink into ~/%s is refused",
+    async (target) => {
+      const r = rules();
+      mkdirSync(join(r.realHome, target), { recursive: true });
+      symlinkSync(join(r.realHome, target), join(r.realHome, "link"));
+      const launchedAtHome = { ...r, launchDir: r.realHome };
+      await expect(prepareOutDir(join(r.realHome, "link/x"), launchedAtHome)).rejects.toThrow(
+        "overlaps",
+      );
+      expect(existsSync(join(r.realHome, target, "x"))).toBe(false);
+    },
+  );
+
   test("a symlink under the launch dir that points into the data dir is refused", async () => {
     const r = rules();
     symlinkSync(r.data, join(r.launchDir, "sneaky"));

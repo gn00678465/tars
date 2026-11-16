@@ -22,7 +22,14 @@ export async function readSecretType(
 ): Promise<SecretType | undefined> {
   const text = await readFile(typeFile(scriptsDir, kind), "utf8").catch(() => undefined);
   if (text === undefined) return undefined;
-  const type = (JSON.parse(text) as { type?: unknown }).type;
+  let type: unknown;
+  try {
+    type = (JSON.parse(text) as { type?: unknown } | null)?.type;
+  } catch {
+    throw new TarsError(
+      `${typeFile(scriptsDir, kind)} is not valid JSON; run tars secret set ${kind} again`,
+    );
+  }
   return SECRET_TYPES.includes(type as SecretType) ? (type as SecretType) : undefined;
 }
 
@@ -83,11 +90,14 @@ Examples:
       const value = (await ctx.readSecret(`${secretName(kind)}: `)).trim();
       if (value === "") throw new TarsError("empty secret; nothing saved");
       if (value.startsWith("{") || opts.type === "google-oauth") {
+        let parsed: unknown;
         try {
-          JSON.parse(value);
+          parsed = JSON.parse(value);
         } catch {
           throw new TarsError("the secret is not valid JSON; nothing saved");
         }
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+          throw new TarsError("the secret must be a JSON object; nothing saved");
       }
       await ctx.secrets.set(secretName(kind), value);
       const file = typeFile(ctx.scriptsDir(), kind);

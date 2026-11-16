@@ -1,7 +1,8 @@
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { isIP } from "node:net";
+import { constants, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 
@@ -15,7 +16,7 @@ export interface SandboxJob {
   readonly python: string;
   readonly script: string;
   readonly venv: string;
-  /** Working directory: the script's own version dir, never the caller's (sandbox-runtime scans it). */
+  /** The script's own directory; sandbox-runtime scans the working directory with rg. */
   readonly cwd: string;
   readonly args: readonly string[];
   readonly network: Network;
@@ -45,9 +46,9 @@ export const EXIT_TIMEOUT = 124;
 const KILL_GRACE_MS = 2000;
 export const OUTPUT_LIMIT = 1024 * 1024;
 
-// The proxy skips its resolved-address check for hosts the ask callback allows, so open
-// network needs these lists to keep scripts off this machine and the LAN (prototype round 3).
-const OPEN_DENIED_DOMAINS = ["localhost", "*.localhost", "127.0.0.1", "::1"];
+// The proxy checks the addresses a name resolves to against these, but lets "localhost" reach
+// loopback and never checks an IP literal at all; openAsk refuses the literals.
+const OPEN_DENIED_DOMAINS = ["localhost", "*.localhost"];
 const OPEN_DENIED_ADDRESSES = [
   "127.0.0.0/8",
   "::1/128",
@@ -60,7 +61,26 @@ const OPEN_DENIED_ADDRESSES = [
   "fe80::/10",
 ];
 
-const SIGNALS: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGKILL: 9, SIGTERM: 15 };
+/** domains "*" means names: an IP literal (127.0.0.2, 0.0.0.0, 10.0.0.1) would skip the address checks. */
+export async function openAsk({ host }: { host: string }) {
+  return isIpLiteral(host)
+    ? { allow: false as const, reason: 'domains "*" allows host names, not IP addresses' }
+    : true;
+}
+
+function isIpLiteral(host: string): boolean {
+  try {
+    // URL parsing turns inet_aton spellings (127.1, 2130706433) into dotted quads first.
+    const name = new URL(`http://${isIP(host) === 6 ? `[${host}]` : host}/`).hostname;
+    return isIP(name.replace(/^\[|\]$/g, "")) !== 0;
+  } catch {
+    return true;
+  }
+}
+
+// sandbox-runtime binds a host /tmp/claude into every sandbox read-write, whatever denyRead says,
+// and /tmp is shared with every local process.
+const SHARED_TMP = "/tmp/claude";
 
 export async function runSandboxed(job: SandboxJob, host: SandboxHost): Promise<SandboxResult> {
   const runDir = join(host.data, "run");
@@ -84,9 +104,12 @@ export async function runSandboxed(job: SandboxJob, host: SandboxHost): Promise<
     seccomp: { applyPath: host.seccomp },
   } as SandboxRuntimeConfig;
 
-  await SandboxManager.initialize(config, open ? async () => true : undefined);
   const record = join(runDir, `${process.pid}.json`);
+  const callerDir = process.cwd();
+  // On Linux sandbox-runtime ignores its cwd argument and scans process.cwd(); the script inherits it.
+  process.chdir(job.cwd);
   try {
+    await SandboxManager.initialize(config, open ? openAsk : undefined);
     const deps = SandboxManager.checkDependencies();
     const problems = [...deps.errors, ...deps.warnings];
     if (problems.length > 0)
@@ -104,18 +127,19 @@ export async function runSandboxed(job: SandboxJob, host: SandboxHost): Promise<
     // so clearing it in the spawn env has no effect; it must be cleared in the command itself.
     const command = `NO_PROXY= no_proxy= exec ${[job.python, job.script, ...job.args].map(quote).join(" ")}`;
     // The full filesystem policy goes with every wrap: the bridge socket exists only now.
-    const wrapped = await SandboxManager.wrapWithSandboxArgv(
-      command,
-      undefined,
-      { filesystem: filesystem([socket]) },
-      undefined,
-      job.cwd,
-    );
+    const wrapped = await SandboxManager.wrapWithSandboxArgv(command, undefined, {
+      filesystem: filesystem([socket]),
+    });
+    if (existsSync(SHARED_TMP))
+      throw new TarsError(
+        `${SHARED_TMP} exists, and the sandbox would let the script read and write it; remove it first`,
+      );
     return await spawnAndWait(wrapped.argv, sandboxEnv(wrapped.env, job), job.timeoutMs);
   } finally {
     SandboxManager.cleanupAfterCommand();
     await SandboxManager.reset();
     await rm(record, { force: true });
+    process.chdir(callerDir);
   }
 }
 
@@ -127,6 +151,7 @@ function sandboxEnv(wrapped: NodeJS.ProcessEnv, job: SandboxJob): Record<string,
   env.PATH = "/usr/bin:/bin";
   env.LANG = "C.UTF-8";
   env.HOME = "/tmp";
+  env.TMPDIR = "/tmp";
   if (job.secret !== undefined) env.TARS_SECRET = job.secret;
   if (job.outDir !== undefined) env.TARS_OUT = job.outDir;
   return env;
@@ -159,7 +184,8 @@ async function spawnAndWait(
       capture(proc.stderr),
       proc.exited,
     ]);
-    const signal = proc.signalCode ? (SIGNALS[proc.signalCode] ?? 15) : undefined;
+    const sig = proc.signalCode;
+    const signal = sig == null ? undefined : typeof sig === "number" ? sig : constants.signals[sig];
     return {
       exit: timedOut ? EXIT_TIMEOUT : signal !== undefined ? 128 + signal : code,
       stdout: out.text,
@@ -220,8 +246,15 @@ async function removeStaleRuns(runDir: string): Promise<void> {
     } catch {
       continue;
     }
-    if (typeof rec.pid !== "number" || typeof rec.socket !== "string") continue;
-    if (startTime(rec.pid) !== undefined && startTime(rec.pid) === rec.start) continue;
+    // An empty socket would match every socat's command line.
+    if (
+      typeof rec.pid !== "number" ||
+      typeof rec.socket !== "string" ||
+      !rec.socket.startsWith("/")
+    )
+      continue;
+    const start = startTime(rec.pid);
+    if (start !== undefined && start === rec.start) continue;
     for (const pid of await readdir("/proc").catch(() => [] as string[])) {
       if (!/^\d+$/.test(pid)) continue;
       const cmdline = await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "");
