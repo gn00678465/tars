@@ -1,5 +1,5 @@
 import { Option, type Command } from "commander";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { EXIT, TarsError } from "../../core/exit.ts";
 import { writeFileAtomic } from "../../core/fs.ts";
@@ -12,7 +12,7 @@ import {
   parseGoogleCredential,
   type GoogleEndpoints,
 } from "./google.ts";
-import { isRecord, parseSlug } from "./metadata.ts";
+import { isRecord, parseSlug, SLUG } from "./metadata.ts";
 
 export const SECRET_TYPES = ["static", "google-oauth"] as const;
 export type SecretType = (typeof SECRET_TYPES)[number];
@@ -107,7 +107,7 @@ export interface SecretCommandContext {
 export function registerSecretCommands(program: Command, ctx: SecretCommandContext): void {
   const secret = program
     .command("secret")
-    .description("Store or delete the keyring secret a script declares. Values never print.");
+    .description("Store, list or delete the keyring secret a script declares. Values never print.");
 
   secret
     .command("set")
@@ -200,6 +200,29 @@ Examples:
     });
 
   secret
+    .command("list")
+    .description("List the script secrets tars has stored, by kind and type. Values never print.")
+    .option("--json", "print the result as JSON")
+    .addHelpText(
+      "after",
+      `
+Lists every kind that tars secret set or login stored, and whether the keyring still holds
+its value ("stored") or not ("missing"). The token of tars auth claude is not listed.
+
+Exit codes: 0 done, 1 failure, 2 usage error.
+
+Examples:
+  tars secret list
+  tars secret list --json`,
+    )
+    .action(async (opts: { json?: boolean }) => {
+      const entries = await listSecrets(ctx);
+      if (opts.json) ctx.io.out(JSON.stringify(entries));
+      else if (entries.length === 0) ctx.io.err("no secret stored");
+      else for (const e of entries) ctx.io.out(`${e.kind}\t${e.type ?? "unknown"}\t${e.state}`);
+    });
+
+  secret
     .command("delete")
     .description("Delete a script secret from the keyring.")
     .argument("<kind>", "the `secret` a script declares", parseKind)
@@ -209,6 +232,25 @@ Examples:
       await rm(typeFile(ctx.scriptsDir(), kind), { force: true });
       ctx.io.out(`${result === "deleted" ? "deleted" : "already absent:"} ${secretName(kind)}`);
     });
+}
+
+// Bun.secrets cannot enumerate the keyring, so the type files that set and login write are the
+// index; the keyring is asked only whether each value is still there.
+async function listSecrets(ctx: { readonly secrets: SecretStore; scriptsDir(): string }) {
+  const dir = join(ctx.scriptsDir(), "secrets");
+  const files = await readdir(dir).catch(() => [] as string[]);
+  const kinds = files
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.slice(0, -".json".length))
+    .filter((kind) => SLUG.test(kind))
+    .sort();
+  return Promise.all(
+    kinds.map(async (kind) => ({
+      kind,
+      type: (await readSecretType(ctx.scriptsDir(), kind)) ?? null,
+      state: (await ctx.secrets.get(secretName(kind))) === null ? "missing" : "stored",
+    })),
+  );
 }
 
 const parseKind = parseSlug("bark");

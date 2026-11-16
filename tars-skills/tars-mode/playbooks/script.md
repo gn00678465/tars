@@ -30,6 +30,7 @@
 
 - 金鑰不經過對話。`run` 或 `submit` 回報缺金鑰或格式不符時，訊息裡寫著要執行的指令（`tars secret set <種類>` 或 `tars secret login <種類>`）。請使用者在自己的終端機執行，並說明格式。腳本宣告 `"secret:url"` 時是 `{"url": "<服務網址>", "key": "<金鑰>"}`，網址用 http 或 https。其他照腳本的說明。不要請使用者把金鑰貼進對話，不要把金鑰放進參數。
 - 腳本宣告的金鑰在 `submit` 時就要在 keyring 裡，沒有時 gate 1 不通過。要寫用金鑰的腳本時，先請使用者設好金鑰。
+- 請使用者設金鑰前，先執行 `tars secret list`。它列出每個種類、類型，以及 keyring 裡有沒有值，不印值。列為 `stored` 的不再請使用者設。
 - Google 的服務（例如行事曆）用 `google-oauth` 型別的金鑰。腳本只拿到約一小時有效的 access token；OAuth client 與 refresh token 留在 keyring。
   - keyring 沒有時，請使用者在自己的終端機執行 `tars secret login <種類>`，例如 `tars secret login gcal`。它會問 client ID 與 client secret，印出一個網址讓使用者在瀏覽器同意。
   - 使用者要先在自己的 Google Cloud 專案做三件事：啟用要用的 API（例如 Google Calendar API）；建一個「Desktop app」型別的 OAuth client，client secret 只在建立時看得到，要當場複製；在 OAuth 同意畫面按「Publish app」。停在 Testing 的話，登入七天後失效。

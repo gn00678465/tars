@@ -103,6 +103,34 @@ describe("tars secret set", () => {
   });
 });
 
+describe("tars secret list", () => {
+  test("lists each stored kind with its type and keyring state, and no value", async () => {
+    const { deps, secrets } = setup("token-value");
+    await run(["secret", "set", "bark"], deps);
+    await run(["secret", "set", "fava"], deps);
+    secrets.entries.delete("script:fava");
+    deps.io.stdout.length = 0;
+    expect(await run(["secret", "list"], deps)).toBe(0);
+    expect(deps.io.stdout).toEqual(["bark\tstatic\tstored", "fava\tstatic\tmissing"]);
+
+    deps.io.stdout.length = 0;
+    expect(await run(["secret", "list", "--json"], deps)).toBe(0);
+    expect(JSON.parse(deps.io.stdout.join(""))).toEqual([
+      { kind: "bark", type: "static", state: "stored" },
+      { kind: "fava", type: "static", state: "missing" },
+    ]);
+    expect(deps.io.stdout.join("\n")).not.toContain("token-value");
+  });
+
+  test("nothing stored prints nothing on stdout and exits 0", async () => {
+    const { deps } = setup("");
+    expect(await run(["secret", "list"], deps)).toBe(0);
+    expect(deps.io.stdout).toEqual([]);
+    expect(await run(["secret", "list", "--json"], deps)).toBe(0);
+    expect(deps.io.stdout).toEqual(["[]"]);
+  });
+});
+
 describe("secretUrlHost", () => {
   test("gives host and port", () => {
     expect(secretUrlHost('{"url":"http://127.0.0.1:5000/x","key":"k"}')).toBe("127.0.0.1:5000");
