@@ -7,7 +7,8 @@ import type { PackageName } from "./lock.ts";
 import { parseScriptMeta, ScriptMetaError, type ScriptMeta } from "./metadata.ts";
 import type { OsvEndpoint } from "./osv.ts";
 import { publishSubmission, type Submission } from "./pending.ts";
-import { readSecretType, secretName, secretUrlHost } from "./secret.ts";
+import { parseGoogleCredential } from "./google.ts";
+import { obtainCommand, readSecretType, secretName, secretUrlHost } from "./secret.ts";
 import {
   ensureVenv,
   problemText,
@@ -23,10 +24,17 @@ export type Gate1Problem =
   | { readonly kind: "metadata"; readonly detail: string }
   | { readonly kind: "python-excluded"; readonly requires: string; readonly system: PythonVersion }
   | { readonly kind: "python-unsupported"; readonly requires: string }
-  | { readonly kind: "secret-missing"; readonly secret: string }
+  /** `obtain` is the command the user runs to store it. */
+  | { readonly kind: "secret-missing"; readonly secret: string; readonly obtain: string }
   /** `detail` describes the shape and never holds the value. */
-  | { readonly kind: "secret-shape"; readonly secret: string; readonly detail: string }
-  | { readonly kind: "secret-oauth"; readonly secret: string }
+  | {
+      readonly kind: "secret-shape";
+      readonly secret: string;
+      readonly detail: string;
+      readonly obtain: string;
+    }
+  /** A google-oauth secret has no url for "secret:url" to take a host from. */
+  | { readonly kind: "secret-oauth-url"; readonly secret: string }
   | { readonly kind: "supply"; readonly problem: SupplyProblem };
 
 export type Gate1 =
@@ -104,21 +112,29 @@ export function pythonProblems(meta: ScriptMeta, system: PythonVersion): Gate1Pr
   ];
 }
 
-// The store has no `has`, and "secret:url" needs the value's shape anyway. The value goes to
-// secretUrlHost and nowhere else.
+// The store has no `has`, and the shape checks need the value anyway. The value goes to the two
+// parsers and nowhere else. No token is requested: gate 1 needs no network for the secret.
 async function secretProblems(
   meta: ScriptMeta,
   ctx: { readonly scriptsDir: string; readonly secrets: SecretStore },
 ): Promise<Gate1Problem[]> {
   const secret = meta.secret;
   if (secret === undefined) return [];
-  if ((await readSecretType(ctx.scriptsDir, secret)) === "google-oauth")
-    return [{ kind: "secret-oauth", secret }];
+  const type = await readSecretType(ctx.scriptsDir, secret);
+  const obtain = obtainCommand(secret, type);
+  const wantsUrl = meta.domains.some((d) => d.kind === "secret-url");
+  if (type === "google-oauth" && wantsUrl) return [{ kind: "secret-oauth-url", secret }];
   const value = await ctx.secrets.get(secretName(secret));
-  if (value === null) return [{ kind: "secret-missing", secret }];
-  if (!meta.domains.some((d) => d.kind === "secret-url")) return [];
-  const host = secretUrlHost(value);
-  return host instanceof Error ? [{ kind: "secret-shape", secret, detail: host.message }] : [];
+  if (value === null) return [{ kind: "secret-missing", secret, obtain }];
+  const shape =
+    type === "google-oauth"
+      ? parseGoogleCredential(value)
+      : wantsUrl
+        ? secretUrlHost(value)
+        : undefined;
+  return shape instanceof Error
+    ? [{ kind: "secret-shape", secret, detail: shape.message, obtain }]
+    : [];
 }
 
 const CLAUSE = /^(===|==|~=|!=|<=|>=|<|>)\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?(\.\*)?$/;
@@ -172,11 +188,11 @@ export function gate1ProblemText(problem: Gate1Problem): string {
     case "python-unsupported":
       return `requires-python "${problem.requires}" is not a form tars reads; use clauses such as ">=3.12" or ">=3.12,<3.15"`;
     case "secret-missing":
-      return `no ${secretName(problem.secret)} in the keyring. Ask the user to run, in their own terminal: tars secret set ${problem.secret}`;
+      return `no ${secretName(problem.secret)} in the keyring. Ask the user to run, in their own terminal: ${problem.obtain}`;
     case "secret-shape":
-      return `${secretName(problem.secret)}: ${problem.detail}. Ask the user to reset it: tars secret set ${problem.secret}`;
-    case "secret-oauth":
-      return `${problem.secret} is a google-oauth secret; tars cannot trade it for a token yet, so no script can use it`;
+      return `${secretName(problem.secret)}: ${problem.detail}. Ask the user to reset it: ${problem.obtain}`;
+    case "secret-oauth-url":
+      return `${problem.secret} is a google-oauth secret, which has no url for "secret:url"; list the hosts in domains, e.g. "www.googleapis.com"`;
     case "supply":
       return problemText(problem.problem);
   }

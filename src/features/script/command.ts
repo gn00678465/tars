@@ -17,6 +17,7 @@ import {
   type ScriptsLayout,
 } from "./library.ts";
 import { gatherDossier, renderDossier } from "./dossier.ts";
+import type { GoogleEndpoints } from "./google.ts";
 import { hostText, OUTPUT_LIMIT, parseSlug, type Domain, type ScriptMeta } from "./metadata.ts";
 import type { OsvEndpoint } from "./osv.ts";
 import { prepareOutDir, type OutDirRules } from "./out-dir.ts";
@@ -33,6 +34,7 @@ export interface ScriptCommandContext {
   outDirRules(): OutDirRules;
   toolchain(): Toolchain;
   osv(): OsvEndpoint;
+  google(): GoogleEndpoints;
   /** The command line the user runs in their own terminal to review `name`. */
   approveCommand(name: string): string;
   /** Whether an agent session started this tars (TARS_IN_SESSION). */
@@ -134,6 +136,8 @@ Examples:
     .addHelpText(
       "after",
       `
+For a google-oauth secret the script gets a fresh access token, never the stored credential;
+--timeout may not be longer than that token lasts (about an hour).
 Exit codes: the script's own code (0 to 123, see tars script show <name>);
 1 when tars refuses or fails before the script starts; 2 usage error;
 124 timed out; 128+n stopped by signal n.
@@ -148,6 +152,7 @@ Examples:
       const outcome = await runApproved(s, await executeOptions(args, opts), {
         secrets: ctx.secrets,
         scriptsDir: ctx.scriptsDir(),
+        google: ctx.google(),
         host: await ctx.sandboxHost(),
         toolchain: ctx.toolchain(),
         now: ctx.now(),
@@ -327,6 +332,7 @@ Examples:
             return runWithSecret(dir, meta, opts, {
               secrets: ctx.secrets,
               scriptsDir: ctx.scriptsDir(),
+              google: ctx.google(),
               host: await ctx.sandboxHost(),
               toolchain,
             });

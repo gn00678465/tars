@@ -12,6 +12,7 @@ import { normalizeName } from "../../../src/features/script/lock.ts";
 import { readSubmission } from "../../../src/features/script/pending.ts";
 import { approvePackages, type PythonVersion } from "../../../src/features/script/supply.ts";
 import { fakeSecrets, tempHome } from "../../helpers.ts";
+import { CLIENT_SECRET, CREDENTIAL } from "./fake-google.ts";
 import { fakeOsv, type FakeOsv } from "./fake-osv.ts";
 import { fakePypi, type FakePypi } from "./fake-pypi.ts";
 import { draftDir, plainScript, PYTHON, testToolchain } from "./gates.ts";
@@ -176,15 +177,66 @@ describe("submit", () => {
     expect(ok.ok).toBe(true);
   });
 
-  test("a google-oauth secret is refused, because run cannot use one yet", async () => {
-    const scripts = tempHome();
-    mkdirSync(join(scripts, "secrets"), { recursive: true });
-    writeFileSync(join(scripts, "secrets", "bark.json"), '{"type":"google-oauth"}');
-    const source = sampleScript({ name: "probe", dependencies: [] });
-    const secrets = fakeSecrets({ "script:bark": '{"url": "https://push.example", "key": "k"}' });
-    expect(kinds(await submit(draftDir(source), context(scripts, { secrets })))).toEqual([
-      "secret-oauth",
-    ]);
+  describe("a google-oauth secret", () => {
+    const googleScript = (domains: string) =>
+      sampleScript({
+        dependencies: [],
+        tarsLines: [
+          'name = "probe"',
+          'summary = "s"',
+          'secret = "gcal"',
+          `domains = ${domains}`,
+          'effects = "read-only"',
+          'args = ""',
+          'outputs = "o"',
+          'exit = { 0 = "ok" }',
+        ],
+      });
+    const googleScripts = () => {
+      const scripts = tempHome();
+      mkdirSync(join(scripts, "secrets"), { recursive: true });
+      writeFileSync(join(scripts, "secrets", "gcal.json"), '{"type":"google-oauth"}');
+      return scripts;
+    };
+    const HOSTS = '["www.googleapis.com"]';
+
+    test("with its four fields passes, without any request for a token", async () => {
+      const secrets = fakeSecrets({ "script:gcal": CREDENTIAL });
+      const result = await submit(
+        draftDir(googleScript(HOSTS)),
+        context(googleScripts(), { secrets }),
+      );
+      expect(texts(result)).toBe("");
+      expect(result.ok).toBe(true);
+    });
+
+    test("with a field missing is refused by the field's name and points to login", async () => {
+      const broken = JSON.stringify({ ...JSON.parse(CREDENTIAL), refresh_token: "" });
+      const result = await submit(
+        draftDir(googleScript(HOSTS)),
+        context(googleScripts(), { secrets: fakeSecrets({ "script:gcal": broken }) }),
+      );
+      expect(kinds(result)).toEqual(["secret-shape"]);
+      expect(texts(result)).toContain('"refresh_token"');
+      expect(texts(result)).toContain("tars secret login gcal");
+      expect(texts(result)).not.toContain(CLIENT_SECRET);
+    });
+
+    test("that is not in the keyring points to login, not to secret set", async () => {
+      const result = await submit(draftDir(googleScript(HOSTS)), context(googleScripts()));
+      expect(kinds(result)).toEqual(["secret-missing"]);
+      expect(texts(result)).toContain("tars secret login gcal");
+      expect(texts(result)).not.toContain("tars secret set");
+    });
+
+    test('is refused for a script that declares "secret:url"', async () => {
+      const secrets = fakeSecrets({ "script:gcal": CREDENTIAL });
+      const result = await submit(
+        draftDir(googleScript('["secret:url"]')),
+        context(googleScripts(), { secrets }),
+      );
+      expect(kinds(result)).toEqual(["secret-oauth-url"]);
+    });
   });
 
   test("a directory without script.py is an error, not a gate 1 result", async () => {

@@ -3,12 +3,19 @@ import { join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 import { sha256 } from "../../core/hash.ts";
 import type { SecretStore } from "../../core/secrets.ts";
+import {
+  isTokenFailure,
+  parseGoogleCredential,
+  refreshAccessToken,
+  tokenFailureText,
+  type GoogleEndpoints,
+} from "./google.ts";
 import { checkApproval, type LibraryScript, type RunRecord } from "./library.ts";
 import { hostText, type ScriptMeta } from "./metadata.ts";
 import { recordTrial, type Submission } from "./pending.ts";
 import { redact, secretNeedles } from "./redact.ts";
 import { runSandboxed, type Network, type SandboxHost, type SandboxResult } from "./sandbox.ts";
-import { readSecretType, secretName, secretUrlHost } from "./secret.ts";
+import { obtainCommand, readSecretType, secretName, secretUrlHost } from "./secret.ts";
 import { ensureVenv, type Toolchain } from "./supply.ts";
 
 export interface ExecuteOptions {
@@ -23,6 +30,7 @@ export async function runApproved(
   ctx: {
     secrets: SecretStore;
     scriptsDir: string;
+    google: GoogleEndpoints;
     host: SandboxHost;
     toolchain: Toolchain;
     now: Date;
@@ -45,6 +53,83 @@ export async function runApproved(
   return outcome;
 }
 
+/** What a run gets from the keyring: the value for TARS_SECRET, what to mask, what to let through. */
+export interface Handover {
+  readonly value: string;
+  readonly needles: readonly string[];
+  /** Hosts from a "secret:url" value. */
+  readonly hosts: readonly string[];
+}
+
+export interface HandoverContext {
+  readonly secrets: SecretStore;
+  readonly scriptsDir: string;
+  readonly google: GoogleEndpoints;
+}
+
+/**
+ * Reads the secret `meta` declares and turns it into what the script may see. A static value is
+ * handed over whole. A google-oauth credential stays here: tars trades it for an access token
+ * and hands over only that. Every failure names a field, a status or an error code, never a value.
+ */
+export async function handOver(
+  meta: ScriptMeta,
+  timeoutMs: number,
+  ctx: HandoverContext,
+): Promise<Handover | undefined> {
+  const kind = meta.secret;
+  if (kind === undefined) return undefined;
+  const type = await readSecretType(ctx.scriptsDir, kind);
+  const obtain = obtainCommand(kind, type);
+  const wantsUrl = meta.domains.some((d) => d.kind === "secret-url");
+  // Checked again here because the type can change after gate 1 let the script in.
+  if (type === "google-oauth" && wantsUrl)
+    throw new TarsError(`${kind} is a google-oauth secret, which has no url for "secret:url"`);
+  const stored = (await ctx.secrets.get(secretName(kind))) ?? undefined;
+  if (stored === undefined)
+    throw new TarsError(
+      `no ${secretName(kind)} in the keyring. Ask the user to run, in their own terminal: ${obtain}`,
+    );
+  if (type !== "google-oauth") {
+    const host = wantsUrl ? secretUrlHost(stored) : undefined;
+    if (host instanceof Error)
+      throw new TarsError(`${secretName(kind)}: ${host.message}. Reset it: ${obtain}`);
+    return {
+      value: stored,
+      needles: secretNeedles(stored),
+      hosts: host === undefined ? [] : [host],
+    };
+  }
+  const again = `Ask the user to run, in their own terminal: ${obtain}`;
+  const credential = parseGoogleCredential(stored);
+  if (credential instanceof Error)
+    throw new TarsError(`${secretName(kind)}: ${credential.message}. ${again}`);
+  const token = await refreshAccessToken(credential, ctx.google);
+  if (isTokenFailure(token)) {
+    const hint =
+      token.kind !== "refused"
+        ? ""
+        : token.error === "invalid_grant"
+          ? ` The sign-in expired or was revoked. ${again}`
+          : token.error === "invalid_client" || token.error === "deleted_client"
+            ? ` The OAuth client is wrong or was deleted (Google restores a deleted one for 30 days). After fixing it: ${obtain}`
+            : "";
+    throw new TarsError(`${secretName(kind)}: ${tokenFailureText(token)}.${hint}`);
+  }
+  if (timeoutMs > token.expiresIn * 1000)
+    throw new TarsError(
+      `the access token for ${kind} lasts ${token.expiresIn} s, less than the ${timeoutMs / 1000} s time limit; use a --timeout of ${token.expiresIn} or less`,
+    );
+  return {
+    value: token.accessToken,
+    // The stored values never reach the script, but a message that echoes them must not either.
+    needles: [token.accessToken, credential.refreshToken, credential.clientSecret].flatMap(
+      secretNeedles,
+    ),
+    hosts: [],
+  };
+}
+
 /**
  * Runs <dir>/script.py with the secret `meta` declares and masks it in the output. Shared by
  * `run` and gate 3's live run, so both hand the secret over and redact it the same way.
@@ -53,29 +138,10 @@ export async function runWithSecret(
   dir: string,
   meta: ScriptMeta,
   opts: ExecuteOptions,
-  ctx: { secrets: SecretStore; scriptsDir: string; host: SandboxHost; toolchain: Toolchain },
+  ctx: HandoverContext & { host: SandboxHost; toolchain: Toolchain },
 ): Promise<SandboxResult> {
-  let secret: string | undefined;
-  const hosts: string[] = [];
-  if (meta.secret !== undefined) {
-    const kind = meta.secret;
-    if ((await readSecretType(ctx.scriptsDir, kind)) === "google-oauth")
-      throw new TarsError(`${kind} is a google-oauth secret; tars cannot trade it for a token yet`);
-    secret = (await ctx.secrets.get(secretName(kind))) ?? undefined;
-    if (secret === undefined)
-      throw new TarsError(
-        `no ${secretName(kind)} in the keyring. Ask the user to run, in their own terminal: tars secret set ${kind}`,
-      );
-    if (meta.domains.some((d) => d.kind === "secret-url")) {
-      const host = secretUrlHost(secret);
-      if (host instanceof Error)
-        throw new TarsError(
-          `${secretName(kind)}: ${host.message}. Reset it: tars secret set ${kind}`,
-        );
-      hosts.push(host);
-    }
-  }
-  return execute(dir, meta, opts, ctx, network(meta, hosts), secret);
+  const handover = await handOver(meta, opts.timeoutMs, ctx);
+  return execute(dir, meta, opts, ctx, network(meta, handover?.hosts ?? []), handover);
 }
 
 /**
@@ -106,7 +172,7 @@ async function execute(
   opts: ExecuteOptions,
   { host, toolchain }: { host: SandboxHost; toolchain: Toolchain },
   net: Network,
-  secret: string | undefined,
+  handover: Handover | undefined,
 ): Promise<SandboxResult> {
   const venv = await ensureVenv(dir, toolchain);
   const result = await runSandboxed(
@@ -117,18 +183,17 @@ async function execute(
       cwd: dir,
       args: opts.args,
       network: net,
-      ...(secret === undefined ? {} : { secret }),
+      ...(handover === undefined ? {} : { secret: handover.value }),
       ...(opts.outDir === undefined ? {} : { outDir: opts.outDir }),
       timeoutMs: opts.timeoutMs,
     },
     host,
   );
-  if (secret === undefined) return result;
-  const needles = secretNeedles(secret);
+  if (handover === undefined) return result;
   return {
     ...result,
-    stdout: redact(result.stdout, needles),
-    stderr: redact(result.stderr, needles),
+    stdout: redact(result.stdout, handover.needles),
+    stderr: redact(result.stderr, handover.needles),
   };
 }
 
