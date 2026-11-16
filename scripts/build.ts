@@ -6,6 +6,11 @@ const skills = Array.from(
   new Glob("tars-skills/**/*").scanSync({ cwd: root, dot: true, onlyFiles: true }),
 ).sort();
 
+// sandbox-runtime's seccomp helper; tars writes it to the data dir before the first script runs.
+const seccomp = ["x64", "arm64"].map(
+  (arch) => `node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/${arch}/apply-seccomp`,
+);
+
 const proc = Bun.spawnSync(
   [
     "bun",
@@ -21,6 +26,7 @@ const proc = Bun.spawnSync(
     "[dir]/[name].[ext]",
     "src/main.ts",
     ...skills,
+    ...seccomp,
     "--outfile",
     "dist/tars",
   ],

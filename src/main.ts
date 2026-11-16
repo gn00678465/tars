@@ -8,6 +8,8 @@ import { skillsFromBundle } from "./features/install/embedded.ts";
 import { registerInstall, type InstallDeps } from "./features/install/install.ts";
 import { registerMemoryCommands } from "./features/memory/command.ts";
 import { registerScriptCommands } from "./features/script/command.ts";
+import { registerSecretCommands } from "./features/script/secret.ts";
+import { scriptRuntime } from "./features/script/runtime.ts";
 import { launch } from "./features/session/launch.ts";
 import { registerSessions, type SessionDeps } from "./features/session/session.ts";
 
@@ -51,6 +53,15 @@ Examples:
     io: deps.io,
     scriptsDir: () => resolvePaths(deps.env).scripts,
     now: () => new Date(),
+    secrets: deps.secrets,
+    ...scriptRuntime(deps.env, deps.cwd),
+    exitWith,
+  });
+  registerSecretCommands(program, {
+    io: deps.io,
+    secrets: deps.secrets,
+    scriptsDir: () => resolvePaths(deps.env).scripts,
+    readSecret: deps.readSecret,
   });
   return program;
 }

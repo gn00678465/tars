@@ -40,6 +40,8 @@ export interface BrokenScript {
 export interface RunRecord {
   readonly time: string;
   readonly version: string;
+  /** sha256 of the JSON argument list: repeated calls show up without logging what was passed. */
+  readonly args: string;
   readonly exit: number;
   readonly ms: number;
 }

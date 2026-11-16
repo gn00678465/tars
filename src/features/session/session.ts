@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { TarsError } from "../../core/exit.ts";
 import type { Io } from "../../core/io.ts";
-import { DATA_DIR_VAR, resolvePaths, type Env } from "../../core/paths.ts";
+import { DATA_DIR_VAR, LAUNCH_DIR_VAR, resolvePaths, type Env } from "../../core/paths.ts";
 import type { SecretStore } from "../../core/secrets.ts";
 import { loadBoot } from "./boot.ts";
 import { harnessEntries, type HarnessName } from "./harness/registry.ts";
@@ -63,5 +63,7 @@ async function startSession(
     Object.entries(deps.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
   env[DATA_DIR_VAR] = paths.data;
+  // The session runs in the workspace; `tars script run --out` may also write where the user started.
+  env[LAUNCH_DIR_VAR] = deps.cwd;
   return deps.launch(adapter.plan({ paths, env, launchDir: deps.cwd, userArgs, boot, credential }));
 }

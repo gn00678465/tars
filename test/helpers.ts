@@ -37,6 +37,7 @@ export function fakeSecrets(initial: Partial<Record<SecretName, string>> = {}): 
     entries,
     get: async (name) => entries.get(name) ?? null,
     set: async (name, value) => void entries.set(name, value),
+    delete: async (name) => entries.delete(name),
   };
 }
 

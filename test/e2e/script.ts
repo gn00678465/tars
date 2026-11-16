@@ -1,0 +1,360 @@
+// End-to-end checks for `tars script run` and `trial`: the built dist/tars runs real scripts in
+// sandbox-runtime, inside the e2e sandbox (loopback-only netns, fake home, private keyring).
+// Run with `bun run e2e:script`. Not part of `bun test`.
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir, userInfo } from "node:os";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { EXIT_SKIP, namespacesWork, reexecInNetns, runStep, type Host } from "./sandbox.ts";
+
+const ROOT = join(import.meta.dir, "..", "..");
+const TARS_BIN = join(ROOT, "dist", "tars");
+const INNER = "TARS_E2E_SCRIPT_INNER";
+const TOOLS = [
+  "bwrap",
+  "unshare",
+  "ip",
+  "dbus-daemon",
+  "dbus-send",
+  "gnome-keyring-daemon",
+  "socat",
+  "python3",
+  "rg",
+];
+
+const KEY = "E2E-FAKE-BARK-KEY-0123456789";
+const ALLOWED_PORT = 18765;
+const OTHER_PORT = 18766;
+const SECRET = JSON.stringify({ url: `http://127.0.0.1:${ALLOWED_PORT}`, key: KEY });
+
+// Tries everything a hostile script would, and prints what worked.
+const PROBE = `# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+#
+# [tool.tars]
+# name = "probe"
+# summary = "e2e probe"
+# secret = "fake-bark"
+# domains = ["secret:url"]
+# effects = "external-write"
+# args = "<anything>"
+# outputs = "JSON"
+# exit = { 0 = "ok", 5 = "slept" }
+# ///
+import base64, json, os, socket, sys, time, urllib.parse, urllib.request
+if sys.argv[1:2] == ["sleep"]:
+    time.sleep(float(sys.argv[2])); sys.exit(5)
+def attempt(f):
+    try: return f()
+    except Exception as e: return "DENIED " + type(e).__name__
+def get(port):
+    return attempt(lambda: urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5).status)
+def bus():
+    s = socket.socket(socket.AF_UNIX); s.connect("\\0tars-e2e-session-bus"); return "CONNECTED"
+secret = os.environ.get("TARS_SECRET", "")
+key = json.loads(secret)["key"] if secret else ""
+print(secret); print(key); print(urllib.parse.quote(key)); print(base64.b64encode(key.encode()).decode())
+print(json.dumps({
+  "argv": sys.argv[1:],
+  "allowed": get(${ALLOWED_PORT}), "other": get(${OTHER_PORT}),
+  "home": [attempt(lambda: open(p).read()) for p in (${JSON.stringify(`${userInfo().homedir}/canary.txt`)}, ${JSON.stringify(`${userInfo().homedir}/.local/share/tars/MEMORY.md`)})],
+  "canary": attempt(lambda: open("/tmp/canary.txt").read()),
+  "bus": attempt(bus),
+  "env": sorted(k for k in os.environ if k.startswith("TARS") or k in ("DBUS_SESSION_BUS_ADDRESS", "E2E_KEYRING_PASSWORD")),
+}))
+`;
+
+const OPEN = `# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+#
+# [tool.tars]
+# name = "opener"
+# summary = "e2e open network"
+# domains = ["*"]
+# effects = "read-only"
+# args = ""
+# outputs = "JSON"
+# exit = { 0 = "ok" }
+# ///
+import json, urllib.request
+def get(url):
+    try: return urllib.request.urlopen(url, timeout=5).status
+    except Exception as e: return "DENIED " + type(e).__name__
+print(json.dumps({u: get(u) for u in ["http://127.0.0.1:${ALLOWED_PORT}/", "http://localhost:${ALLOWED_PORT}/"]}))
+`;
+
+interface Check {
+  readonly id: string;
+  readonly claim: string;
+  readonly pass: boolean;
+  readonly evidence: string;
+}
+
+/** The last stdout line as JSON, or {} so the checks still report what went wrong. */
+function lastJson(stdout: string): Record<string, unknown> {
+  try {
+    return JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
+  } catch {
+    return {};
+  }
+}
+
+const denied = (value: unknown) =>
+  Array.isArray(value) && value.length > 0 && value.every((r) => String(r).startsWith("DENIED"));
+
+const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+
+function outer(): number {
+  const missing = TOOLS.filter((t) => !Bun.which(t));
+  if (missing.length > 0) {
+    console.error(`e2e:script SKIP, missing: ${missing.join(", ")}`);
+    return EXIT_SKIP;
+  }
+  if (!namespacesWork()) {
+    console.error("e2e:script SKIP, user or network namespaces are disabled");
+    return EXIT_SKIP;
+  }
+  return reexecInNetns(import.meta.path, { ...process.env, [INNER]: "1" }) ?? 1;
+}
+
+/** Installs an approved library script under the fake home, the way `approve` will. */
+function install(host: Host, name: string, source: string): string {
+  const version = join(host.fakeHome, ".local/share/tars/scripts/library", name, "versions", "v1");
+  mkdirSync(version, { recursive: true });
+  writeFileSync(join(version, "script.py"), source);
+  writeFileSync(join(version, "script.py.lock"), "");
+  writeFileSync(
+    join(version, "approval.json"),
+    JSON.stringify({ script: sha(source), lock: sha("") }),
+  );
+  symlinkSync(join("versions", "v1"), join(version, "..", "..", "current"));
+  return join(host.home, ".local/share/tars/scripts/library", name, "versions", "v1");
+}
+
+async function inner(): Promise<number> {
+  const home = userInfo().homedir;
+  const work = mkdtempSync(join(tmpdir(), "tars-e2e-script-"));
+  const host: Host = {
+    uid: process.getuid?.() ?? 0,
+    user: userInfo().username,
+    home,
+    work,
+    fakeHome: join(work, "home"),
+    bin: join(work, "bin"),
+    binaryDirs: [],
+    apiUrl: "",
+  };
+  mkdirSync(host.fakeHome, { recursive: true });
+  mkdirSync(host.bin, { recursive: true });
+  copyFileSync(TARS_BIN, join(host.bin, "tars"));
+  chmodSync(join(host.bin, "tars"), 0o755);
+  const servers = [ALLOWED_PORT, OTHER_PORT].map((port) =>
+    Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("ok") }),
+  );
+  const checks: Check[] = [];
+  const check = (id: string, claim: string, pass: boolean, evidence: string) =>
+    checks.push({ id, claim, pass, evidence });
+  const step = (name: string, script: string, env: Record<string, string> = {}, stdin?: string) =>
+    runStep(host, {
+      name,
+      argv: ["sh", "-c", script],
+      cwd: host.home,
+      env,
+      timeoutMs: 120_000,
+      ...(stdin === undefined ? {} : { stdin }),
+    });
+  const python = Bun.spawnSync(["python3", "-c", "import sys;print('%d.%d'%sys.version_info[:2])"])
+    .stdout.toString()
+    .trim();
+  try {
+    const pending = join(host.fakeHome, ".local/share/tars/scripts/pending/probe");
+    mkdirSync(pending, { recursive: true });
+    writeFileSync(join(pending, "script.py"), PROBE);
+    const venvs = [
+      install(host, "probe", PROBE),
+      install(host, "opener", OPEN),
+      join(host.home, ".local/share/tars/scripts/pending/probe"),
+    ].map((v) => `python3 -m venv --without-pip ${v}/venv-${python}`);
+    const setup = await step("setup", venvs.join(" && "));
+    if (setup.exitCode !== 0) throw new Error(`setup failed: ${setup.stderr}`);
+
+    const set = await step("secret-set", "tars secret set fake-bark", {}, SECRET);
+    check(
+      "secret-set",
+      "tars secret set reads stdin and never prints the value",
+      set.exitCode === 0 && !(set.stdout + set.stderr).includes(KEY),
+      `exit ${set.exitCode}: ${set.stdout.trim()}`,
+    );
+
+    const run = await step(
+      "run",
+      `echo CANARY > /tmp/canary.txt && echo CANARY > ~/canary.txt && echo MEMORY > ~/.local/share/tars/MEMORY.md && tars script run probe -- '$(whoami)' 'a;b' "it's"`,
+    );
+    const all = run.stdout + run.stderr;
+    const lines = run.stdout.trim().split("\n");
+    const report = lastJson(run.stdout);
+    check(
+      "run-exit",
+      "the probe runs and exits 0",
+      run.exitCode === 0,
+      `exit ${run.exitCode}; stderr: ${run.stderr.slice(0, 300)}`,
+    );
+    check(
+      "redact",
+      "no form of the secret reaches tars's output",
+      !all.includes(KEY) &&
+        !all.includes(Buffer.from(KEY).toString("base64")) &&
+        lines.slice(0, 4).every((l) => l.includes("[REDACTED]")),
+      lines.slice(0, 4).join(" | "),
+    );
+    check(
+      "argv",
+      "arguments arrive unexpanded",
+      JSON.stringify(report.argv) === JSON.stringify(["$(whoami)", "a;b", "it's"]),
+      JSON.stringify(report.argv),
+    );
+    check(
+      "net-allowed",
+      "the host from the secret's url is reachable",
+      report.allowed === 200,
+      String(report.allowed),
+    );
+    check(
+      "net-other",
+      "another loopback port is refused",
+      String(report.other).startsWith("DENIED"),
+      String(report.other),
+    );
+    // Listing the home shows the bare path down to the script and venv; their files stay hidden.
+    check(
+      "home",
+      "files in the real home and the data dir are unreadable",
+      denied(report.home),
+      JSON.stringify(report.home),
+    );
+    check(
+      "canary",
+      "the host /tmp is unreadable",
+      String(report.canary).startsWith("DENIED"),
+      String(report.canary),
+    );
+    check(
+      "bus",
+      "the private D-Bus is unreachable",
+      String(report.bus).startsWith("DENIED"),
+      String(report.bus),
+    );
+    check(
+      "env",
+      "only TARS_SECRET of tars's variables reaches the script",
+      JSON.stringify(report.env) === '["TARS_SECRET"]',
+      JSON.stringify(report.env),
+    );
+
+    const agyHome = `${host.home}/.local/share/tars/harness/agy-home`;
+    // Only tars gets agy's HOME; the private keyring keeps the home it started with.
+    const agy = await step(
+      "run-agy-home",
+      `mkdir -p ${agyHome} && HOME=${agyHome} TARS_DATA_DIR=${host.home}/.local/share/tars tars script run probe -- x`,
+    );
+    const agyReport = lastJson(agy.stdout);
+    check(
+      "agy-home",
+      "with HOME pointing at agy's home, the real home stays unreadable",
+      agy.exitCode === 0 && denied(agyReport.home),
+      `exit ${agy.exitCode}: ${JSON.stringify(agyReport.home)} ${agy.stderr.slice(0, 200)}`,
+    );
+
+    const open = await step("open", "tars script run opener");
+    check(
+      "open-loopback",
+      'domains "*" cannot reach this machine',
+      open.exitCode === 0 && !open.stdout.includes(": 200"),
+      `exit ${open.exitCode}: ${open.stdout.trim()} ${open.stderr.slice(0, 200)}`,
+    );
+
+    const timeout = await step("timeout", "tars script run probe --timeout 2 -- sleep 30");
+    check(
+      "timeout",
+      "a script past --timeout ends with 124",
+      timeout.exitCode === 124,
+      `exit ${timeout.exitCode} after ${timeout.ms} ms`,
+    );
+
+    const kill = await step(
+      "sigkill",
+      `tars script run probe -- sleep 15 & A=$!
+       sleep 3; echo "only-a $(pgrep -c socat)"
+       tars script run probe -- sleep 30 & B=$!
+       sleep 3; kill -9 $B; sleep 1
+       echo "after-kill $(pgrep -c socat) orphans $(pgrep -fc '[s]cript.py sleep 30')"
+       tars script run probe -- quick > /dev/null
+       echo "after-next $(pgrep -c socat)"
+       wait $A; echo "a-exit $?"
+       echo "sockets-left $(ls /tmp | grep -cE 'claude-http|srt-mux')"`,
+    );
+    const count = (label: string) =>
+      Number(new RegExp(`${label} (\\d+)`).exec(kill.stdout)?.[1] ?? -1);
+    check(
+      "sigkill",
+      "a SIGKILLed run leaves no script behind; the next run removes its bridge and spares a running tars",
+      count("only-a") > 0 &&
+        count("after-kill") > count("only-a") &&
+        count("orphans") === 0 &&
+        count("after-next") === count("only-a") &&
+        count("a-exit") === 5 &&
+        count("sockets-left") === 0,
+      kill.stdout.trim().replaceAll("\n", " | "),
+    );
+
+    const trial = await step(
+      "trial",
+      "tars script trial probe -- t && ls ~/.local/share/tars/scripts/pending/probe/trials",
+    );
+    const trialReport = lastJson(trial.stdout.split("\n").slice(0, -2).join("\n"));
+    check(
+      "trial",
+      'trial gets no secret, cannot reach the "secret:url" host, and saves its output',
+      trial.exitCode === 0 &&
+        !trial.stdout.includes(KEY) &&
+        String(trialReport.allowed).startsWith("DENIED") &&
+        (trial.stdout.trim().split("\n").at(-1) ?? "").endsWith(".json"),
+      `exit ${trial.exitCode}: allowed=${trialReport.allowed} ${trial.stderr.slice(0, 200)}`,
+    );
+
+    const lib = join(
+      host.fakeHome,
+      ".local/share/tars/scripts/library/probe/versions/v1/script.py",
+    );
+    writeFileSync(lib, `${PROBE}# tampered\n`);
+    const tampered = await step("tampered", "tars script run probe -- x");
+    check(
+      "tampered",
+      "a script changed after approval is refused",
+      tampered.exitCode === 1 && tampered.stderr.includes("changed after approval"),
+      `exit ${tampered.exitCode}: ${tampered.stderr.trim()}`,
+    );
+  } finally {
+    for (const s of servers) s.stop(true);
+  }
+  for (const c of checks)
+    console.log(`${c.pass ? "PASS" : "FAIL"} ${c.id}: ${c.claim}\n     ${c.evidence}`);
+  const failed = checks.filter((c) => !c.pass);
+  console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
+  if (failed.length > 0 || process.env.TARS_E2E_KEEP === "1")
+    console.log(`scratch dir kept: ${work}`);
+  else rmSync(work, { recursive: true, force: true });
+  return failed.length > 0 ? 1 : 0;
+}
+
+if (import.meta.main) process.exitCode = process.env[INNER] ? await inner() : outer();

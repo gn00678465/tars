@@ -1,11 +1,14 @@
 import { TarsError } from "./exit.ts";
 
-export type SecretName = "claude-oauth-token";
+/** A harness login, or the one secret a script declares (`script:<kind>`). */
+export type SecretName = "claude-oauth-token" | `script:${string}`;
 
 /** Keyring access; tests use an in-memory fake so they never touch the real keyring. */
 export interface SecretStore {
   get(name: SecretName): Promise<string | null>;
   set(name: SecretName, value: string): Promise<void>;
+  /** Returns whether it existed. */
+  delete(name: SecretName): Promise<boolean>;
 }
 
 const SERVICE = "tars";
@@ -17,4 +20,5 @@ const keyringError = (err: unknown): never => {
 export const keyringStore: SecretStore = {
   get: (name) => Bun.secrets.get({ service: SERVICE, name }).catch(keyringError),
   set: (name, value) => Bun.secrets.set({ service: SERVICE, name, value }).catch(keyringError),
+  delete: (name) => Bun.secrets.delete({ service: SERVICE, name }).catch(keyringError),
 };

@@ -1,5 +1,8 @@
 import { InvalidArgumentError, type Command } from "commander";
+import { join } from "node:path";
 import type { Io } from "../../core/io.ts";
+import type { SecretStore } from "../../core/secrets.ts";
+import { runApproved, runTrial, type Outcome } from "./execute.ts";
 import {
   addNote,
   listScripts,
@@ -13,12 +16,25 @@ import {
   type ScriptsLayout,
 } from "./library.ts";
 import { SLUG, type Domain, type ScriptMeta } from "./metadata.ts";
+import { prepareOutDir, type OutDirRules } from "./out-dir.ts";
+import { OUTPUT_LIMIT, type SandboxHost } from "./sandbox.ts";
 
 export interface ScriptCommandContext {
   readonly io: Io;
   /** Called only when a script command runs, so `tars --help` works even when paths cannot resolve. */
   scriptsDir(): string;
   now(): Date;
+  readonly secrets: SecretStore;
+  sandboxHost(): Promise<SandboxHost>;
+  outDirRules(): OutDirRules;
+  /** Python's major.minor, which picks the venv. */
+  python(): string;
+  exitWith(code: number): void;
+}
+
+interface RunOptions {
+  timeout: number;
+  out?: string;
 }
 
 export function registerScriptCommands(program: Command, ctx: ScriptCommandContext): void {
@@ -91,6 +107,62 @@ Examples:
       );
     });
 
+  addRunOptions(script.command("run"))
+    .description("Run an approved script in the sandbox, with only the secret it declares.")
+    .addHelpText(
+      "after",
+      `
+Exit codes: the script's own code (0 to 123, see tars script show <name>);
+1 when tars refuses or fails before the script starts; 2 usage error;
+124 timed out; 128+n stopped by signal n.
+
+Examples:
+  tars script run bark-push -- --title 會議 --body 改到三點
+  tars script run download --out out/files -- https://example.com/report.pdf`,
+    )
+    .action(async (name: string, args: string[], opts: RunOptions) => {
+      const s = await loadScript(layout(), name);
+      const outcome = await runApproved(s, await executeOptions(args, opts), {
+        secrets: ctx.secrets,
+        scriptsDir: ctx.scriptsDir(),
+        host: await ctx.sandboxHost(),
+        now: ctx.now(),
+      });
+      report(ctx.io, outcome);
+      ctx.exitWith(outcome.exit);
+    });
+
+  addRunOptions(script.command("trial"))
+    .description(
+      "Run a submitted script in the sandbox without any secret, to test it before approval.",
+    )
+    .addHelpText(
+      "after",
+      `
+The output is also saved under the submission's trials/ for the approver to read.
+Exit codes: as tars script run.
+
+Examples:
+  tars script trial bark-push -- --title ""
+  tars script trial download --out out/trial -- not-a-url`,
+    )
+    .action(async (name: string, args: string[], opts: RunOptions) => {
+      const outcome = await runTrial(
+        join(ctx.scriptsDir(), "pending", name),
+        await executeOptions(args, opts),
+        { host: await ctx.sandboxHost(), now: ctx.now() },
+      );
+      report(ctx.io, outcome);
+      ctx.exitWith(outcome.exit);
+    });
+
+  const executeOptions = async (args: string[], opts: RunOptions) => ({
+    args,
+    timeoutMs: opts.timeout * 1000,
+    python: ctx.python(),
+    ...(opts.out === undefined ? {} : { outDir: await prepareOutDir(opts.out, ctx.outDirRules()) }),
+  });
+
   script
     .command("note")
     .description("Add one line to a script's notes, for the next agent that uses it.")
@@ -118,6 +190,27 @@ Examples:
       const target = await retireScript(layout(), await loadScript(layout(), name), ctx.now());
       ctx.io.out(`retired ${name} to ${target}`);
     });
+}
+
+function addRunOptions(cmd: Command): Command {
+  return cmd
+    .argument("<name>", "script name", parseName)
+    .argument("[args...]", "arguments for the script, after --")
+    .option("--timeout <seconds>", "stop the script after this many seconds", parseTimeout, 120)
+    .option("--out <dir>", "a directory the script may write; it gets the path in TARS_OUT");
+}
+
+function parseTimeout(value: string): number {
+  const n = Number(value);
+  if (!/^\d+$/.test(value) || n < 1 || n > 3600)
+    throw new InvalidArgumentError("use whole seconds from 1 to 3600.");
+  return n;
+}
+
+function report(io: Io, outcome: Outcome): void {
+  if (outcome.stdout !== "") io.out(outcome.stdout.replace(/\n$/, ""));
+  if (outcome.stderr !== "") io.err(outcome.stderr.replace(/\n$/, ""));
+  if (outcome.truncated) io.err(`tars: output past ${OUTPUT_LIMIT} bytes per stream was dropped`);
 }
 
 function parseName(value: string): string {

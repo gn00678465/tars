@@ -21,6 +21,9 @@ export interface TarsPaths {
 /** Set by tars for every harness it starts, so `tars` run inside a session finds the same data dir. */
 export const DATA_DIR_VAR = "TARS_DATA_DIR";
 
+/** Set by tars for every harness it starts: the directory the user started the session in. */
+export const LAUNCH_DIR_VAR = "TARS_LAUNCH_DIR";
+
 export function resolvePaths(env: Env): TarsPaths {
   const home = env.HOME;
   if (!home || !isAbsolute(home)) throw new TarsError("HOME must be set to an absolute path");

@@ -116,7 +116,7 @@ describe("tars script show", () => {
     writeFileSync(join(dir, "NOTES.md"), "- 2026-11-16 標題太長會被截斷\n");
     writeFileSync(
       join(dir, "runs.jsonl"),
-      '{"time":"2026-11-16T01:00:00.000Z","version":"0123456789abcdef","exit":0,"ms":321}\n',
+      '{"time":"2026-11-16T01:00:00.000Z","version":"0123456789abcdef","args":"00","exit":0,"ms":321}\n',
     );
     expect(await tars(deps, "show", "bark-push")).toBe(0);
     const out = deps.io.stdout.join("\n");
