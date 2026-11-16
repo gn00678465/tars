@@ -205,13 +205,15 @@ export function unifiedDiff(before: string, after: string, context = 3): string[
 
 const gutter = (lines: readonly string[]) => lines.map((line) => `  | ${visible(line)}`);
 
-const quote = (text: string) => gutter(text.replace(/\n$/, "").split("\n"));
+/** Text that tars did not write, as lines behind the gutter. */
+export const quoted = (text: string) =>
+  text === "" ? [] : gutter(text.replace(/\n$/, "").split("\n"));
 
 const domainText = (d: Domain) =>
   d.kind === "any" ? "*" : d.kind === "secret-url" ? "secret:url" : hostText(d);
 
 function sourceSection({ submission, base }: Dossier): string[] {
-  const whole = quote(submission.source);
+  const whole = quoted(submission.source);
   if (base.kind === "none") return ["== script.py (a new script) ==", ...whole];
   if (base.kind === "broken")
     return [
@@ -266,7 +268,7 @@ function reviewLines(review: Review): string[] {
     case "unreadable":
       return ["!! review.md does not start with a review stamp; not shown"];
     case "attached":
-      return [`attached at ${visible(review.time)}:`, ...quote(review.report)];
+      return [`attached at ${visible(review.time)}:`, ...quoted(review.report)];
   }
 }
 

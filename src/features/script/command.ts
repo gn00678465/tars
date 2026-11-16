@@ -311,14 +311,41 @@ Examples:
         );
       const terminal = ctx.terminal();
       try {
-        const typed = await terminal.ask(`Type ${name} to approve it, anything else cancels: `);
-        if (typed !== name) {
-          ctx.io.err(
-            `not approved (${typed === undefined ? "end of input" : "name did not match"})`,
-          );
+        const { approve } = await import("./approve.ts");
+        const outcome = await approve(name, {
+          scriptsDir: ctx.scriptsDir(),
+          terminal,
+          toolchain: ctx.toolchain(),
+          osv: ctx.osv(),
+          outDirRules: ctx.outDirRules,
+          now: ctx.now,
+          runLive: async (dir, meta, opts) => {
+            const { runWithSecret } = await import("./execute.ts");
+            return runWithSecret(dir, meta, opts, {
+              secrets: ctx.secrets,
+              scriptsDir: ctx.scriptsDir(),
+              host: await ctx.sandboxHost(),
+              toolchain: ctx.toolchain(),
+            });
+          },
+        });
+        if (outcome.kind === "declined") {
+          ctx.io.err(`not approved (${outcome.reason}); ${name} is still pending`);
           return ctx.exitWith(EXIT.failure);
         }
-        throw new TarsError(`${name} was confirmed, but this build cannot install a script yet`);
+        if (outcome.kind === "already-approved")
+          return ctx.io.out(`${name} ${outcome.version} is already in the library`);
+        ctx.io.out(
+          `approved ${name} ${outcome.version}${outcome.reused ? " (a version already in the library)" : ""}`,
+        );
+        if (outcome.pending === "newer")
+          ctx.io.err(
+            `a newer submission of ${name} arrived while you were reading; it is still pending and needs its own approval`,
+          );
+        if (outcome.pending === "stuck")
+          ctx.io.err(
+            `the approved submission could not be removed from pending; run tars script approve ${name} again to clear it`,
+          );
       } finally {
         terminal.close();
       }

@@ -563,21 +563,27 @@ async function inner(): Promise<number> {
         name,
         command: "tars script approve probe",
         tty: true,
-        turns: [{ expect: CONFIRM, send }],
+        turns: [
+          { expect: "Run it once with the real secret before deciding? [y/N] ", send: "n\n" },
+          { expect: CONFIRM, send },
+        ],
       });
-    const typed = await answer("approve-tty-typed", "probe\n");
     const wrong = await answer("approve-tty-wrong", "prob\n");
     const eof = await answer("approve-tty-eof", "\x04");
     check(
       "approve-tty",
-      "the compiled tars asks on /dev/tty, not stdout, and reads the typed line, another line, and end of input apart",
-      [typed, wrong, eof].every(
-        (r) => r.missed === undefined && !r.timedOut && r.exitCode === 1 && r.stdout === "",
+      "the compiled tars shows the review and asks on /dev/tty, not stdout, and tells a typed line from end of input",
+      [wrong, eof].every(
+        (r) =>
+          r.missed === undefined &&
+          !r.timedOut &&
+          r.exitCode === 1 &&
+          r.stdout === "" &&
+          r.transcript.includes("  | REVIEW-MARK: tried an empty title"),
       ) &&
-        typed.stderr.includes("was confirmed") &&
         wrong.stderr.includes("name did not match") &&
         eof.stderr.includes("end of input"),
-      [typed, wrong, eof]
+      [wrong, eof]
         .map((r) => `${r.name}: exit ${r.exitCode}, missed ${r.missed}, ${r.stderr.trim()}`)
         .join(" | "),
     );

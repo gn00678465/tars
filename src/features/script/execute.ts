@@ -1,20 +1,15 @@
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 import { sha256 } from "../../core/hash.ts";
 import type { SecretStore } from "../../core/secrets.ts";
-import type { LibraryScript, RunRecord } from "./library.ts";
+import { checkApproval, type LibraryScript, type RunRecord } from "./library.ts";
 import { hostText, type ScriptMeta } from "./metadata.ts";
 import { recordTrial, type Submission } from "./pending.ts";
 import { redact, secretNeedles } from "./redact.ts";
 import { runSandboxed, type Network, type SandboxHost, type SandboxResult } from "./sandbox.ts";
 import { readSecretType, secretName, secretUrlHost } from "./secret.ts";
-import { ensureVenv, LOCK_FILE, type Toolchain } from "./supply.ts";
-
-interface Approval {
-  readonly script: string;
-  readonly lock: string;
-}
+import { ensureVenv, type Toolchain } from "./supply.ts";
 
 export interface ExecuteOptions {
   readonly args: readonly string[];
@@ -33,28 +28,12 @@ export async function runApproved(
     now: Date;
   },
 ): Promise<SandboxResult> {
-  await verifyApproval(script.versionDir, script.source);
-  let secret: string | undefined;
-  const hosts: string[] = [];
-  if (script.meta.secret !== undefined) {
-    const kind = script.meta.secret;
-    if ((await readSecretType(ctx.scriptsDir, kind)) === "google-oauth")
-      throw new TarsError(`${kind} is a google-oauth secret; tars cannot trade it for a token yet`);
-    secret = (await ctx.secrets.get(secretName(kind))) ?? undefined;
-    if (secret === undefined)
-      throw new TarsError(
-        `no ${secretName(kind)} in the keyring. Ask the user to run, in their own terminal: tars secret set ${kind}`,
-      );
-    if (script.meta.domains.some((d) => d.kind === "secret-url")) {
-      const host = secretUrlHost(secret);
-      if (host instanceof Error)
-        throw new TarsError(
-          `${secretName(kind)}: ${host.message}. Reset it: tars secret set ${kind}`,
-        );
-      hosts.push(host);
-    }
-  }
-  const outcome = await execute(script.versionDir, script.meta, opts, ctx, hosts, secret);
+  const approval = await checkApproval(script.versionDir, script.source);
+  if (typeof approval === "string")
+    throw new TarsError(
+      `${script.versionDir}: ${approval}; refusing to run. Submit the script for review again.`,
+    );
+  const outcome = await runWithSecret(script.versionDir, script.meta, opts, ctx);
   const record: RunRecord = {
     time: ctx.now.toISOString(),
     version: script.version,
@@ -64,6 +43,39 @@ export async function runApproved(
   };
   await appendFile(join(script.dir, "runs.jsonl"), `${JSON.stringify(record)}\n`);
   return outcome;
+}
+
+/**
+ * Runs <dir>/script.py with the secret `meta` declares and masks it in the output. Shared by
+ * `run` and gate 3's live run, so both hand the secret over and redact it the same way.
+ */
+export async function runWithSecret(
+  dir: string,
+  meta: ScriptMeta,
+  opts: ExecuteOptions,
+  ctx: { secrets: SecretStore; scriptsDir: string; host: SandboxHost; toolchain: Toolchain },
+): Promise<SandboxResult> {
+  let secret: string | undefined;
+  const hosts: string[] = [];
+  if (meta.secret !== undefined) {
+    const kind = meta.secret;
+    if ((await readSecretType(ctx.scriptsDir, kind)) === "google-oauth")
+      throw new TarsError(`${kind} is a google-oauth secret; tars cannot trade it for a token yet`);
+    secret = (await ctx.secrets.get(secretName(kind))) ?? undefined;
+    if (secret === undefined)
+      throw new TarsError(
+        `no ${secretName(kind)} in the keyring. Ask the user to run, in their own terminal: tars secret set ${kind}`,
+      );
+    if (meta.domains.some((d) => d.kind === "secret-url")) {
+      const host = secretUrlHost(secret);
+      if (host instanceof Error)
+        throw new TarsError(
+          `${secretName(kind)}: ${host.message}. Reset it: tars secret set ${kind}`,
+        );
+      hosts.push(host);
+    }
+  }
+  return execute(dir, meta, opts, ctx, hosts, secret);
 }
 
 /**
@@ -120,21 +132,4 @@ function network(meta: ScriptMeta, secretHosts: readonly string[]): Network {
     ...secretHosts,
   ];
   return hosts.length === 0 ? { kind: "none" } : { kind: "allow", hosts };
-}
-
-async function verifyApproval(versionDir: string, source: string): Promise<void> {
-  const refuse = (why: string) =>
-    new TarsError(`${versionDir}: ${why}; refusing to run. Submit the script for review again.`);
-  let approval: Partial<Approval> | null;
-  try {
-    approval = JSON.parse(await readFile(join(versionDir, "approval.json"), "utf8"));
-  } catch {
-    throw refuse("approval.json is missing or unreadable");
-  }
-  if (typeof approval !== "object" || approval === null)
-    throw refuse("approval.json is not an object");
-  const lock = await readFile(join(versionDir, LOCK_FILE)).catch(() => undefined);
-  if (lock === undefined) throw refuse(`${LOCK_FILE} is missing`);
-  if (approval.script !== sha256(source)) throw refuse("script.py changed after approval");
-  if (approval.lock !== sha256(lock)) throw refuse(`${LOCK_FILE} changed after approval`);
 }

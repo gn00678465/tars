@@ -1,7 +1,7 @@
-import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { TarsError } from "../../core/exit.ts";
-import { ensureSymlink, writeFileAtomic } from "../../core/fs.ts";
+import { ensureSymlink, uniqueTemp, writeFileAtomic } from "../../core/fs.ts";
 import { sha256 } from "../../core/hash.ts";
 import { uniqueStamp, versionId, type VersionId } from "./library.ts";
 import type { Lock } from "./lock.ts";
@@ -168,12 +168,22 @@ async function leftovers(root: string, own: string, now: Date): Promise<string[]
 /**
  * Removes the submission approve read, and only that directory. current is left alone: when it
  * now points elsewhere a newer submission arrived meanwhile, and the return value says so.
+ * The directory is renamed away first, so a kill midway never leaves half a submission behind
+ * current.
  */
 export async function removeSubmission(
   scriptsDir: string,
   approved: Submission,
 ): Promise<"removed" | "newer-pending"> {
-  await rm(approved.dir, { recursive: true, force: true });
+  const doomed = uniqueTemp(approved.dir);
+  const swept = await rename(approved.dir, doomed).then(
+    () => false,
+    (err: NodeJS.ErrnoException) => {
+      if (err.code !== "ENOENT") throw err;
+      return true;
+    },
+  );
+  if (!swept) await rm(doomed, { recursive: true, force: true });
   const now = await realpath(join(pendingRoot(scriptsDir, approved.name), "current")).catch(
     () => undefined,
   );

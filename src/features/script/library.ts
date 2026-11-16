@@ -1,14 +1,29 @@
 import { randomBytes } from "node:crypto";
-import { appendFile, lstat, mkdir, readdir, readFile, realpath, rename } from "node:fs/promises";
+import {
+  appendFile,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join, sep } from "node:path";
 import { TarsError } from "../../core/exit.ts";
+import { ensureSymlink, uniqueTemp, writeFileAtomic } from "../../core/fs.ts";
 import { sha256 } from "../../core/hash.ts";
-import { requireScriptMeta, SLUG, type ScriptMeta } from "./metadata.ts";
+import type { PackageName } from "./lock.ts";
+import { isRecord, requireScriptMeta, SLUG, type ScriptMeta } from "./metadata.ts";
+import { approvePackages, ensureVenv, LOCK_FILE, type Toolchain } from "./supply.ts";
 
 export interface ScriptsLayout {
   readonly library: string;
   readonly retired: string;
   readonly searches: string;
+  /** Where approve builds a version before it enters library/; the same filesystem, so rename works. */
+  readonly staging: string;
 }
 
 export function scriptsLayout(root: string): ScriptsLayout {
@@ -16,6 +31,7 @@ export function scriptsLayout(root: string): ScriptsLayout {
     library: join(root, "library"),
     retired: join(root, "retired"),
     searches: join(root, "searches.jsonl"),
+    staging: join(root, "staging"),
   };
 }
 
@@ -185,4 +201,171 @@ export const uniqueStamp = (now: Date) =>
 async function appendJsonLine(path: string, value: unknown): Promise<void> {
   await mkdir(join(path, ".."), { recursive: true });
   await appendFile(path, `${JSON.stringify(value)}\n`);
+}
+
+/** The two fields every run depends on. */
+export interface ApprovalHashes {
+  readonly script: string;
+  readonly lock: string;
+}
+
+/** Arguments are stored as a hash, as in runs.jsonl: they may hold private text. */
+export interface RunSummary {
+  readonly time: string;
+  readonly argsSha256: string;
+  readonly exit: number;
+}
+
+/** approval.json as approve writes it. Code reads only the two hashes; the rest is the record of what the user was shown. */
+export interface ApprovalRecord extends ApprovalHashes {
+  /** When the user confirmed. */
+  readonly time: string;
+  readonly gate1: { readonly time: string; readonly packages: number };
+  readonly gate2: {
+    readonly trials: readonly RunSummary[];
+    readonly ignoredTrials: number;
+    readonly review: { readonly time: string; readonly report: string } | null;
+  };
+  readonly gate3: {
+    /** Runs with the real secret during this approval. */
+    readonly liveRuns: readonly RunSummary[];
+    readonly newPackages: readonly string[];
+    readonly replaced: string | null;
+  };
+}
+
+/**
+ * The hashes approval.json records when they match `source` (what was read from script.py) and
+ * the lock in `versionDir`; otherwise why the version must not run.
+ */
+export async function checkApproval(
+  versionDir: string,
+  source: string,
+): Promise<ApprovalHashes | string> {
+  let approval: unknown;
+  try {
+    approval = JSON.parse(await readFile(join(versionDir, "approval.json"), "utf8"));
+  } catch {
+    return "approval.json is missing or unreadable";
+  }
+  if (!isRecord(approval)) return "approval.json is not an object";
+  const lock = await readFile(join(versionDir, LOCK_FILE)).catch(() => undefined);
+  if (lock === undefined) return `${LOCK_FILE} is missing`;
+  const { script, lock: lockSha } = approval;
+  if (script !== sha256(source)) return "script.py changed after approval";
+  if (lockSha !== sha256(lock)) return `${LOCK_FILE} changed after approval`;
+  return { script, lock: lockSha };
+}
+
+/**
+ * A version directory built from memory under staging/. Only stageVersion makes one. Gate 3's
+ * live run executes it and installVersion renames the same directory into the library, so what
+ * the user tried is what gets installed.
+ */
+export interface StagedVersion {
+  readonly [brand]: "StagedVersion";
+  readonly name: string;
+  readonly version: VersionId;
+  readonly dir: string;
+}
+
+/** Longer than any approve keeps a staged version; older ones were left by a killed approve. */
+const STALE_STAGING_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The venv is built here from the lock text approve holds, never copied from pending/: nothing
+ * hashes a pending venv, while `pip --require-hashes` ties this one to the reviewed lock.
+ */
+export async function stageVersion(
+  layout: ScriptsLayout,
+  files: {
+    readonly name: string;
+    readonly version: VersionId;
+    readonly source: string;
+    readonly lockText: string;
+  },
+  toolchain: Toolchain,
+  now: Date,
+): Promise<StagedVersion> {
+  await mkdir(layout.staging, { recursive: true });
+  for (const entry of await readdir(layout.staging)) {
+    const path = join(layout.staging, entry);
+    const age = now.getTime() - ((await lstat(path).catch(() => undefined))?.mtimeMs ?? Infinity);
+    if (age > STALE_STAGING_MS) await rm(path, { recursive: true, force: true });
+  }
+  const dir = join(layout.staging, uniqueStamp(now));
+  await mkdir(dir);
+  try {
+    await writeFile(join(dir, "script.py"), files.source);
+    await writeFile(join(dir, LOCK_FILE), files.lockText);
+    await ensureVenv(dir, toolchain);
+  } catch (err) {
+    await rm(dir, { recursive: true, force: true });
+    throw err;
+  }
+  const staged: Omit<StagedVersion, typeof brand> = {
+    name: files.name,
+    version: files.version,
+    dir,
+  };
+  return staged as StagedVersion;
+}
+
+export const discardStaged = (staged: StagedVersion) =>
+  rm(staged.dir, { recursive: true, force: true });
+
+/**
+ * Puts a staged version into the library. Every step looks at what is on disk, so after a kill
+ * at any point the next approve of the same bytes finishes the rest: approval.json is written
+ * before the directory gets its final name, the packages are approved before `current` moves,
+ * and a valid versions/<id>/ found in place is kept but still gets this approval's record, its
+ * packages and the switch of `current`.
+ *
+ * A run that resolved `current` earlier keeps the version directory it resolved. NOTES.md and
+ * runs.jsonl sit beside versions/ and are not touched.
+ */
+export async function installVersion(
+  layout: ScriptsLayout,
+  scriptsDir: string,
+  staged: StagedVersion,
+  approval: ApprovalRecord,
+  newPackages: readonly PackageName[],
+): Promise<"installed" | "reused"> {
+  const home = join(layout.library, staged.name);
+  const target = join(home, "versions", staged.version);
+  const record = `${JSON.stringify(approval, null, 2)}\n`;
+  await writeFileAtomic(join(staged.dir, "approval.json"), record);
+  await mkdir(join(home, "versions"), { recursive: true });
+  let outcome: "installed" | "reused" = "installed";
+  try {
+    await rename(staged.dir, target);
+  } catch (err) {
+    const { code } = err as NodeJS.ErrnoException;
+    if (code !== "ENOTEMPTY" && code !== "EEXIST") throw err;
+    if (await holds(target, approval)) {
+      await writeFileAtomic(join(target, "approval.json"), record);
+      await rm(staged.dir, { recursive: true, force: true });
+      outcome = "reused";
+    } else {
+      const invalid = uniqueTemp(join(layout.staging, staged.version));
+      await rename(target, invalid);
+      await rm(invalid, { recursive: true, force: true });
+      await rename(staged.dir, target);
+    }
+  }
+  await approvePackages(scriptsDir, newPackages);
+  await ensureSymlink(join("versions", staged.version), join(home, "current"));
+  return outcome;
+}
+
+/** Whether `versionDir` is an approved version of exactly these two files. */
+async function holds(versionDir: string, hashes: ApprovalHashes): Promise<boolean> {
+  const source = await readFile(join(versionDir, "script.py"), "utf8").catch(() => undefined);
+  if (source === undefined) return false;
+  const approved = await checkApproval(versionDir, source);
+  return (
+    typeof approved !== "string" &&
+    approved.script === hashes.script &&
+    approved.lock === hashes.lock
+  );
 }
