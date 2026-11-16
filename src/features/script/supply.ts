@@ -1,8 +1,17 @@
-import { lstat, readFile, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
-import { uniqueTemp } from "../../core/fs.ts";
-import { parseLock, QUARANTINE, type LockProblem } from "./lock.ts";
+import { createExclusive, uniqueTemp } from "../../core/fs.ts";
+import {
+  normalizeName,
+  parseLock,
+  QUARANTINE,
+  type Lock,
+  type LockProblem,
+  type PackageName,
+  type Pin,
+} from "./lock.ts";
+import { findAdvisories, type OsvEndpoint } from "./osv.ts";
 
 export const LOCK_FILE = "script.py.lock";
 
@@ -31,8 +40,83 @@ export interface Venv {
   readonly python: string;
 }
 
+export type SupplyProblem =
+  | LockProblem
+  /** uv lock failed: only an sdist, nothing older than the quarantine, a conflict. `detail` is uv's stderr. */
+  | { readonly kind: "unresolvable"; readonly detail: string }
+  | { readonly kind: "advisory"; readonly pin: Pin; readonly ids: readonly string[] }
+  | { readonly kind: "osv-unavailable"; readonly detail: string };
+
+export type Vetting =
+  | {
+      readonly ok: true;
+      readonly lock: Lock;
+      /** Pinned names the user has not approved yet; gate 3 shows them. */
+      readonly newPackages: readonly PackageName[];
+    }
+  | { readonly ok: false; readonly problems: readonly SupplyProblem[] };
+
 export function parsePythonVersion(text: string): PythonVersion | undefined {
   return /^\d+\.\d+$/.test(text) ? (text as PythonVersion) : undefined;
+}
+
+/**
+ * Gate 1's dependency check: locks <dir>/script.py from scratch, applies the lock policy and asks
+ * OSV about every pin. A rejected dependency set is a Vetting, not a throw; TarsError means tars
+ * could not check at all. Builds no venv.
+ */
+export async function vetDependencies(
+  dir: string,
+  ctx: { readonly toolchain: Toolchain; readonly osv: OsvEndpoint; readonly scriptsDir: string },
+): Promise<Vetting> {
+  const lockPath = join(dir, LOCK_FILE);
+  // uv lock prefers the versions in an existing lock, so one the agent wrote would steer it.
+  await rm(lockPath, { force: true });
+  const locked = await uv(
+    [
+      "lock",
+      "--script",
+      join(dir, "script.py"),
+      "--exclude-newer",
+      QUARANTINE,
+      "--no-build",
+      "--quiet",
+      "--default-index",
+      ctx.toolchain.index,
+    ],
+    ctx.toolchain,
+  );
+  if (locked.exit !== 0)
+    return { ok: false, problems: [{ kind: "unresolvable", detail: locked.stderr.trim() }] };
+  const parsed = parseLock(await readFile(lockPath, "utf8"), ctx.toolchain.index);
+  const pins = parsed.ok ? parsed.lock.pins : parsed.pins;
+  const verdict = await findAdvisories(pins, ctx.osv);
+  const problems: SupplyProblem[] = parsed.ok ? [] : [...parsed.problems];
+  if (verdict.kind === "unavailable")
+    problems.push({ kind: "osv-unavailable", detail: verdict.detail });
+  else for (const a of verdict.advisories) problems.push({ kind: "advisory", ...a });
+  if (!parsed.ok || problems.length > 0) return { ok: false, problems };
+  const approved = await readApproved(ctx.scriptsDir);
+  return {
+    ok: true,
+    lock: parsed.lock,
+    newPackages: pins.map((p) => p.name).filter((name) => !approved.has(name)),
+  };
+}
+
+/** One empty file per name, so two approvals running at once never drop each other's names. */
+export async function approvePackages(
+  scriptsDir: string,
+  names: readonly PackageName[],
+): Promise<void> {
+  const store = join(scriptsDir, "packages");
+  await mkdir(store, { recursive: true });
+  for (const name of names) await createExclusive(join(store, name), "");
+}
+
+export async function readApproved(scriptsDir: string): Promise<ReadonlySet<PackageName>> {
+  const names = await readdir(join(scriptsDir, "packages")).catch(() => [] as string[]);
+  return new Set(names.filter((n) => !n.startsWith(".")).map(normalizeName));
 }
 
 /**
@@ -52,7 +136,7 @@ export async function ensureVenv(dir: string, toolchain: Toolchain): Promise<Ven
   const parsed = parseLock(text, toolchain.index);
   if (!parsed.ok)
     throw new TarsError(
-      `${lockPath} breaks the lock policy:\n${parsed.problems.map(lockProblemText).join("\n")}`,
+      `${lockPath} breaks the lock policy:\n${parsed.problems.map(problemText).join("\n")}`,
     );
   const exported = await uv(
     [
@@ -116,7 +200,7 @@ export async function ensureVenv(dir: string, toolchain: Toolchain): Promise<Ven
   return venv;
 }
 
-function lockProblemText(problem: LockProblem): string {
+export function problemText(problem: SupplyProblem): string {
   switch (problem.kind) {
     case "malformed":
       return `the lock is malformed: ${problem.detail}`;
@@ -128,6 +212,12 @@ function lockProblemText(problem: LockProblem): string {
       return `${problem.name}: ${problem.file} has no sha256`;
     case "no-age-rule":
       return `the lock was not made with --exclude-newer ${QUARANTINE}`;
+    case "unresolvable":
+      return `uv could not lock the dependencies from wheels older than ${QUARANTINE}:\n${problem.detail}`;
+    case "advisory":
+      return `${problem.pin.name} ${problem.pin.version} has advisories: ${problem.ids.map((id) => `https://osv.dev/vulnerability/${id}`).join(" ")}`;
+    case "osv-unavailable":
+      return `cannot check advisories: ${problem.detail}`;
   }
 }
 

@@ -3,14 +3,20 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { TarsError } from "../../../src/core/exit.ts";
 import {
+  approvePackages,
   ensureVenv,
   parsePythonVersion,
+  readApproved,
   SYSTEM_PYTHON,
+  vetDependencies,
   type PythonVersion,
   type Toolchain,
   type Venv,
+  type Vetting,
 } from "../../../src/features/script/supply.ts";
+import { normalizeName } from "../../../src/features/script/lock.ts";
 import { tempHome } from "../../helpers.ts";
+import { fakeOsv, type FakeOsv } from "./fake-osv.ts";
 import { fakePypi, type FakePypi } from "./fake-pypi.ts";
 
 setDefaultTimeout(30_000);
@@ -23,12 +29,17 @@ const PYTHON = parsePythonVersion(
 const ALPHA_WHEEL = "alpha-1.0-py3-none-any.whl";
 
 let pypi: FakePypi;
+let osv: FakeOsv;
 beforeEach(() => {
   pypi = fakePypi();
   pypi.wheel("alpha", "1.0", { requires: ["beta"] });
   pypi.wheel("beta", "1.0");
+  osv = fakeOsv();
 });
-afterEach(() => pypi.stop());
+afterEach(() => {
+  pypi.stop();
+  osv.stop();
+});
 
 /** A fresh HOME and uv cache for every toolchain, so no test reuses another's downloads. */
 function toolchain(overrides: Partial<Toolchain> = {}): Toolchain {
@@ -43,33 +54,29 @@ function toolchain(overrides: Partial<Toolchain> = {}): Toolchain {
   };
 }
 
-function scriptText(deps: readonly string[]): string {
-  return `# /// script\n# requires-python = ">=3.12"\n# dependencies = ${JSON.stringify(deps)}\n# ///\nimport sys\n`;
+function scriptText(deps: readonly string[], extra = ""): string {
+  return `# /// script\n# requires-python = ">=3.12"\n# dependencies = ${JSON.stringify(deps)}\n${extra}# ///\nimport sys\n`;
 }
 
-/** A script directory whose lock uv made with gate 1's flags. Async: the fake index shares this event loop. */
-async function lockedScript(deps: readonly string[] = ["alpha"]): Promise<string> {
+function scriptDir(deps: readonly string[], extra = ""): string {
   const dir = tempHome();
-  writeFileSync(join(dir, "script.py"), scriptText(deps));
-  const t = toolchain();
-  const proc = Bun.spawn(
-    [
-      "uv",
-      "lock",
-      "--script",
-      join(dir, "script.py"),
-      "--exclude-newer",
-      "P7D",
-      "--no-build",
-    ].concat(["--default-index", t.index]),
-    {
-      env: { PATH: t.path, HOME: t.realHome, UV_CACHE_DIR: t.cacheDir, UV_NO_CONFIG: "1" },
-      stderr: "pipe",
-    },
-  );
-  if ((await proc.exited) !== 0) throw new Error(await new Response(proc.stderr).text());
+  writeFileSync(join(dir, "script.py"), scriptText(deps, extra));
   return dir;
 }
+
+const vet = (dir: string, scriptsDir = tempHome()) =>
+  vetDependencies(dir, { toolchain: toolchain(), osv: osv.endpoint, scriptsDir });
+
+/** A script directory that passed vetDependencies. */
+async function lockedScript(deps: readonly string[] = ["alpha"]): Promise<string> {
+  const dir = scriptDir(deps);
+  const vetting = await vet(dir);
+  if (!vetting.ok) throw new Error(JSON.stringify(vetting.problems));
+  return dir;
+}
+
+const problems = (v: Vetting) => (v.ok ? [] : v.problems);
+const pinsOf = (v: Vetting) => (v.ok ? v.lock.pins.map((p) => `${p.name} ${p.version}`) : []);
 
 const ZERO_DEP_LOCK = `version = 1
 revision = 5
@@ -257,5 +264,82 @@ wheels = [{ url = "https://example.com/alpha.whl" }]
   test("without a venv or a lock it says the lock is missing", async () => {
     const err = await refusal(ensureVenv(tempHome(), toolchain()));
     expect(err.message).toContain("script.py.lock is missing");
+  });
+});
+
+describe("vetDependencies", () => {
+  test("a package with only an sdist is refused without asking OSV", async () => {
+    pypi.sdist("gamma", "1.0");
+    const vetting = await vet(scriptDir(["gamma"]));
+    expect(problems(vetting)).toEqual([
+      { kind: "unresolvable", detail: expect.stringContaining("gamma==1.0 has no usable wheels") },
+    ] as never);
+    expect(osv.requests).toHaveLength(0);
+  });
+
+  test("a version uploaded within 7 days is not picked", async () => {
+    pypi.wheel("alpha", "2.0", { requires: ["beta"], ageDays: 1 });
+    expect(pinsOf(await vet(scriptDir(["alpha"])))).toEqual(["alpha 1.0", "beta 1.0"]);
+    expect(problems(await vet(scriptDir(["alpha==2.0"])))[0]?.kind).toBe("unresolvable");
+  });
+
+  test("an advisory on an indirect dependency is refused", async () => {
+    osv.stop();
+    osv = fakeOsv({ beta: ["MAL-2026-1"] });
+    expect(problems(await vet(scriptDir(["alpha"])))).toEqual([
+      { kind: "advisory", pin: { name: "beta", version: "1.0" }, ids: ["MAL-2026-1"] },
+    ] as never);
+  });
+
+  test("OSV answering 500 is refused", async () => {
+    osv.stop();
+    osv = fakeOsv({}, { status: 500 });
+    expect(problems(await vet(scriptDir(["alpha"])))).toEqual([
+      { kind: "osv-unavailable", detail: "OSV answered 500" },
+    ]);
+  });
+
+  test("a script without dependencies is clean, asks OSV nothing, and gets a venv", async () => {
+    const dir = scriptDir([]);
+    const vetting = await vet(dir);
+    expect(vetting.ok && vetting.newPackages).toEqual([]);
+    expect(osv.requests).toHaveLength(0);
+    expect(existsSync(join((await ensureVenv(dir, toolchain())).dir, "pyvenv.cfg"))).toBe(true);
+  });
+
+  test("lists the pinned names the user has not approved", async () => {
+    const scripts = tempHome();
+    const dir = scriptDir(["alpha"]);
+    const fresh = await vet(dir, scripts);
+    expect(fresh.ok && fresh.newPackages).toEqual(["alpha", "beta"] as never);
+    await approvePackages(scripts, [normalizeName("alpha")]);
+    await approvePackages(scripts, [normalizeName("alpha")]);
+    expect([...(await readApproved(scripts))]).toEqual(["alpha"] as never);
+    const later = await vet(dir, scripts);
+    expect(later.ok && later.newPackages).toEqual(["beta"] as never);
+  });
+
+  test("reports every lock policy problem together with the advisories", async () => {
+    pypi.wheel("nohash", "1.0", { hashed: false });
+    const url = pypi.index.replace(/simple$/, "files/alpha-1.0-py3-none-any.whl");
+    const dir = scriptDir(
+      ["alpha", "nohash"],
+      `#\n# [tool.uv.sources]\n# alpha = { url = "${url}" }\n`,
+    );
+    osv.stop();
+    osv = fakeOsv({ beta: ["GHSA-0000-0000-0000"] });
+    expect(
+      problems(await vet(dir))
+        .map((p) => p.kind)
+        .sort(),
+    ).toEqual(["advisory", "foreign-source", "no-hash"]);
+  });
+
+  test("locks from scratch, not from a lock already in the directory", async () => {
+    pypi.wheel("alpha", "1.1", { requires: ["beta"] });
+    const dir = scriptDir(["alpha<1.1"]);
+    expect(pinsOf(await vet(dir))).toEqual(["alpha 1.0", "beta 1.0"]);
+    writeFileSync(join(dir, "script.py"), scriptText(["alpha"]));
+    expect(pinsOf(await vet(dir))).toEqual(["alpha 1.1", "beta 1.0"]);
   });
 });
