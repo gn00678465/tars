@@ -27,12 +27,27 @@ case "$TERM" in ""|dumb) edit= ;; *) edit=-e ;; esac
 IFS= read $edit -r -p "$1" line || exit 3
 printf '%s' "$line" >&3`;
 
-// The prompt is printed only once echo is off, so nothing typed in answer to it can show.
-const HIDDEN_READ = `trap 'stty echo' EXIT
+// Echo and line mode go off once, before the prompt, so no key typed in answer to it can show;
+// each character then comes back as a "*". Escape sequences (arrows, bracketed-paste markers) are
+// dropped rather than kept in the secret. Ctrl-C still raises SIGINT, and the EXIT trap puts the
+// terminal back.
+const HIDDEN_READ = `saved=$(stty -g) || exit 1
+trap 'stty "$saved"' EXIT
 trap 'exit 130' INT TERM HUP
-stty -echo || exit 1
+stty -echo -icanon min 1 time 0 || exit 1
 printf '%s' "$1" >&0
-IFS= read -r line || exit 3
+line=
+while IFS= read -r -n1 c; do
+  case $c in
+    '') break ;;
+    $'\\x04') [ -z "$line" ] && exit 3; break ;;
+    $'\\x7f'|$'\\b') [ -n "$line" ] && { line=\${line%?}; printf '\\b \\b' >&0; } ;;
+    $'\\e') IFS= read -r -n1 c
+      [ "$c" = '[' ] && while IFS= read -r -n1 c; do case $c in [@-~]) break ;; esac; done ;;
+    [[:cntrl:]]) ;;
+    *) line+=$c; printf '*' >&0 ;;
+  esac
+done
 printf '%s' "$line"`;
 
 export function openTty(): Terminal {
@@ -73,7 +88,10 @@ export function openTty(): Terminal {
     },
     askHidden: async (prompt) => {
       try {
-        return read(["sh", "-c", HIDDEN_READ, "sh", prompt], "cannot turn off the terminal's echo");
+        return read(
+          ["bash", "-c", HIDDEN_READ, "bash", prompt],
+          "cannot turn off the terminal's echo",
+        );
       } finally {
         write("\n");
       }

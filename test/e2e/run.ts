@@ -15,6 +15,7 @@ import {
 import { tmpdir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { startFakeApi, TOOL_USE_ID, type Captured, type Reply } from "./fake-api.ts";
+import { runDialog } from "./pty.ts";
 import {
   CLAUDE_LEAKS,
   diffSnapshots,
@@ -344,11 +345,13 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
       cwd: this.host.home,
     });
     await this.onPath();
-    const auth = await this.step({
+    // Typed at the terminal and pasted with bracketed paste on; claude-auth then checks that the
+    // token reaching the API is the bare one.
+    const auth = await runDialog(this.host, {
       name: "tars-auth-claude",
-      argv: ["tars", "auth", "claude"],
-      cwd: this.host.home,
-      stdin: `${CLAUDE_TOKEN}\n`,
+      command: "tars auth claude </dev/tty 2>/dev/tty",
+      tty: true,
+      turns: [{ expect: "claude token: ", send: `\x1b[200~${CLAUDE_TOKEN}\x1b[201~\n` }],
     });
     // agy reads the user's Google login from the keyring as service=gemini username=antigravity.
     const plant = await this.step({
@@ -364,9 +367,13 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
     });
     this.check(
       "setup",
-      "tars install and tars auth claude succeed inside the sandbox; the fake Google login is planted",
-      install.result.exitCode === 0 && auth.result.exitCode === 0 && plant.result.exitCode === 0,
-      `exit codes ${install.result.exitCode}/${auth.result.exitCode}/${plant.result.exitCode}; ${auth.files}/stdout.txt: ${auth.result.stdout.trim()}`,
+      "tars install and tars auth claude succeed inside the sandbox, the token showing as one star per character; the fake Google login is planted",
+      install.result.exitCode === 0 &&
+        auth.exitCode === 0 &&
+        auth.transcript.includes(`claude token: ${"*".repeat(CLAUDE_TOKEN.length)}\n`) &&
+        !auth.transcript.includes(CLAUDE_TOKEN) &&
+        plant.result.exitCode === 0,
+      `exit codes ${install.result.exitCode}/${auth.exitCode}/${plant.result.exitCode}; auth: ${auth.stdout.trim()} ${auth.stderr.trim()} missed ${auth.missed}; terminal ${JSON.stringify(auth.transcript)}`,
     );
   }
 

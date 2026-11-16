@@ -190,7 +190,8 @@ export async function gcalChecks(
       tty: true,
       turns: [
         { expect: "OAuth client ID: ", send: `${CLIENT_ID}\n` },
-        { expect: "OAuth client secret: ", send: `${CLIENT_SECRET}\n` },
+        // Pasted the way a terminal with bracketed paste on sends it.
+        { expect: "OAuth client secret: ", send: `\x1b[200~${CLIENT_SECRET}\x1b[201~\n` },
         { expect: "code_challenge_method=S256", send: "\x03" },
       ],
       waitMs: 20_000,
@@ -203,7 +204,7 @@ export async function gcalChecks(
     );
     check(
       "login-address",
-      "dist/tars shows Google's own authorization address on the terminal, with PKCE, a state and a loopback redirect, and never the client secret",
+      "dist/tars shows Google's own authorization address on the terminal, with PKCE, a state and a loopback redirect, and never the client secret: a bracketed paste of it shows one star per character",
       waiting.missed === undefined &&
         shown.startsWith("https://accounts.google.com/o/oauth2/v2/auth?") &&
         asked.client_id === CLIENT_ID &&
@@ -213,6 +214,7 @@ export async function gcalChecks(
         (asked.code_challenge ?? "").length === 43 &&
         (asked.state ?? "").length >= 43 &&
         !waiting.transcript.includes(CLIENT_SECRET) &&
+        waiting.transcript.includes(`OAuth client secret: ${"*".repeat(CLIENT_SECRET.length)}\n`) &&
         !(waiting.stdout + waiting.stderr).includes(CLIENT_SECRET) &&
         !waiting.stdout.includes("https://"),
       `missed ${waiting.missed}; asked ${JSON.stringify({ ...asked, state: `<${(asked.state ?? "").length} chars>`, code_challenge: `<${(asked.code_challenge ?? "").length} chars>` })}; stdout ${JSON.stringify(waiting.stdout)}`,
