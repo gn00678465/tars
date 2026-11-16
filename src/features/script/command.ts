@@ -1,7 +1,9 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { join } from "node:path";
+import { EXIT, TarsError } from "../../core/exit.ts";
 import type { Io } from "../../core/io.ts";
 import type { SecretStore } from "../../core/secrets.ts";
+import type { Terminal } from "../../core/terminal.ts";
 import {
   addNote,
   listScripts,
@@ -27,6 +29,10 @@ export interface ScriptCommandContext {
   sandboxHost(): Promise<SandboxHost>;
   outDirRules(): OutDirRules;
   toolchain(): Toolchain;
+  /** Whether an agent session started this tars (TARS_IN_SESSION). */
+  inSession(): boolean;
+  /** Opens the user's terminal; a TarsError when the process has none. */
+  terminal(): Terminal;
   exitWith(code: number): void;
 }
 
@@ -189,6 +195,41 @@ Examples:
     .action(async (name: string) => {
       const target = await retireScript(layout(), await loadScript(layout(), name), ctx.now());
       ctx.io.out(`retired ${name} to ${target}`);
+    });
+
+  script
+    .command("approve")
+    .description(
+      "Gate 3, for the user: read a submission in your own terminal and decide whether it enters the library.",
+    )
+    .argument("<name>", "script name", parseName)
+    .addHelpText(
+      "after",
+      `
+Asks its questions on /dev/tty, never stdin, and refuses inside a tars session.
+Exit codes: 0 approved, 1 not approved or failure, 2 usage error.
+
+Examples:
+  tars script approve bark-push`,
+    )
+    .action(async (name: string) => {
+      if (ctx.inSession())
+        throw new TarsError(
+          "approve is for the user: run it in your own terminal, outside the tars session",
+        );
+      const terminal = ctx.terminal();
+      try {
+        const typed = await terminal.ask(`Type ${name} to approve it, anything else cancels: `);
+        if (typed !== name) {
+          ctx.io.err(
+            `not approved (${typed === undefined ? "end of input" : "name did not match"})`,
+          );
+          return ctx.exitWith(EXIT.failure);
+        }
+        throw new TarsError(`${name} was confirmed, but this build cannot install a script yet`);
+      } finally {
+        terminal.close();
+      }
     });
 }
 

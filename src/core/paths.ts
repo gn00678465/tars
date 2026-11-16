@@ -22,6 +22,9 @@ export const DATA_DIR_VAR = "TARS_DATA_DIR";
 
 export const LAUNCH_DIR_VAR = "TARS_LAUNCH_DIR";
 
+/** Set for every harness tars starts; `tars script approve` refuses to run where it is set. */
+export const IN_SESSION_VAR = "TARS_IN_SESSION";
+
 export function resolvePaths(env: Env): TarsPaths {
   const home = env.HOME;
   if (!home || !isAbsolute(home)) throw new TarsError("HOME must be set to an absolute path");

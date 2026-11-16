@@ -114,6 +114,13 @@ test("tars run inside either harness resolves the same MEMORY.md as the launchin
   for (const plan of plans) expect(resolvePaths(plan.env).memory).toBe(paths.memory);
 });
 
+test("both harnesses start with TARS_IN_SESSION set, so approve refuses inside them", async () => {
+  const { deps, plans } = await installedHome();
+  expect(await run(["claude"], deps)).toBe(7);
+  expect(await run(["agy"], deps)).toBe(7);
+  expect(plans.map((plan) => plan.env.TARS_IN_SESSION)).toEqual(["1", "1"]);
+});
+
 describe("tars agy", () => {
   test("plans agy in the workspace with tars's HOME and XDG_CONFIG_HOME, keeping the D-Bus address", async () => {
     const { deps, plans, paths } = await installedHome();

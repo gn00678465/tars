@@ -3,6 +3,7 @@ import { EXIT, TarsError } from "./core/exit.ts";
 import { processIo, readSecret } from "./core/io.ts";
 import { resolvePaths } from "./core/paths.ts";
 import { keyringStore } from "./core/secrets.ts";
+import { openTty, type Terminal } from "./core/terminal.ts";
 import { registerAuth, type AuthDeps } from "./features/auth/auth.ts";
 import { skillsFromBundle } from "./features/install/embedded.ts";
 import { registerInstall, type InstallDeps } from "./features/install/install.ts";
@@ -13,7 +14,12 @@ import { scriptRuntime } from "./features/script/runtime.ts";
 import { launch } from "./features/session/launch.ts";
 import { registerSessions, type SessionDeps } from "./features/session/session.ts";
 
-export type Deps = InstallDeps & SessionDeps & AuthDeps;
+export type Deps = InstallDeps &
+  SessionDeps &
+  AuthDeps & {
+    /** Throws a TarsError when the process has no controlling terminal. */
+    openTerminal(): Terminal;
+  };
 
 export function defaultDeps(): Deps {
   return {
@@ -23,6 +29,7 @@ export function defaultDeps(): Deps {
     cwd: process.cwd(),
     secrets: keyringStore,
     readSecret,
+    openTerminal: openTty,
     launch,
     embedded: () => skillsFromBundle(Bun.embeddedFiles),
   };
@@ -55,6 +62,7 @@ Examples:
     now: () => new Date(),
     secrets: deps.secrets,
     ...scriptRuntime(deps.env, deps.cwd),
+    terminal: deps.openTerminal,
     exitWith,
   });
   registerSecretCommands(program, {

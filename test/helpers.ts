@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../src/core/io.ts";
 import type { SecretName, SecretStore } from "../src/core/secrets.ts";
+import type { Terminal } from "../src/core/terminal.ts";
 import type { Deps } from "../src/main.ts";
 
 export interface CapturedIo extends Io {
@@ -52,8 +53,44 @@ export function testDeps(overrides: Partial<Deps> = {}): TestDeps {
     secrets: fakeSecrets(),
     embedded: async () => [],
     readSecret: () => Promise.reject(new Error("test did not provide stdin")),
+    openTerminal: () => {
+      throw new Error("test did not provide a terminal");
+    },
     launch: () => Promise.reject(new Error("test did not provide a launcher")),
     ...overrides,
     io: captureIo(),
+  };
+}
+
+type Answer = string | undefined | (() => Promise<string | undefined>);
+
+export interface ScriptedTerminal extends Terminal {
+  /** Everything written and every prompt, in order. */
+  readonly transcript: string[];
+  readonly closed: boolean;
+}
+
+/**
+ * Answers prompts from a list; past its end every prompt gets end of input. A function answer
+ * runs when its prompt is asked, so a test can change the disk at that point of the conversation.
+ */
+export function scriptedTerminal(answers: readonly Answer[]): ScriptedTerminal {
+  const transcript: string[] = [];
+  let next = 0;
+  let closed = false;
+  return {
+    transcript,
+    get closed() {
+      return closed;
+    },
+    write: (text) => void transcript.push(text),
+    ask: async (prompt) => {
+      transcript.push(prompt);
+      const answer = answers[next++];
+      return typeof answer === "function" ? answer() : answer;
+    },
+    close: () => {
+      closed = true;
+    },
   };
 }

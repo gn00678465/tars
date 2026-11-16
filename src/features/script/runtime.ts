@@ -1,7 +1,7 @@
 import { isAbsolute, join } from "node:path";
 import { accountHome } from "../../core/account.ts";
 import { TarsError } from "../../core/exit.ts";
-import { LAUNCH_DIR_VAR, resolvePaths, type Env } from "../../core/paths.ts";
+import { IN_SESSION_VAR, LAUNCH_DIR_VAR, resolvePaths, type Env } from "../../core/paths.ts";
 import type { OutDirRules } from "./out-dir.ts";
 import type { SandboxHost } from "./sandbox.ts";
 import { seccompHelper } from "./seccomp.ts";
@@ -14,6 +14,7 @@ export function scriptRuntime(env: Env, cwd: string) {
   const realHome = () => (home ??= accountHome());
   const bins = () => [...new Set([resolvePaths(env).bin, join(realHome(), ".local", "bin")])];
   return {
+    inSession: () => (env[IN_SESSION_VAR] ?? "") !== "",
     sandboxHost: async (): Promise<SandboxHost> => {
       const { data } = resolvePaths(env);
       return {

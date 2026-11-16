@@ -12,6 +12,7 @@ import {
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { approveSample } from "../features/script/sample.ts";
+import { runDialog } from "./pty.ts";
 import {
   binaryDirsFor,
   EXIT_SKIP,
@@ -479,6 +480,60 @@ async function inner(): Promise<number> {
         existsSync(join(venv, "pyvenv.cfg")) &&
         readFileSync(join(venv, "pyvenv.cfg"), "utf8").includes("uv = "),
       `exit ${built.exitCode}: ${built.stdout.trim()} ${built.stderr.slice(0, 300)}`,
+    );
+
+    const CONFIRM = "Type probe to approve it";
+    const noTty = await runDialog(host, {
+      name: "approve-no-tty",
+      command: "tars script approve probe",
+      tty: false,
+      turns: [],
+    });
+    check(
+      "approve-no-tty",
+      "approve without a controlling terminal exits 1 and asks nothing",
+      noTty.exitCode === 1 && noTty.stderr.includes("/dev/tty") && noTty.stdout === "",
+      `exit ${noTty.exitCode}: ${noTty.stderr.trim()}`,
+    );
+
+    const inSession = await runDialog(host, {
+      name: "approve-in-session",
+      command: "tars script approve probe",
+      env: { TARS_IN_SESSION: "1" },
+      tty: true,
+      turns: [],
+    });
+    check(
+      "approve-in-session",
+      "approve with TARS_IN_SESSION set exits 1 before it touches the terminal",
+      inSession.exitCode === 1 &&
+        inSession.stderr.includes("outside the tars session") &&
+        inSession.transcript === "",
+      `exit ${inSession.exitCode}: ${inSession.stderr.trim()}; terminal showed ${JSON.stringify(inSession.transcript)}`,
+    );
+
+    const answer = (name: string, send: string) =>
+      runDialog(host, {
+        name,
+        command: "tars script approve probe",
+        tty: true,
+        turns: [{ expect: CONFIRM, send }],
+      });
+    const typed = await answer("approve-tty-typed", "probe\n");
+    const wrong = await answer("approve-tty-wrong", "prob\n");
+    const eof = await answer("approve-tty-eof", "\x04");
+    check(
+      "approve-tty",
+      "the compiled tars asks on /dev/tty, not stdout, and reads the typed line, another line, and end of input apart",
+      [typed, wrong, eof].every(
+        (r) => r.missed === undefined && !r.timedOut && r.exitCode === 1 && r.stdout === "",
+      ) &&
+        typed.stderr.includes("was confirmed") &&
+        wrong.stderr.includes("name did not match") &&
+        eof.stderr.includes("end of input"),
+      [typed, wrong, eof]
+        .map((r) => `${r.name}: exit ${r.exitCode}, missed ${r.missed}, ${r.stderr.trim()}`)
+        .join(" | "),
     );
 
     const lib = join(
