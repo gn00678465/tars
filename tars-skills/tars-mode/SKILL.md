@@ -1,6 +1,6 @@
 ---
 name: tars-mode
-description: 使用者的訊息以「hey tars」或「tars」開頭時使用，依後面的內容選一個 playbook 或 skill 執行。也用於記帳、查帳、排讀書計畫或備考、檢查學習進度、問學習方法、把模糊想法整理成可執行計畫、覆盤一天的工作、做決策前先列風險、研究科技題材的供應鏈瓶頸與個股。只查事實時不用。
+description: 使用者的訊息以「hey tars」或「tars」開頭時使用，依後面的內容選一個 playbook 或 skill 執行。也用於推播、下載、呼叫外部 API 或服務、記帳、查帳、排讀書計畫或備考、檢查學習進度、問學習方法、把模糊想法整理成可執行計畫、覆盤一天的工作、做決策前先列風險、研究科技題材的供應鏈瓶頸與個股。只查事實時不用。
 ---
 
 # TARS mode
@@ -28,6 +28,7 @@ description: 使用者的訊息以「hey tars」或「tars」開頭時使用，�
 | 探索科技題材的供應鏈瓶頸、找台股與美股的卡點、篩選受惠股 | `playbooks/theme-bottleneck-scan.md` |
 | 挑戰單一公司是不是蹭熱點、核實某概念股是不是核心供應商 | `playbooks/company-claim-challenge.md` |
 | 比較 2 到 5 檔台股或美股同業，誰的邏輯更硬、誰更值得優先研究 | `playbooks/cross-market-arena.md` |
+| 推播、下載、呼叫外部 API 或服務 | `playbooks/script.md` |
 | 「記住」「忘掉」「我之前說過什麼」 | `memory` skill |
 
 playbook 的路徑相對於這個 skill 的目錄。
