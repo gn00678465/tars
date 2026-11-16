@@ -7,6 +7,7 @@ import { registerAuth, type AuthDeps } from "./features/auth/auth.ts";
 import { skillsFromBundle } from "./features/install/embedded.ts";
 import { registerInstall, type InstallDeps } from "./features/install/install.ts";
 import { registerMemoryCommands } from "./features/memory/command.ts";
+import { registerScriptCommands } from "./features/script/command.ts";
 import { launch } from "./features/session/launch.ts";
 import { registerSessions, type SessionDeps } from "./features/session/session.ts";
 
@@ -39,12 +40,18 @@ Examples:
   tars auth claude
   tars claude
   tars agy
-  tars memory remember --id pref-tone --section 偏好 --text "回覆先講結論。" --source user`,
+  tars memory remember --id pref-tone --section 偏好 --text "回覆先講結論。" --source user
+  tars script search push notification`,
   );
   registerInstall(program, deps);
   registerAuth(program, deps);
   registerSessions(program, deps, exitWith);
   registerMemoryCommands(program, { io: deps.io, memoryPath: () => resolvePaths(deps.env).memory });
+  registerScriptCommands(program, {
+    io: deps.io,
+    scriptsDir: () => resolvePaths(deps.env).scripts,
+    now: () => new Date(),
+  });
   return program;
 }
 

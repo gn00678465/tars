@@ -12,6 +12,8 @@ export interface TarsPaths {
   readonly skills: string;
   readonly workspace: string;
   readonly harness: string;
+  /** The script library, its submissions and their logs. */
+  readonly scripts: string;
   /** Directory `tars install` copies the executable into. */
   readonly bin: string;
 }
@@ -34,6 +36,7 @@ export function resolvePaths(env: Env): TarsPaths {
     skills: join(data, "skills"),
     workspace: join(data, "workspace"),
     harness: join(data, "harness"),
+    scripts: join(data, "scripts"),
     bin: xdgDir(env.XDG_BIN_HOME, home, "bin"),
   };
 }
