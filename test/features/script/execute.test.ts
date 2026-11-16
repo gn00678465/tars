@@ -171,5 +171,6 @@ describe("trialNetwork", () => {
       hosts: ["api.example.com"],
     });
     expect(trialNetwork(meta("local-write", '["*"]'))).toEqual({ kind: "open" });
+    expect(trialNetwork(meta("external-write", '["*"]'))).toEqual({ kind: "none" });
   });
 });
