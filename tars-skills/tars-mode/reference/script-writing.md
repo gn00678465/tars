@@ -1,6 +1,6 @@
 # 寫一支腳本
 
-`playbooks/script.md` 步驟 7 用。`tars script submit` 會檢查的規則，違反時它會說哪一條；這裡寫它檢查不到、要靠寫的人做對的事，以及最常被它擋下的寫法。
+`playbooks/script-mode.md` 步驟 7 用。`tars script submit` 會檢查的規則，違反時它會說哪一條；這裡寫它檢查不到、要靠寫的人做對的事，以及最常被它擋下的寫法。
 
 ## 骨架
 

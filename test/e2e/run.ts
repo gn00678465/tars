@@ -100,8 +100,8 @@ const SESSION_MARKERS = {
 } as const;
 const PROMPT = "Reply with OK.";
 /** The words tars-mode routes to the script playbook by, in its description and its route table. */
-const SCRIPT_ROUTE = "推播、下載、呼叫外部 API 或服務";
-const SCRIPT_FILES = ["playbooks/script.md", "reference/script-writing.md"];
+const SCRIPT_ROUTE = "呼叫外部服務或 API 做事或取資料";
+const SCRIPT_FILES = ["playbooks/script-mode.md", "reference/script-writing.md"];
 const remember = (id: string, text: string) =>
   `tars memory remember --id ${id} --section 偏好 --text '${text}' --source user`;
 const WRITEBACK = {
@@ -386,12 +386,12 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
     const skill = read(onHost(this.host, join(installed, "SKILL.md"))) ?? "";
     const description = skill.match(/^description: (.*)$/m)?.[1] ?? "";
     const row = new RegExp(
-      `^\\| [^|\\n]*${RegExp.escape(SCRIPT_ROUTE)}[^|\\n]* \\| \`playbooks/script\\.md\` \\|$`,
+      `^\\| [^|\\n]*${RegExp.escape(SCRIPT_ROUTE)}[^|\\n]* \\| \`playbooks/script-mode\\.md\` \\|$`,
       "m",
     ).test(skill);
     this.check(
       "install-tars-mode-script-route",
-      `the installed tars-mode routes ${SCRIPT_ROUTE} to playbooks/script.md and names them in its description`,
+      `the installed tars-mode routes ${SCRIPT_ROUTE} to playbooks/script-mode.md and names them in its description`,
       row && description.includes(SCRIPT_ROUTE),
       `${join(installed, "SKILL.md")}: route row ${row ? "present" : "absent"}; description ${description.includes(SCRIPT_ROUTE) ? "has" : "lacks"} the words`,
     );

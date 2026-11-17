@@ -253,6 +253,39 @@ export async function readEvidence(submission: Submission): Promise<Evidence> {
   return { trials, ignoredTrials, review: parseReview(text, submission.scriptSha) };
 }
 
+/** Gate 2 still to do, or only the user's approve left. A stale report counts as no report. */
+export type PendingState = "awaiting-review" | "awaiting-approve";
+
+/**
+ * Every submission under review. approve leaves pending/<name>/current dangling, which means
+ * nothing is submitted; a submission that fails its checks is reported, not thrown.
+ */
+export async function listSubmissions(scriptsDir: string): Promise<{
+  submissions: { submission: Submission; state: PendingState }[];
+  broken: { name: string; reason: string }[];
+}> {
+  const root = join(scriptsDir, "pending");
+  const names = (await readdir(root).catch(() => [] as string[])).filter((n) => SLUG.test(n));
+  const submissions: { submission: Submission; state: PendingState }[] = [];
+  const broken: { name: string; reason: string }[] = [];
+  for (const name of names.toSorted()) {
+    if ((await realpath(join(root, name, "current")).catch(() => undefined)) === undefined)
+      continue;
+    try {
+      const submission = await readSubmission(scriptsDir, name);
+      const { review } = await readEvidence(submission);
+      submissions.push({
+        submission,
+        state: review.kind === "attached" ? "awaiting-approve" : "awaiting-review",
+      });
+    } catch (err) {
+      if (!(err instanceof TarsError)) throw err;
+      broken.push({ name, reason: err.message });
+    }
+  }
+  return { submissions, broken };
+}
+
 function submission(
   name: string,
   dir: string,

@@ -21,7 +21,13 @@ import type { GoogleEndpoints } from "./google.ts";
 import { hostText, OUTPUT_LIMIT, parseSlug, type Domain, type ScriptMeta } from "./metadata.ts";
 import type { OsvEndpoint } from "./osv.ts";
 import { prepareOutDir, type OutDirRules } from "./out-dir.ts";
-import { attachReview, readSubmission, REPORT_LIMIT } from "./pending.ts";
+import {
+  attachReview,
+  listSubmissions,
+  readSubmission,
+  REPORT_LIMIT,
+  type PendingState,
+} from "./pending.ts";
 import type { SandboxHost, SandboxResult } from "./sandbox.ts";
 import type { Toolchain } from "./supply.ts";
 
@@ -57,14 +63,50 @@ export function registerScriptCommands(program: Command, ctx: ScriptCommandConte
 
   script
     .command("list")
-    .description("List the scripts in the library.")
+    .description("List the scripts in the library and the ones submitted for approval.")
     .option("--json", "print the result as JSON")
-    .addHelpText("after", "\nExit codes: 0 done, 1 failure, 2 usage error.")
+    .addHelpText(
+      "after",
+      `
+Each script has a state. Only approved scripts run.
+  approved           in the library
+  awaiting-review    submitted; the adversarial review is not attached yet
+  awaiting-approve   reviewed; waits for the user's tars script approve
+An approved script with a newer submission also shows the state of that update.
+
+Exit codes: 0 done, 1 failure, 2 usage error.`,
+    )
     .action(async (opts: { json?: boolean }) => {
-      const { scripts, broken } = await listScripts(layout());
-      for (const b of broken) ctx.io.err(`warning: skipped ${b.reason}`);
-      if (opts.json) ctx.io.out(JSON.stringify(scripts.map((s) => summaryJson(s.meta))));
-      else for (const s of scripts) ctx.io.out(summaryLine(s.meta));
+      const [library, pending] = await Promise.all([
+        listScripts(layout()),
+        listSubmissions(ctx.scriptsDir()),
+      ]);
+      for (const b of library.broken) ctx.io.err(`warning: skipped ${b.reason}`);
+      for (const b of pending.broken) ctx.io.err(`warning: skipped the submission of ${b.reason}`);
+      const updates = new Map(pending.submissions.map((p) => [p.submission.name, p.state]));
+      const approved = new Set(library.scripts.map((s) => s.name));
+      const entries: ListEntry[] = [
+        ...library.scripts.map((s) => ({
+          meta: s.meta,
+          state: "approved" as const,
+          update: updates.get(s.name) ?? null,
+        })),
+        ...pending.submissions
+          .filter((p) => !approved.has(p.submission.name))
+          .map((p) => ({ meta: p.submission.meta, state: p.state, update: null })),
+      ].toSorted((a, b) => a.meta.name.localeCompare(b.meta.name));
+      if (opts.json)
+        ctx.io.out(
+          JSON.stringify(
+            entries.map((e) => ({ ...summaryJson(e.meta), state: e.state, update: e.update })),
+          ),
+        );
+      else
+        for (const e of entries) {
+          const state = e.update ? `${e.state}, update ${e.update}` : e.state;
+          const { name, effects, secret, summary } = e.meta;
+          ctx.io.out(`${name}\t${state}\t${effects}\t${secret ?? "-"}\t${summary}`);
+        }
     });
 
   script
@@ -405,6 +447,13 @@ function parseLine(value: string): string {
 
 const domainText = (d: Domain) =>
   d.kind === "any" ? "*" : d.kind === "secret-url" ? "secret:url" : hostText(d);
+
+interface ListEntry {
+  readonly meta: ScriptMeta;
+  readonly state: "approved" | PendingState;
+  /** The state of a newer submission of an approved script. */
+  readonly update: PendingState | null;
+}
 
 function summaryJson(meta: ScriptMeta) {
   return {

@@ -18,7 +18,11 @@ import {
   addNote,
   scriptsLayout,
 } from "../../../src/features/script/library.ts";
-import { readEvidence, readSubmission } from "../../../src/features/script/pending.ts";
+import {
+  attachReview,
+  readEvidence,
+  readSubmission,
+} from "../../../src/features/script/pending.ts";
 import { approveCommand } from "../../../src/features/script/runtime.ts";
 import { draftDir, plainScript, submitted } from "./gates.ts";
 import { installSample, sampleScript } from "./sample.ts";
@@ -45,9 +49,45 @@ describe("tars script list", () => {
         summary: "推播一則通知到手機",
         secret: "bark",
         effects: "external-write",
+        state: "approved",
+        update: null,
       },
     ]);
     expect(deps.io.stderr.join("\n")).toContain("broken");
+  });
+
+  test("lists submissions with their state next to the library, and only approved ones run", async () => {
+    const { scripts, deps } = setup();
+    installSample(scripts, "bark-push");
+    await attachReview(await submitted(scripts, plainScript("bark-push")), "tried x\n", new Date());
+    await submitted(scripts, plainScript("gcal-day"));
+    await attachReview(await submitted(scripts, plainScript("finmind")), "tried y\n", new Date());
+    mkdirSync(join(scripts, "pending", "download"), { recursive: true });
+    symlinkSync("20990101T000000-000000", join(scripts, "pending", "download", "current"));
+
+    expect(await tars(deps, "list", "--json")).toBe(0);
+    const listed = JSON.parse(deps.io.stdout.join(""));
+    expect(
+      listed.map((s: { name: string; state: string; update: string | null }) => [
+        s.name,
+        s.state,
+        s.update,
+      ]),
+    ).toEqual([
+      ["bark-push", "approved", "awaiting-approve"],
+      ["finmind", "awaiting-approve", null],
+      ["gcal-day", "awaiting-review", null],
+    ]);
+    expect(deps.io.stderr).toEqual([]);
+
+    deps.io.stdout.length = 0;
+    expect(await tars(deps, "list")).toBe(0);
+    expect(deps.io.stdout[0]).toStartWith("bark-push\tapproved, update awaiting-approve\t");
+    expect(await tars(deps, "search", "prints", "--json")).toBe(0);
+    expect(JSON.parse(deps.io.stdout.at(-1) ?? "").map((s: { name: string }) => s.name)).toEqual(
+      [],
+    );
+    expect(await tars(deps, "show", "finmind")).toBe(1);
   });
 
   test("an empty library lists nothing", async () => {

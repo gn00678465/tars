@@ -1,20 +1,43 @@
-# Script
+# Script mode
 
 ## 目的
 
-使用者要的外部動作（推播、下載、呼叫某個 API）完成，而且是由使用者核可過、在沙盒裡執行的腳本完成的。
+腳本是 tars 確定性的能力：同一件事每次照同一段程式做，不靠逐步推理。腳本庫是使用者自己的，裡面有哪些腳本因人而異，也會增減，所以每次都用 `tars script` 指令查，不憑記憶。
+
+使用者要的事完成，而且是由使用者核可過、在沙盒裡執行的腳本完成的：
+
+- 庫裡有腳本做得到時，執行它。
+- 庫裡的腳本差一點就做得到時，改那支腳本。
+- 庫裡沒有時，寫一支新的。
+
+改寫與新寫都要經過三道關，使用者核可後入庫，下次直接執行。
 
 ## 前提條件
 
-- 進入：要對外部服務做事或取資料，而且這件事會重複做、要用金鑰，或會寫到外部。例如「推播一則通知」「把這個網址的檔案存下來」。
+- 進入：要呼叫外部服務或 API 做事或取資料，而且這件事會重複做、要用金鑰，或會寫到外部。使用者問庫裡有哪些腳本、腳本的狀態時也進入。
 - 不進入：只查一次公開資訊，用自己的網頁工具。記帳用 `bookkeeping.md`，記憶用 `memory` skill。
 - 開始前：`tars` 指令可以執行。`tars script list` 失敗時，把錯誤訊息原樣告訴使用者，請使用者重新安裝 tars，不自己修。
+
+## 腳本的狀態
+
+`tars script list --json` 列出庫裡與送審中的腳本，每一支有 `state`：
+
+| `state` | 意思 | 能不能 `run` | 接下來 |
+|---|---|---|---|
+| `approved` | 已入庫 | 能 | — |
+| `awaiting-review` | 已 `submit`，還沒附上對抗式檢查的報告 | 不能 | 從步驟 9 繼續 |
+| `awaiting-approve` | 報告已附上，等使用者核可 | 不能 | 從步驟 11 繼續 |
+
+`approved` 的腳本 `update` 不是 `null` 時，有一版更新在送審，狀態是 `update` 的值。這時庫裡那一版照常能 `run`，執行的是舊版。`search` 只找 `approved` 的腳本。
+
+使用者問有哪些腳本或腳本的狀態時，執行 `tars script list`，每一支回覆名稱、狀態與用途。到此完成。
 
 ## 步驟
 
 1. 從請求取 2 到 3 個關鍵字，執行 `tars script search <關鍵字1> <關鍵字2> --json`。
 2. 有合用的命中時，執行 `tars script show <名稱>`，讀呼叫方式、結束碼與 notes，再到步驟 3。輸出是 `[]` 或命中的都不合用時，執行 `tars script list --json`，讀每一支的 `summary`：
-   - 有一支能做這件事時，執行 `tars script note <名稱> "搜尋用詞：<這次的關鍵字>"`，下次搜得到它。再 `show` 它，到步驟 3。
+   - 有一支 `approved` 的能做這件事時，執行 `tars script note <名稱> "搜尋用詞：<這次的關鍵字>"`，下次搜得到它。再 `show` 它，到步驟 3。
+   - 能做這件事的那支不是 `approved` 時，告訴使用者它的狀態，照上面「腳本的狀態」表的「接下來」繼續，不另寫一支。
    - 沒有時，跳到步驟 6。
 3. 執行 `tars script run <名稱> -- <參數>`。腳本要存檔時寫成 `tars script run <名稱> --out <目錄> -- <參數>`，`--out` 放在 `--` 前面，放在後面會變成腳本的參數。目錄用 `out/<子目錄>`，或 `$TARS_LAUNCH_DIR`（使用者開 session 時所在的目錄）底下的子目錄。相對路徑以 shell 的目前目錄為準。session 從 workspace 開始，所以 `out/<子目錄>` 落在 workspace 的 `out/` 底下。換過目錄時寫絕對路徑。
 4. 照 `show` 列的結束碼解讀結果。124 是逾時，128 以上是被訊號中斷。結束碼 1 而且 stderr 以 `error: ` 開頭時，是 tars 在腳本開始前就拒絕了，照那段訊息處理。
@@ -34,7 +57,7 @@
 - 腳本宣告的金鑰在 `submit` 時就要在 keyring 裡，沒有時 gate 1 不通過。要寫用金鑰的腳本時，先請使用者設好金鑰。
 - 請使用者設金鑰前，先執行 `tars secret list`。它列出每個種類、類型，以及 keyring 裡有沒有值，不印值。列為 `stored` 的不再請使用者設。
 - Google 的服務（例如行事曆）用 `google-oauth` 型別的金鑰。腳本只拿到約一小時有效的 access token；OAuth client 與 refresh token 留在 keyring。
-  - keyring 沒有時，請使用者在自己的終端機執行 `tars secret login <種類>`，例如 `tars secret login gcal`。它會問 client ID 與 client secret，印出一個網址讓使用者在瀏覽器同意。
+  - keyring 沒有時，請使用者在自己的終端機執行 `tars secret login <種類>`。它會問 client ID 與 client secret，印出一個網址讓使用者在瀏覽器同意。
   - 使用者要先在自己的 Google Cloud 專案做三件事：啟用要用的 API（例如 Google Calendar API）；建一個「Desktop app」型別的 OAuth client，client secret 只在建立時看得到，要當場複製；在 OAuth 同意畫面按「Publish app」。停在 Testing 的話，登入七天後失效。
   - 預設只要求讀自己日曆行程的權限。腳本要別的權限時，請使用者加 `--scope <scope>` 重新登入。
   - 不自己執行 `tars secret login`，它在 session 裡會拒絕。不請使用者把 client secret 或 token 貼進對話。
@@ -49,10 +72,14 @@
 
 ## 驗證
 
-- 「用 Bark 推播一則通知說會議改到三點」，庫裡有 `bark-push` → 先有 `tars script search`，再有 `tars script run bark-push`，沒有寫新腳本。
-- 「幫我看下週一的 calendar」，關鍵字只用英文，`search` 回 `[]`，庫裡有 `gcal-day` → 接著有 `tars script list --json` 與 `tars script note gcal-day`，再 `run gcal-day`，沒有寫新腳本。
+下面的 `<腳本>` 是庫裡某一支腳本的名稱，`<種類>` 是它的金鑰種類。
+
+- 一個外部服務的請求，庫裡有 `approved` 的 `<腳本>` 做得到 → 先有 `tars script search`，再有 `tars script run <腳本>`，沒有寫新腳本。
+- 同一個請求，關鍵字和 `<腳本>` 的說明用不同語言，`search` 回 `[]` → 接著有 `tars script list --json` 與 `tars script note <腳本>`，再 `run`，沒有寫新腳本。
+- 同一個請求，`<腳本>` 是 `awaiting-approve` → 回覆它在等核可，交出 `tars script approve <腳本>` 給使用者，沒有 `run`，也沒有寫新腳本。
 - 同一個請求，庫裡沒有 → 回覆問要不要寫一支，使用者同意後依序出現 `submit`、subagent 的 `trial` 與 `review`，最後交出 `approve` 指令，agent 自己沒有執行 `approve`。
+- 「有哪些腳本」 → `tars script list`，回覆每一支的名稱、狀態與用途。
 - 腳本要金鑰而 keyring 沒有 → 回覆請使用者執行 `tars secret set <種類>`，對話裡沒有出現金鑰。
-- 「我明天有哪些行程」，庫裡有 `gcal-day`，而 `run` 回報 `invalid_grant` → 回覆請使用者執行 `tars secret login gcal`，agent 自己沒有執行它。
-- 「把 bark-push 移掉」 → `tars script retire bark-push`，再 `tars script list --json`；沒有其他腳本用 `bark` 時，回覆請使用者執行 `tars secret delete bark`。agent 沒有在使用者要求之前執行 `retire`。
+- 用 Google 金鑰的 `<腳本>` 的 `run` 回報 `invalid_grant` → 回覆請使用者執行 `tars secret login <種類>`，agent 自己沒有執行它。
+- 「把 `<腳本>` 移掉」 → `tars script retire <腳本>`，再 `tars script list --json`；沒有其他腳本用 `<種類>` 時，回覆請使用者執行 `tars secret delete <種類>`。agent 沒有在使用者要求之前執行 `retire`。
 - 「現在台北幾度」 → 不進這個 playbook，用網頁工具查。
