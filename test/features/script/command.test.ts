@@ -49,6 +49,7 @@ describe("tars script list", () => {
         summary: "推播一則通知到手機",
         secret: "bark",
         effects: "external-write",
+        version: "0123456789abcdef",
         state: "approved",
       },
     ]);
@@ -75,7 +76,10 @@ describe("tars script list", () => {
 
     deps.io.stdout.length = 0;
     expect(await tars(deps, "list")).toBe(0);
-    expect(deps.io.stdout[0]).toStartWith("bark-push\tawaiting-approve\t");
+    const bark = listed[0] as { version: string };
+    expect(bark.version).toMatch(/^[0-9a-f]{16}$/);
+    expect(bark.version).not.toBe("0123456789abcdef");
+    expect(deps.io.stdout[0]).toStartWith(`bark-push\t${bark.version}\tawaiting-approve\t`);
     expect(await tars(deps, "search", "prints", "--json")).toBe(0);
     expect(JSON.parse(deps.io.stdout.at(-1) ?? "").map((s: { name: string }) => s.name)).toEqual(
       [],

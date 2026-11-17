@@ -93,8 +93,9 @@ Each script has a state. Only approved scripts run.
   approved           in the library
   awaiting-review    submitted; the adversarial review is not attached yet
   awaiting-approve   reviewed; waits for the user's tars script approve
-A script shows the state of its newest version. An approved script with a newer
-submission shows that submission's state, and run keeps running the approved version.
+Each script is listed once, as its newest version: the version id it has, or will have once
+approved, and that version's state. An approved script with a newer submission shows the
+submission, and run keeps running the approved version.
 
 Exit codes: 0 done, 1 failure, 2 usage error.`,
     )
@@ -105,21 +106,27 @@ Exit codes: 0 done, 1 failure, 2 usage error.`,
       ]);
       for (const b of library.broken) ctx.io.err(`warning: skipped ${b.reason}`);
       for (const b of pending.broken) ctx.io.err(`warning: skipped the submission of ${b.reason}`);
-      const latest = new Map(pending.submissions.map((p) => [p.submission.name, p]));
+      const submitted = new Set(pending.submissions.map((p) => p.submission.name));
       const entries: ListEntry[] = [
         ...library.scripts
-          .filter((s) => !latest.has(s.name))
-          .map((s) => ({ meta: s.meta, state: "approved" as const })),
-        ...pending.submissions.map((p) => ({ meta: p.submission.meta, state: p.state })),
+          .filter((s) => !submitted.has(s.name))
+          .map((s) => ({ meta: s.meta, version: s.version, state: "approved" as const })),
+        ...pending.submissions.map(({ submission, state }) => ({
+          meta: submission.meta,
+          version: submission.version,
+          state,
+        })),
       ].toSorted((a, b) => a.meta.name.localeCompare(b.meta.name));
       if (opts.json)
         ctx.io.out(
-          JSON.stringify(entries.map((e) => ({ ...summaryJson(e.meta), state: e.state }))),
+          JSON.stringify(
+            entries.map((e) => ({ ...summaryJson(e.meta), version: e.version, state: e.state })),
+          ),
         );
       else
         for (const e of entries) {
           const { name, effects, secret, summary } = e.meta;
-          ctx.io.out(`${name}\t${e.state}\t${effects}\t${secret ?? "-"}\t${summary}`);
+          ctx.io.out(`${name}\t${e.version}\t${e.state}\t${effects}\t${secret ?? "-"}\t${summary}`);
         }
     });
 
@@ -467,6 +474,7 @@ const domainText = (d: Domain) =>
 
 interface ListEntry {
   readonly meta: ScriptMeta;
+  readonly version: string;
   readonly state: "approved" | PendingState;
 }
 
