@@ -81,7 +81,18 @@ describe("tars script list", () => {
       [],
     );
     expect(await tars(deps, "show", "bark-push")).toBe(0);
-    expect(await tars(deps, "show", "finmind")).toBe(1);
+
+    deps.io.stderr.length = 0;
+    expect(await tars(deps, "run", "finmind")).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("finmind is not approved yet (awaiting-approve)");
+    expect(deps.io.stderr.join("\n")).toContain("approve finmind");
+    expect(await tars(deps, "show", "gcal-day")).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain(
+      "gcal-day is not approved yet (awaiting-review): its adversarial review is not attached",
+    );
+    expect(deps.io.stderr.join("\n")).not.toContain("no script named");
+    expect(await tars(deps, "run", "download")).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("no script named download");
   });
 
   test("an empty library lists nothing", async () => {

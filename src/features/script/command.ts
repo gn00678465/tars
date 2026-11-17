@@ -1,5 +1,6 @@
 import { InvalidArgumentError, Option, type Command } from "commander";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { EXIT, TarsError } from "../../core/exit.ts";
 import type { Io } from "../../core/io.ts";
 import type { SecretStore } from "../../core/secrets.ts";
@@ -24,6 +25,7 @@ import { prepareOutDir, type OutDirRules } from "./out-dir.ts";
 import {
   attachReview,
   listSubmissions,
+  pendingState,
   readSubmission,
   REPORT_LIMIT,
   type PendingState,
@@ -57,6 +59,25 @@ interface RunOptions {
 
 export function registerScriptCommands(program: Command, ctx: ScriptCommandContext): void {
   const layout = (): ScriptsLayout => scriptsLayout(ctx.scriptsDir());
+  /** A script that is only under review must not read as missing, or the agent writes another. */
+  const approvedScript = async (name: string): Promise<LibraryScript> => {
+    try {
+      return await loadScript(layout(), name);
+    } catch (err) {
+      const inLibrary = await lstat(join(layout().library, name)).then(
+        () => true,
+        () => false,
+      );
+      if (!(err instanceof TarsError) || inLibrary) throw err;
+      const state = await pendingState(ctx.scriptsDir(), name);
+      if (state === undefined) throw err;
+      throw new TarsError(
+        state === "awaiting-approve"
+          ? `${name} is not approved yet (awaiting-approve). Only the user approves it, in their own terminal: ${ctx.approveCommand(name)}`
+          : `${name} is not approved yet (awaiting-review): its adversarial review is not attached. Attach one with: tars script review ${name} --report <file>; then the user approves it`,
+      );
+    }
+  };
   const script = program
     .command("script")
     .description("Find, read and look after the approved scripts in the script library.");
@@ -153,7 +174,7 @@ Examples:
         const dossier = await gatherDossier(ctx.scriptsDir(), submission, ctx.toolchain().index);
         return ctx.io.out(renderDossier(dossier, ctx.now()).trimEnd());
       }
-      const s = await loadScript(layout(), name);
+      const s = await approvedScript(name);
       if (opts.source) return ctx.io.out(s.source.trimEnd());
       const notes = (await readNotes(s)).trimEnd();
       const runs = await recentRuns(s, 5);
@@ -182,7 +203,7 @@ Examples:
   tars script run download --out out/files -- https://example.com/report.pdf`,
     )
     .action(async (name: string, args: string[], opts: RunOptions) => {
-      const s = await loadScript(layout(), name);
+      const s = await approvedScript(name);
       const { runApproved } = await import("./execute.ts");
       const outcome = await runApproved(s, await executeOptions(args, opts), {
         secrets: ctx.secrets,
@@ -238,13 +259,13 @@ Examples:
     .addHelpText(
       "after",
       `
-Exit codes: 0 added, 1 no such script, 2 usage error.
+Exit codes: 0 added, 1 no such script or not approved yet, 2 usage error.
 
 Examples:
   tars script note bark-push "--body longer than 4000 characters is cut by the server"`,
     )
     .action(async (name: string, text: string) => {
-      await addNote(await loadScript(layout(), name), text, ctx.now());
+      await addNote(await approvedScript(name), text, ctx.now());
       ctx.io.out(`noted ${name}`);
     });
 
@@ -252,9 +273,12 @@ Examples:
     .command("retire")
     .description("Move a script, with its notes and runs, out of the library.")
     .argument("<name>", "script name", parseName)
-    .addHelpText("after", "\nExit codes: 0 retired, 1 no such script, 2 usage error.")
+    .addHelpText(
+      "after",
+      "\nExit codes: 0 retired, 1 no such script or not approved yet, 2 usage error.",
+    )
     .action(async (name: string) => {
-      const target = await retireScript(layout(), await loadScript(layout(), name), ctx.now());
+      const target = await retireScript(layout(), await approvedScript(name), ctx.now());
       ctx.io.out(`retired ${name} to ${target}`);
     });
 

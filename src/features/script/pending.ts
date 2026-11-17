@@ -273,17 +273,31 @@ export async function listSubmissions(scriptsDir: string): Promise<{
       continue;
     try {
       const submission = await readSubmission(scriptsDir, name);
-      const { review } = await readEvidence(submission);
-      submissions.push({
-        submission,
-        state: review.kind === "attached" ? "awaiting-approve" : "awaiting-review",
-      });
+      submissions.push({ submission, state: await stateOf(submission) });
     } catch (err) {
       if (!(err instanceof TarsError)) throw err;
       broken.push({ name, reason: err.message });
     }
   }
   return { submissions, broken };
+}
+
+/** The state of what is submitted for `name`, or undefined when nothing is. */
+export async function pendingState(
+  scriptsDir: string,
+  name: string,
+): Promise<PendingState | undefined> {
+  if (
+    (await realpath(join(pendingRoot(scriptsDir, name), "current")).catch(() => undefined)) ===
+    undefined
+  )
+    return undefined;
+  return stateOf(await readSubmission(scriptsDir, name));
+}
+
+async function stateOf(submission: Submission): Promise<PendingState> {
+  const { review } = await readEvidence(submission);
+  return review.kind === "attached" ? "awaiting-approve" : "awaiting-review";
 }
 
 function submission(
