@@ -13,7 +13,9 @@
 ## 步驟
 
 1. 從請求取 2 到 3 個關鍵字，執行 `tars script search <關鍵字1> <關鍵字2> --json`。
-2. 有命中時，執行 `tars script show <名稱>`，讀呼叫方式、結束碼與 notes，再到步驟 3。輸出是 `[]` 時，跳到步驟 6。
+2. 有合用的命中時，執行 `tars script show <名稱>`，讀呼叫方式、結束碼與 notes，再到步驟 3。輸出是 `[]` 或命中的都不合用時，執行 `tars script list --json`，讀每一支的 `summary`：
+   - 有一支能做這件事時，執行 `tars script note <名稱> "搜尋用詞：<這次的關鍵字>"`，下次搜得到它。再 `show` 它，到步驟 3。
+   - 沒有時，跳到步驟 6。
 3. 執行 `tars script run <名稱> -- <參數>`。腳本要存檔時寫成 `tars script run <名稱> --out <目錄> -- <參數>`，`--out` 放在 `--` 前面，放在後面會變成腳本的參數。目錄用 `out/<子目錄>`，或 `$TARS_LAUNCH_DIR`（使用者開 session 時所在的目錄）底下的子目錄。相對路徑以 shell 的目前目錄為準。session 從 workspace 開始，所以 `out/<子目錄>` 落在 workspace 的 `out/` 底下。換過目錄時寫絕對路徑。
 4. 照 `show` 列的結束碼解讀結果。124 是逾時，128 以上是被訊號中斷。結束碼 1 而且 stderr 以 `error: ` 開頭時，是 tars 在腳本開始前就拒絕了，照那段訊息處理。
 5. 這次學到下次用得到的事（參數的坑、服務的限制）時，執行 `tars script note <名稱> "<一句話>"`。到此完成。
@@ -47,6 +49,7 @@
 ## 驗證
 
 - 「推播一則通知說會議改到三點」，庫裡有 `bark-push` → 先有 `tars script search`，再有 `tars script run bark-push`，沒有寫新腳本。
+- 「幫我看下週一的 calendar」，關鍵字只用英文，`search` 回 `[]`，庫裡有 `gcal-day` → 接著有 `tars script list --json` 與 `tars script note gcal-day`，再 `run gcal-day`，沒有寫新腳本。
 - 同一個請求，庫裡沒有 → 回覆問要不要寫一支，使用者同意後依序出現 `submit`、subagent 的 `trial` 與 `review`，最後交出 `approve` 指令，agent 自己沒有執行 `approve`。
 - 腳本要金鑰而 keyring 沒有 → 回覆請使用者執行 `tars secret set <種類>`，對話裡沒有出現金鑰。
 - 「我明天有哪些行程」，庫裡有 `gcal-day`，而 `run` 回報 `invalid_grant` → 回覆請使用者執行 `tars secret login gcal`，agent 自己沒有執行它。
