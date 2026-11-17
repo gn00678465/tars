@@ -48,7 +48,7 @@
 
 ## 驗證
 
-- 「推播一則通知說會議改到三點」，庫裡有 `bark-push` → 先有 `tars script search`，再有 `tars script run bark-push`，沒有寫新腳本。
+- 「用 Bark 推播一則通知說會議改到三點」，庫裡有 `bark-push` → 先有 `tars script search`，再有 `tars script run bark-push`，沒有寫新腳本。
 - 「幫我看下週一的 calendar」，關鍵字只用英文，`search` 回 `[]`，庫裡有 `gcal-day` → 接著有 `tars script list --json` 與 `tars script note gcal-day`，再 `run gcal-day`，沒有寫新腳本。
 - 同一個請求，庫裡沒有 → 回覆問要不要寫一支，使用者同意後依序出現 `submit`、subagent 的 `trial` 與 `review`，最後交出 `approve` 指令，agent 自己沒有執行 `approve`。
 - 腳本要金鑰而 keyring 沒有 → 回覆請使用者執行 `tars secret set <種類>`，對話裡沒有出現金鑰。
