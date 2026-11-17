@@ -20,15 +20,15 @@
 
 ## 腳本的狀態
 
-`tars script list --json` 列出庫裡與送審中的腳本，每一支有 `state`：
+`tars script list --json` 列出庫裡與送審中的腳本，每一支一列，`state` 是它最新一版的狀態：
 
-| `state` | 意思 | 能不能 `run` | 接下來 |
-|---|---|---|---|
-| `approved` | 已入庫 | 能 | — |
-| `awaiting-review` | 已 `submit`，還沒附上對抗式檢查的報告 | 不能 | 從步驟 9 繼續 |
-| `awaiting-approve` | 報告已附上，等使用者核可 | 不能 | 從步驟 11 繼續 |
+| `state` | 意思 | 接下來 |
+|---|---|---|
+| `approved` | 已入庫 | 能 `run` |
+| `awaiting-review` | 已 `submit`，還沒附上對抗式檢查的報告 | 從步驟 9 繼續 |
+| `awaiting-approve` | 報告已附上，等使用者核可 | 從步驟 11 繼續 |
 
-`approved` 的腳本 `update` 不是 `null` 時，有一版更新在送審，狀態是 `update` 的值。這時庫裡那一版照常能 `run`，執行的是舊版。`search` 只找 `approved` 的腳本。
+已入庫的腳本送了更新時，`state` 是那版更新的狀態。核可前，`search` 與 `show` 仍找得到庫裡的舊版，`run` 執行舊版。從沒入庫的腳本，`show` 失敗，不能 `run`。
 
 使用者問有哪些腳本或腳本的狀態時，執行 `tars script list`，每一支回覆名稱、狀態與用途。到此完成。
 
@@ -37,7 +37,7 @@
 1. 從請求取 2 到 3 個關鍵字，執行 `tars script search <關鍵字1> <關鍵字2> --json`。
 2. 有合用的命中時，執行 `tars script show <名稱>`，讀呼叫方式、結束碼與 notes，再到步驟 3。輸出是 `[]` 或命中的都不合用時，執行 `tars script list --json`，讀每一支的 `summary`：
    - 有一支 `approved` 的能做這件事時，執行 `tars script note <名稱> "搜尋用詞：<這次的關鍵字>"`，下次搜得到它。再 `show` 它，到步驟 3。
-   - 能做這件事的那支不是 `approved` 時，告訴使用者它的狀態，照上面「腳本的狀態」表的「接下來」繼續，不另寫一支。
+   - 能做這件事的那支不是 `approved` 時，先執行 `tars script show <名稱>`。成功時庫裡有舊版，照步驟 3 跑它，回覆時提一句有一版更新在等核可。失敗時告訴使用者它的狀態，照上面表的「接下來」繼續。兩種都不另寫一支。
    - 沒有時，跳到步驟 6。
 3. 執行 `tars script run <名稱> -- <參數>`。腳本要存檔時寫成 `tars script run <名稱> --out <目錄> -- <參數>`，`--out` 放在 `--` 前面，放在後面會變成腳本的參數。目錄用 `out/<子目錄>`，或 `$TARS_LAUNCH_DIR`（使用者開 session 時所在的目錄）底下的子目錄。相對路徑以 shell 的目前目錄為準。session 從 workspace 開始，所以 `out/<子目錄>` 落在 workspace 的 `out/` 底下。換過目錄時寫絕對路徑。
 4. 照 `show` 列的結束碼解讀結果。124 是逾時，128 以上是被訊號中斷。結束碼 1 而且 stderr 以 `error: ` 開頭時，是 tars 在腳本開始前就拒絕了，照那段訊息處理。
@@ -76,7 +76,8 @@
 
 - 一個外部服務的請求，庫裡有 `approved` 的 `<腳本>` 做得到 → 先有 `tars script search`，再有 `tars script run <腳本>`，沒有寫新腳本。
 - 同一個請求，關鍵字和 `<腳本>` 的說明用不同語言，`search` 回 `[]` → 接著有 `tars script list --json` 與 `tars script note <腳本>`，再 `run`，沒有寫新腳本。
-- 同一個請求，`<腳本>` 是 `awaiting-approve` → 回覆它在等核可，交出 `tars script approve <腳本>` 給使用者，沒有 `run`，也沒有寫新腳本。
+- 同一個請求，`<腳本>` 從沒入庫、是 `awaiting-approve` → 回覆它在等核可，交出 `tars script approve <腳本>` 給使用者，沒有 `run`，也沒有寫新腳本。
+- 同一個請求，`<腳本>` 已入庫、有一版更新是 `awaiting-approve` → `tars script run <腳本>` 跑舊版，回覆提到更新在等核可。
 - 同一個請求，庫裡沒有 → 回覆問要不要寫一支，使用者同意後依序出現 `submit`、subagent 的 `trial` 與 `review`，最後交出 `approve` 指令，agent 自己沒有執行 `approve`。
 - 「有哪些腳本」 → `tars script list`，回覆每一支的名稱、狀態與用途。
 - 腳本要金鑰而 keyring 沒有 → 回覆請使用者執行 `tars secret set <種類>`，對話裡沒有出現金鑰。

@@ -50,13 +50,12 @@ describe("tars script list", () => {
         secret: "bark",
         effects: "external-write",
         state: "approved",
-        update: null,
       },
     ]);
     expect(deps.io.stderr.join("\n")).toContain("broken");
   });
 
-  test("lists submissions with their state next to the library, and only approved ones run", async () => {
+  test("lists each script once with the state of its newest version, and only approved versions run", async () => {
     const { scripts, deps } = setup();
     installSample(scripts, "bark-push");
     await attachReview(await submitted(scripts, plainScript("bark-push")), "tried x\n", new Date());
@@ -67,26 +66,21 @@ describe("tars script list", () => {
 
     expect(await tars(deps, "list", "--json")).toBe(0);
     const listed = JSON.parse(deps.io.stdout.join(""));
-    expect(
-      listed.map((s: { name: string; state: string; update: string | null }) => [
-        s.name,
-        s.state,
-        s.update,
-      ]),
-    ).toEqual([
-      ["bark-push", "approved", "awaiting-approve"],
-      ["finmind", "awaiting-approve", null],
-      ["gcal-day", "awaiting-review", null],
+    expect(listed.map((s: { name: string; state: string }) => [s.name, s.state])).toEqual([
+      ["bark-push", "awaiting-approve"],
+      ["finmind", "awaiting-approve"],
+      ["gcal-day", "awaiting-review"],
     ]);
     expect(deps.io.stderr).toEqual([]);
 
     deps.io.stdout.length = 0;
     expect(await tars(deps, "list")).toBe(0);
-    expect(deps.io.stdout[0]).toStartWith("bark-push\tapproved, update awaiting-approve\t");
+    expect(deps.io.stdout[0]).toStartWith("bark-push\tawaiting-approve\t");
     expect(await tars(deps, "search", "prints", "--json")).toBe(0);
     expect(JSON.parse(deps.io.stdout.at(-1) ?? "").map((s: { name: string }) => s.name)).toEqual(
       [],
     );
+    expect(await tars(deps, "show", "bark-push")).toBe(0);
     expect(await tars(deps, "show", "finmind")).toBe(1);
   });
 
