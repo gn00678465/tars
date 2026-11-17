@@ -66,6 +66,7 @@
 - 不自己執行 `tars script approve`，不用 `script`、`expect` 這類工具開終端機替使用者輸入，不清掉 `TARS_IN_SESSION`，不改 `$TARS_DATA_DIR/scripts/` 底下的任何檔案。入庫只由使用者決定。
 - gate 1 回報 OSV 公告時，換成修正過、發布滿 7 天的版本再送。不刪檢查，不換套件名稱繞過。
 - 庫裡的腳本差一點就能用時，改那支腳本、用同一個名稱送審（更新），不另寫一支。
+- 一件事要用好幾支腳本，或要照固定的步驟才做得好時，把步驟寫成使用者的 playbook，照 `SKILL.md` 的「新增 playbook」。腳本只做確定性的部分，判斷與跟使用者確認的事留在 playbook。
 - 使用者要移除腳本時，才執行 `tars script retire <名稱>`。腳本會連同 NOTES 與執行紀錄搬到 `retired/`，要再用時重新走三道關。之後用 `tars script list --json` 看 `secret` 欄位，沒有其他腳本用同一種金鑰時，請使用者在自己的終端機執行 `tars secret delete <種類>`。
 - `run` 說庫裡的檔案和核可紀錄不符、拒絕執行時，告訴使用者庫裡的檔案被改過，不要自己修。
 - 環境沒有 subagent 時，跳過步驟 9，告訴使用者這次沒有對抗式檢查；`approve` 會標出沒有報告。
