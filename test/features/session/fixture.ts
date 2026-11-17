@@ -22,7 +22,7 @@ export async function installedHome(soul = "I am tars.\n", memory = "- user like
   if (code !== 0) throw new Error(`install failed: ${installer.io.stderr.join("\n")}`);
 
   const plans: LaunchPlan[] = [];
-  const secrets = fakeSecrets({ "claude-oauth-token": "sk-ant-oat01-FAKE" });
+  const secrets = fakeSecrets();
   const deps = testDeps({
     env,
     secrets,

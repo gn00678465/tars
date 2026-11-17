@@ -1,6 +1,6 @@
 import { TarsError } from "./exit.ts";
 
-export type SecretName = "claude-oauth-token" | `script:${string}`;
+export type SecretName = `script:${string}`;
 
 /** Keyring access; tests use an in-memory fake so they never touch the real keyring. */
 export interface SecretStore {

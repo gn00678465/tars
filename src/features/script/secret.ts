@@ -207,7 +207,7 @@ Examples:
       "after",
       `
 Lists every kind that tars secret set or login stored, and whether the keyring still holds
-its value ("stored") or not ("missing"). The token of tars auth claude is not listed.
+its value ("stored") or not ("missing").
 
 Exit codes: 0 done, 1 failure, 2 usage error.
 

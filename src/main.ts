@@ -2,9 +2,8 @@ import { Command, CommanderError } from "commander";
 import { EXIT, TarsError } from "./core/exit.ts";
 import { processIo, readSecret } from "./core/io.ts";
 import { resolvePaths } from "./core/paths.ts";
-import { keyringStore } from "./core/secrets.ts";
+import { keyringStore, type SecretStore } from "./core/secrets.ts";
 import { openTty, type Terminal } from "./core/terminal.ts";
-import { registerAuth, type AuthDeps } from "./features/auth/auth.ts";
 import { skillsFromBundle } from "./features/install/embedded.ts";
 import { registerInstall, type InstallDeps } from "./features/install/install.ts";
 import { registerMemoryCommands } from "./features/memory/command.ts";
@@ -15,8 +14,9 @@ import { launch } from "./features/session/launch.ts";
 import { registerSessions, type SessionDeps } from "./features/session/session.ts";
 
 export type Deps = InstallDeps &
-  SessionDeps &
-  AuthDeps & {
+  SessionDeps & {
+    readonly secrets: SecretStore;
+    readSecret(prompt: string): Promise<string>;
     /** Throws a TarsError when the process has no controlling terminal. */
     openTerminal(): Terminal;
   };
@@ -46,14 +46,12 @@ export function buildProgram(deps: Deps, exitWith: (code: number) => void): Comm
     `
 Examples:
   dist/tars install --soul ./SOUL.md --memory ./MEMORY.md
-  tars auth claude
   tars claude
   tars agy
   tars memory remember --id pref-tone --section 偏好 --text "回覆先講結論。" --source user
   tars script search push notification`,
   );
   registerInstall(program, deps);
-  registerAuth(program, deps);
   registerSessions(program, deps, exitWith);
   registerMemoryCommands(program, { io: deps.io, memoryPath: () => resolvePaths(deps.env).memory });
   const runtime = scriptRuntime(deps.env, deps.cwd);

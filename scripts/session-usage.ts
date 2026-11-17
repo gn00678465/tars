@@ -3,9 +3,9 @@
 //
 //   bun scripts/session-usage.ts [--from <ISO time>] [--to <ISO time>] <transcript.jsonl>...
 //
-// A `tars claude` session keeps its transcripts under
-// <data dir>/harness/claude/projects/<project>/; subagents write their own files, so pass
-// those too. Prints one JSON object on stdout.
+// A `tars claude` session keeps its transcripts with the user's own, under
+// ~/.claude/projects/<project>/ (before r55, <data dir>/harness/claude/projects/<project>/);
+// subagents write their own files, so pass those too. Prints one JSON object on stdout.
 
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";

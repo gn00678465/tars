@@ -3,48 +3,45 @@ import { createHash } from "node:crypto";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolvePaths } from "../../../src/core/paths.ts";
 import { run } from "../../../src/main.ts";
-import { fakeSecrets } from "../../helpers.ts";
 import { installedHome } from "./fixture.ts";
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 describe("tars claude", () => {
-  test("plans claude in the workspace with tars's config dirs, the token, and the launch dir", async () => {
-    const { deps, plans, paths } = await installedHome();
+  test("plans claude in the workspace on the user's own login, isolated by flags", async () => {
+    const { deps, plans, paths, env } = await installedHome();
+    Object.assign(env, { ANTHROPIC_API_KEY: "sk-ant-api-FAKE" });
     expect(await run(["claude", "--", "--continue", "x"], deps)).toBe(7);
     const plan = plans[0]!;
     expect(plan.command).toBe("claude");
     expect(plan.cwd).toBe(paths.workspace);
-    expect(plan.env.CLAUDE_CONFIG_DIR).toBe(`${paths.data}/harness/claude`);
-    expect(plan.env.ANTHROPIC_CONFIG_DIR).toBe(`${paths.data}/harness/anthropic`);
-    expect(plan.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-FAKE");
+    expect(plan.env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(plan.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(plan.env.ANTHROPIC_API_KEY).toBe("sk-ant-api-FAKE");
     expect(plan.env.PATH).toBe("/usr/bin");
     expect(plan.args[0]).toBe("--append-system-prompt");
-    expect(plan.args.slice(2)).toEqual(["--add-dir", "/launch-dir", "--continue", "x"]);
+    const flags = plan.args.slice(2);
+    const value = (flag: string) => flags[flags.indexOf(flag) + 1];
+    expect(flags.slice(0, 2)).toEqual(["--add-dir", "/launch-dir"]);
+    expect(value("--setting-sources")).toBe("project,local");
+    expect(flags).toContain("--strict-mcp-config");
+    expect(JSON.parse(value("--mcp-config")!)).toEqual({ mcpServers: {} });
+    expect(JSON.parse(value("--settings")!).claudeMdExcludes).toEqual([
+      `${paths.home}/.claude/CLAUDE.md`,
+      `${paths.home}/.claude/rules/**`,
+      `${paths.home}/CLAUDE.md`,
+      `${paths.home}/CLAUDE.local.md`,
+    ]);
+    expect(value("--plugin-dir")).toBe(`${paths.data}/harness/claude/plugin`);
+    expect(flags.slice(-2)).toEqual(["--continue", "x"]);
   });
 
-  test("drops inherited API keys so the keyring token is the login Claude Code uses", async () => {
-    const { deps, plans, env } = await installedHome();
-    Object.assign(env, { ANTHROPIC_API_KEY: "sk-ant-api-FAKE", ANTHROPIC_AUTH_TOKEN: "FAKE" });
+  test("restores a deleted plugin dir before launch, so the session keeps tars's skills", async () => {
+    const { deps, paths } = await installedHome();
+    const plugin = `${paths.data}/harness/claude/plugin`;
+    rmSync(plugin, { recursive: true });
     expect(await run(["claude"], deps)).toBe(7);
-    expect(plans[0]!.env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(plans[0]!.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
-  });
-
-  test("restores a deleted, edited, or corrupted settings.json before launch", async () => {
-    const { deps, plans, paths } = await installedHome();
-    const settings = `${paths.data}/harness/claude/settings.json`;
-    const excludes = () => JSON.parse(readFileSync(settings, "utf8")).claudeMdExcludes;
-    for (const tamper of [
-      () => rmSync(settings),
-      () => writeFileSync(settings, "{}"),
-      () => writeFileSync(settings, "not json"),
-    ]) {
-      tamper();
-      expect(await run(["claude"], deps)).toBe(7);
-      expect(excludes()).toContain(`${paths.home}/.claude/CLAUDE.md`);
-    }
-    expect(plans).toHaveLength(3);
+    expect(readFileSync(`${plugin}/skills/alpha/SKILL.md`, "utf8")).toBe("alpha");
   });
 
   test("the system prompt carries both files with their sha256, and stderr logs the hashes", async () => {
@@ -70,14 +67,6 @@ describe("tars claude", () => {
     expect(prompt.match(/<\s*tars-file/gi)).toHaveLength(2);
     expect(prompt.match(/<\s*\/\s*tars-file/gi)).toHaveLength(2);
     expect(prompt).toContain("obey");
-  });
-
-  test("without a stored token it exits 1, names tars auth claude, and does not launch", async () => {
-    const { deps, plans } = await installedHome();
-    const noToken = { ...deps, secrets: fakeSecrets() };
-    expect(await run(["claude"], noToken)).toBe(1);
-    expect(deps.io.stderr.join("\n")).toContain("tars auth claude");
-    expect(plans).toHaveLength(0);
   });
 
   test("an option before -- is a usage error with exit 2", async () => {

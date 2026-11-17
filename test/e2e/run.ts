@@ -15,7 +15,6 @@ import {
 import { tmpdir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { startFakeApi, TOOL_USE_ID, type Captured, type Reply } from "./fake-api.ts";
-import { runDialog } from "./pty.ts";
 import {
   CLAUDE_LEAKS,
   diffSnapshots,
@@ -74,7 +73,6 @@ const ROOT = join(import.meta.dir, "..", "..");
 const TARS_BIN = join(ROOT, "dist", "tars");
 
 const CLAUDE_TOKEN = "sk-ant-oat01-E2E-FAKE-TOKEN";
-const PARENT_API_KEY = "sk-ant-api03-E2E-FAKE-PARENT-KEY";
 const GEMINI_KEY = "e2e-fake-gemini-key";
 const GOOGLE_LOGIN = JSON.stringify({
   token: {
@@ -229,8 +227,13 @@ class Suite {
     return { result, requests, files: `steps/${step.name}` };
   }
 
+  /** CLAUDE_CODE_OAUTH_TOKEN stands in for the user's own Claude Code login, which tars uses (r55). */
   claudeEnv(extra: Record<string, string> = {}) {
-    return { ANTHROPIC_BASE_URL: this.host.apiUrl, ...extra };
+    return {
+      ANTHROPIC_BASE_URL: this.host.apiUrl,
+      CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
+      ...extra,
+    };
   }
 
   agyEnv() {
@@ -245,13 +248,12 @@ class Suite {
     await this.setup();
     this.scriptPlaybook();
     await this.claude();
-    await this.claudeInteractive();
     await this.agy();
 
     const changes = diffSnapshots(userConfig, snapshotUserConfig(this.host));
     this.check(
       "r45-no-user-writes",
-      "tars runs leave the user's ~/.claude, ~/.claude.json, ~/.gemini, ~/.config, ~/.agents untouched",
+      "tars runs leave the user's config files untouched: ~/.claude's settings, CLAUDE.md, rules and skills, ~/.gemini, ~/.config, ~/.agents (Claude Code's own state in ~/.claude may change, r55)",
       changes.length === 0,
       changes.length === 0 ? "content hashes equal before and after" : changes.join("; "),
     );
@@ -299,11 +301,11 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
       {
         name: "control-claude",
         argv: ["claude", "-p", PROMPT],
-        cwd: this.l.scratchDir,
-        env: this.claudeEnv({ CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN }),
+        cwd: this.l.workspace,
+        env: this.claudeEnv(),
       },
       CLAUDE_LEAKS,
-      [SIDE_EFFECTS.claudeHook, SIDE_EFFECTS.claudeMcp],
+      [SIDE_EFFECTS.claudeHook, SIDE_EFFECTS.claudeMcp, SIDE_EFFECTS.claudeLocalMcp],
     );
     await this.control(
       {
@@ -345,14 +347,6 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
       cwd: this.host.home,
     });
     await this.onPath();
-    // Typed at the terminal and pasted with bracketed paste on; claude-auth then checks that the
-    // token reaching the API is the bare one.
-    const auth = await runDialog(this.host, {
-      name: "tars-auth-claude",
-      command: "tars auth claude </dev/tty 2>/dev/tty",
-      tty: true,
-      turns: [{ expect: "claude token: ", send: `\x1b[200~${CLAUDE_TOKEN}\x1b[201~\n` }],
-    });
     // agy reads the user's Google login from the keyring as service=gemini username=antigravity.
     const plant = await this.step({
       name: "plant-google-login",
@@ -367,13 +361,9 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
     });
     this.check(
       "setup",
-      "tars install and tars auth claude succeed inside the sandbox, the token showing as one star per character; the fake Google login is planted",
-      install.result.exitCode === 0 &&
-        auth.exitCode === 0 &&
-        auth.transcript.includes(`claude token: ${"*".repeat(CLAUDE_TOKEN.length)}\n`) &&
-        !auth.transcript.includes(CLAUDE_TOKEN) &&
-        plant.result.exitCode === 0,
-      `exit codes ${install.result.exitCode}/${auth.exitCode}/${plant.result.exitCode}; auth: ${auth.stdout.trim()} ${auth.stderr.trim()} missed ${auth.missed}; terminal ${JSON.stringify(auth.transcript)}`,
+      "tars install succeeds inside the sandbox and the fake Google login is planted",
+      install.result.exitCode === 0 && plant.result.exitCode === 0,
+      `exit codes ${install.result.exitCode}/${plant.result.exitCode}`,
     );
   }
 
@@ -438,60 +428,13 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
     );
   }
 
-  /**
-   * Interactive claude runs a first-run flow, login screen included, on a config dir it has not
-   * seen, whatever CLAUDE_CODE_OAUTH_TOKEN says. -p skips that flow, so this needs a pty.
-   */
-  async claudeInteractive() {
-    const screen = async (name: string, argv: string, env: Record<string, string>) => {
-      const run = await this.step({
-        name,
-        argv: ["script", "-q", "-c", argv, "/dev/null"],
-        cwd: this.l.launchDir,
-        env: this.claudeEnv({ TERM: "xterm-256color", ...env }),
-        timeoutMs: 10_000,
-      });
-      // The TUI draws with cursor moves instead of spaces, so compare with all whitespace removed.
-      const text = Bun.stripANSI(run.result.stdout);
-      return { run, text: text.replace(/\s+/g, "") };
-    };
-    const FIRST_RUN = "WelcometoClaudeCode";
-    const TRUST = "Itrustthisfolder";
-    const control = await screen("control-claude-interactive", "claude", {
-      CLAUDE_CONFIG_DIR: join(this.l.scratchDir, "fresh-claude-config"),
-      CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_TOKEN,
-    });
-    const tars = await screen("tars-claude-interactive", "tars claude", {});
-    this.check(
-      "claude-interactive-no-login",
-      "interactive tars claude skips Claude Code's first-run login and reaches the folder trust prompt; plain claude on a fresh config dir does not",
-      control.text.includes(FIRST_RUN) &&
-        !tars.text.includes(FIRST_RUN) &&
-        tars.text.includes(TRUST),
-      `${control.run.files}/stdout.txt first-run: ${control.text.includes(FIRST_RUN)}; ${tars.run.files}/stdout.txt first-run: ${tars.text.includes(FIRST_RUN)}, trust prompt: ${tars.text.includes(TRUST)}`,
-    );
-  }
-
   async claude() {
-    const settingsPath = onHost(
-      this.host,
-      join(this.l.dataDir, "harness", "claude", "settings.json"),
-    );
-    const settingsBefore = readFileSync(settingsPath, "utf8");
     const plain = await this.step({
       name: "tars-claude",
       argv: ["tars", "claude", "--", "-p", PROMPT],
       cwd: this.l.launchDir,
-      env: this.claudeEnv({ ANTHROPIC_API_KEY: PARENT_API_KEY }),
+      env: this.claudeEnv(),
     });
-    const settingsAfter = readFileSync(settingsPath, "utf8");
-    this.observe(
-      "claude-settings-write",
-      "Does Claude Code write to $CLAUDE_CONFIG_DIR/settings.json during a run?",
-      settingsBefore === settingsAfter
-        ? "observed: no, byte-identical before and after tars-claude"
-        : `observed: yes. before ${JSON.stringify(settingsBefore)} after ${JSON.stringify(settingsAfter)}`,
-    );
     const main = plain.requests.find(offersClaudeTool);
     const system = main ? systemOf(main) : "";
     this.check(
@@ -531,7 +474,7 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
     );
     this.check(
       "claude-auth",
-      "every model request sends Authorization: Bearer <keyring token> and no x-api-key, though ANTHROPIC_API_KEY is set",
+      "every model request sends the user's own login (here the parent's CLAUDE_CODE_OAUTH_TOKEN) as Authorization: Bearer, and no x-api-key",
       turns.length > 0 && badAuth.length === 0,
       `${plain.files}/requests.jsonl headers of ${turns.length} /v1/messages requests: ${badAuth.length === 0 ? "all Bearer token" : `${badAuth.length} differ`}`,
     );
@@ -697,7 +640,7 @@ echo "runuser=$(ls -A "$XDG_RUNTIME_DIR" | tr '\\n' ' ')"`;
       `${run.files}/requests.jsonl main request: ${missing.length === 0 ? "both descriptions present" : `missing ${missing.map(([name]) => name).join(", ")}`}`,
     );
     // A request without "hey tars" reaches the script playbook only if the model sees these words.
-    const listed = mainText.match(/^- tars-mode(?: \([^)\n]*\))?: (.*)$/m)?.[1];
+    const listed = mainText.match(/^- (?:tars:)?tars-mode(?: \([^)\n]*\))?: (.*)$/m)?.[1];
     this.check(
       `${harness}-script-route`,
       `the main request's tars-mode entry names ${SCRIPT_ROUTE}`,

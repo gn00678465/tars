@@ -31,7 +31,7 @@ description: 使用者的訊息以「hey tars」或「tars」開頭時使用，�
 | 推播、下載、呼叫外部 API 或服務；其他要對外部服務做事或取資料，而且會重複做、要用金鑰或會寫到外部的事 | `playbooks/script.md` |
 | 「記住」「忘掉」「我之前說過什麼」 | `memory` skill |
 
-playbook 的路徑相對於這個 skill 的目錄。
+playbook 的路徑相對於這個 skill 的目錄。在 Claude Code 裡，tars 的 skill 名稱帶 `tars:` 前綴，例如 `memory` skill 是 `tars:memory`。
 
 ## 新增 playbook
 
