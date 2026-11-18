@@ -17,7 +17,7 @@ const within = (path: string, root: string) => {
 
 /**
  * Where trials and the agent's test runs write, apart from out/, which holds what scripts make
- * for the user. approve and retire remove a script's part, so test output never piles up.
+ * for the user. approve and abandon remove a script's part, so test output never piles up.
  */
 export const evidenceDir = (data: string, name: string) =>
   join(data, "workspace", ".evidence", name);

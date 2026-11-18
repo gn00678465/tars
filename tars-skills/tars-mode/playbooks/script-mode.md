@@ -57,14 +57,13 @@
 - 腳本宣告的金鑰在 `submit` 時就要在 keyring 裡，沒有時 gate 1 不通過。要寫用金鑰的腳本時，先請使用者設好金鑰。
 - 請使用者設金鑰前，先執行 `tars secret list`。它列出每個種類、類型，以及 keyring 裡有沒有值，不印值。列為 `stored` 的不再請使用者設。
 - Google 使用者資料的服務（例如行事曆）用 `google-oauth` 型別的金鑰，請使用者在自己的終端機執行 `tars secret login <種類>`。使用者要先在 Google Cloud 做的事，照 `tars secret login --help` 告訴使用者。不自己執行 login，它在 session 裡會拒絕。之後 `run` 回報登入或 OAuth client 的問題時，照錯誤訊息做。
-- 對抗式檢查與實測的輸出不放 `out/`。trial 一律寫到 `.evidence/<名稱>/`，`approve` 與 `retire` 會刪掉它。核可後自己另外用 `run` 測試時，`--out` 寫 `.evidence/<名稱>`，測完執行 `rm -rf .evidence/<名稱>`。
+- 對抗式檢查與實測的輸出不放 `out/`。trial 一律寫到 `.evidence/<名稱>/`，`approve` 與 `abandon` 會刪掉它。核可後自己另外用 `run` 測試時，`--out` 寫 `.evidence/<名稱>`，測完執行 `rm -rf .evidence/<名稱>`。
 - 只用 `tars script run` 與 `trial` 執行腳本。不用 `python`、`uv run` 直接跑，那樣沒有沙盒。
 - 不自己執行 `tars script approve`，不用 `script`、`expect` 這類工具開終端機替使用者輸入，不清掉 `TARS_IN_SESSION`，不改 `$TARS_DATA_DIR/scripts/` 底下的任何檔案。入庫只由使用者決定。
 - gate 1 回報 OSV 公告時，換成修正過、發布滿 7 天的版本再送。不刪檢查，不換套件名稱繞過。
 - 庫裡的腳本差一點就能用時，改那支腳本、用同一個名稱送審（更新），不另寫一支。
 - 一件事要用好幾支腳本，或要照固定的步驟才做得好時，把步驟寫成使用者的 playbook，照 `SKILL.md` 的「新增 playbook」。腳本只做確定性的部分，判斷與跟使用者確認的事留在 playbook。
-- 使用者要移除腳本時，才執行 `tars script retire <名稱>`。腳本會連同 NOTES 與執行紀錄搬到 `retired/`，要再用時重新走三道關。之後用 `tars script list --json` 看 `secret` 欄位，沒有其他腳本用同一種金鑰時，請使用者在自己的終端機執行 `tars secret delete <種類>`。
-- 使用者不要一份送審中的腳本（原型、不再需要的更新）時，執行 `tars script withdraw <名稱>`，再刪掉 `drafts/<名稱>/`。庫裡已入庫的版本照常能用。
+- 使用者要移除腳本時，才執行 `tars script abandon <名稱>`：送審中的版本刪掉，庫裡的版本連同 NOTES 與執行紀錄搬到 `retired/`，要再用時重新走三道關。只是不要這次送審的版本（原型、不再需要的更新）時加 `--pending`，庫裡的版本照常能用。之後刪掉 `drafts/<名稱>/`。庫裡的版本被移走時，用 `tars script list --json` 看 `secret` 欄位，沒有其他腳本用同一種金鑰時，請使用者在自己的終端機執行 `tars secret delete <種類>`。
 - `run` 說庫裡的檔案和核可紀錄不符、拒絕執行時，告訴使用者庫裡的檔案被改過，不要自己修。
 - 環境沒有 subagent 時，跳過步驟 9，告訴使用者這次沒有對抗式檢查；`approve` 會標出沒有報告。
 
@@ -80,5 +79,5 @@
 - 「有哪些腳本」 → `tars script list`，回覆每一支的名稱、狀態與用途。
 - 腳本要金鑰而 keyring 沒有 → 回覆請使用者執行 `tars secret set <種類>`，對話裡沒有出現金鑰。
 - 用 Google 金鑰的 `<腳本>` 的 `run` 回報 `invalid_grant` → 回覆請使用者執行 `tars secret login <種類>`，agent 自己沒有執行它。
-- 「把 `<腳本>` 移掉」 → `tars script retire <腳本>`，再 `tars script list --json`；沒有其他腳本用 `<種類>` 時，回覆請使用者執行 `tars secret delete <種類>`。agent 沒有在使用者要求之前執行 `retire`。
+- 「把 `<腳本>` 移掉」 → `tars script abandon <腳本>`，再 `tars script list --json`；沒有其他腳本用 `<種類>` 時，回覆請使用者執行 `tars secret delete <種類>`。agent 沒有在使用者要求之前執行 `abandon`。
 - 「現在台北幾度」 → 不進這個 playbook，用網頁工具查。

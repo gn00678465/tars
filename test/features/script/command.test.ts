@@ -252,52 +252,60 @@ describe("tars script note", () => {
   });
 });
 
-describe("tars script retire", () => {
-  test("moves the script with its history out of the library, twice without a name clash", async () => {
+describe("tars script abandon", () => {
+  test("drops the submission, retires the library version with its history, and removes the evidence", async () => {
     const { scripts, deps } = setup();
-    for (let i = 0; i < 2; i++) {
-      const dir = installSample(scripts, "bark-push");
-      writeFileSync(join(dir, "NOTES.md"), `- note ${i}\n`);
-      const evidence = join(scripts, "..", "workspace", ".evidence", "bark-push");
-      mkdirSync(evidence, { recursive: true });
-      expect(await tars(deps, "retire", "bark-push")).toBe(0);
-      expect(existsSync(dir)).toBe(false);
-      expect(existsSync(evidence)).toBe(false);
-    }
-    const retired = readdirSync(join(scripts, "retired"));
-    expect(retired).toHaveLength(2);
-    expect(retired.every((n) => n.startsWith("bark-push-"))).toBe(true);
-    expect(await tars(deps, "show", "bark-push")).toBe(1);
-  });
-});
-
-describe("tars script withdraw", () => {
-  test("takes back a submission, complete or broken, and leaves the library version running", async () => {
-    const { scripts, deps } = setup();
-    installSample(scripts, "bark-push");
-    await submitted(scripts, plainScript("bark-push"));
-    const broken = await submitted(scripts, plainScript("probe"));
-    rmSync(join(broken.dir, "gate1.json"));
-    const evidence = join(scripts, "..", "workspace", ".evidence", "probe");
+    const dir = installSample(scripts, "bark-push");
+    writeFileSync(join(dir, "NOTES.md"), "- note\n");
+    const update = await submitted(scripts, plainScript("bark-push"));
+    const evidence = join(scripts, "..", "workspace", ".evidence", "bark-push");
     mkdirSync(evidence, { recursive: true });
 
-    expect(await tars(deps, "withdraw", "probe")).toBe(0);
-    expect(deps.io.stdout.at(-1)).toBe("withdrew probe");
-    expect(existsSync(broken.dir)).toBe(false);
-    expect(existsSync(evidence)).toBe(false);
-    expect(await tars(deps, "withdraw", "bark-push")).toBe(0);
-    expect(deps.io.stdout.at(-1)).toBe("withdrew bark-push; the library keeps 0123456789abcdef");
+    expect(await tars(deps, "abandon", "bark-push")).toBe(0);
+    expect(deps.io.stdout[0]).toBe("dropped the submission of bark-push");
+    expect(deps.io.stdout[1]).toStartWith("retired bark-push to ");
+    expect([existsSync(update.dir), existsSync(dir), existsSync(evidence)]).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    expect(readdirSync(join(scripts, "retired"))[0]).toStartWith("bark-push-");
+    expect(await tars(deps, "abandon", "bark-push")).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("no script or submission named bark-push");
+  });
 
-    deps.io.stdout.length = 0;
-    expect(await tars(deps, "list", "--json")).toBe(0);
-    expect(
-      JSON.parse(deps.io.stdout.join("")).map((s: { name: string; state: string }) => [
-        s.name,
-        s.state,
-      ]),
-    ).toEqual([["bark-push", "approved"]]);
-    expect(await tars(deps, "withdraw", "probe")).toBe(1);
-    expect(deps.io.stderr.join("\n")).toContain("nothing is submitted for probe");
+  test("a script retired twice keeps both histories", async () => {
+    const { scripts, deps } = setup();
+    for (let i = 0; i < 2; i++) {
+      installSample(scripts, "bark-push");
+      expect(await tars(deps, "abandon", "bark-push")).toBe(0);
+    }
+    expect(readdirSync(join(scripts, "retired"))).toHaveLength(2);
+  });
+
+  test("--pending drops only the submission, complete or broken, and the library version stays", async () => {
+    const { scripts, deps } = setup();
+    installSample(scripts, "bark-push");
+    const broken = await submitted(scripts, plainScript("bark-push"));
+    rmSync(join(broken.dir, "gate1.json"));
+
+    expect(await tars(deps, "abandon", "bark-push", "--pending")).toBe(0);
+    expect(deps.io.stdout).toEqual([
+      "dropped the submission of bark-push",
+      "the library keeps bark-push 0123456789abcdef",
+    ]);
+    expect(existsSync(broken.dir)).toBe(false);
+    expect(await tars(deps, "show", "bark-push")).toBe(0);
+    expect(await tars(deps, "abandon", "bark-push", "--pending")).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("nothing is submitted for bark-push");
+  });
+
+  test("a script that was only ever submitted is dropped without anything to retire", async () => {
+    const { scripts, deps } = setup();
+    await submitted(scripts, plainScript("probe"));
+    expect(await tars(deps, "abandon", "probe")).toBe(0);
+    expect(deps.io.stdout).toEqual(["dropped the submission of probe"]);
+    expect(existsSync(join(scripts, "retired"))).toBe(false);
   });
 });
 
@@ -330,7 +338,7 @@ describe("library boundaries", () => {
     ]);
   });
 
-  test("retire and note after another session retired the script fail with exit 1", async () => {
+  test("retiring and noting a script another session already retired fail with exit 1", async () => {
     const { scripts, deps } = setup();
     installSample(scripts, "bark-push");
     const layout = scriptsLayout(scripts);

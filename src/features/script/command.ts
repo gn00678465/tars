@@ -224,7 +224,7 @@ For a google-oauth secret the script gets a fresh access token, never the stored
 --timeout may not be longer than that token lasts (about an hour).
 --out holds what the script makes for the user: under the workspace's out/ or the directory
 the session started in. A test run goes to <data>/workspace/.evidence/<name> instead, which
-approve and retire remove.
+approve and abandon remove.
 Exit codes: the script's own code (0 to 123, see tars script show <name>);
 1 when tars refuses or fails before the script starts; 2 usage error;
 124 timed out; 128+n stopped by signal n.
@@ -258,7 +258,7 @@ Examples:
 No secret, no "secret:url" host, and no network at all for an external-write script, so a
 trial never writes to the outside world. The output is also saved under the submission's
 trials/ for the approver to read. What it writes goes to TARS_OUT, which is always
-<data>/workspace/.evidence/<name> (printed first, on stderr); approve and retire remove it.
+<data>/workspace/.evidence/<name> (printed first, on stderr); approve and abandon remove it.
 Exit codes: as tars script run.
 
 Examples:
@@ -309,42 +309,56 @@ Examples:
     });
 
   script
-    .command("retire")
-    .description("Move a script, with its notes and runs, out of the library.")
-    .argument("<name>", "script name", parseName)
-    .addHelpText(
-      "after",
-      "\nExit codes: 0 retired, 1 no such script or not approved yet, 2 usage error.",
+    .command("abandon")
+    .description(
+      "Drop a script: its submission under review, and its approved version in the library.",
     )
-    .action(async (name: string) => {
-      const target = await retireScript(layout(), await approvedScript(name), ctx.now());
-      await removeEvidence(ctx.outDirRules().data, name);
-      ctx.io.out(`retired ${name} to ${target}`);
-    });
-
-  script
-    .command("withdraw")
-    .description("Take back the submission of a script that is under review, complete or not.")
     .argument("<name>", "script name", parseName)
+    .option("--pending", "drop only the submission under review; the library version stays")
     .addHelpText(
       "after",
       `
-The approved version in the library, if any, stays and keeps running. The trials' evidence
-directory goes too.
+The library version moves, with its notes and runs, to retired/; the submission is deleted.
+The trials' evidence directory goes too. Running it again finds nothing and exits 1.
 
-Exit codes: 0 withdrawn, 1 nothing submitted or failure, 2 usage error.
+Exit codes: 0 dropped, 1 nothing to drop or failure, 2 usage error.
 
 Examples:
-  tars script withdraw probe-web-md`,
+  tars script abandon probe-web-md
+  tars script abandon gcal-day --pending`,
     )
-    .action(async (name: string) => {
-      await withdrawSubmission(ctx.scriptsDir(), name);
+    .action(async (name: string, opts: { pending?: boolean }) => {
+      const submitted =
+        (await pendingState(ctx.scriptsDir(), name).catch(() => "broken")) !== undefined;
+      const inLibrary =
+        !opts.pending &&
+        (await lstat(join(layout().library, name)).then(
+          () => true,
+          () => false,
+        ));
+      if (!submitted && !inLibrary)
+        throw new TarsError(
+          opts.pending
+            ? `nothing is submitted for ${name}`
+            : `no script or submission named ${name}. See: tars script list`,
+        );
+      if (submitted) {
+        await withdrawSubmission(ctx.scriptsDir(), name);
+        ctx.io.out(`dropped the submission of ${name}`);
+      }
+      // After the submission, so a run cut short in between converges when it is run again.
+      if (inLibrary)
+        ctx.io.out(
+          `retired ${name} to ${await retireScript(layout(), await loadScript(layout(), name), ctx.now())}`,
+        );
       await removeEvidence(ctx.outDirRules().data, name);
-      const kept = await loadScript(layout(), name).then(
-        (s) => `; the library keeps ${s.version}`,
-        () => "",
-      );
-      ctx.io.out(`withdrew ${name}${kept}`);
+      if (opts.pending) {
+        const kept = await loadScript(layout(), name).then(
+          (s) => s.version,
+          () => undefined,
+        );
+        if (kept !== undefined) ctx.io.out(`the library keeps ${name} ${kept}`);
+      }
     });
 
   script
