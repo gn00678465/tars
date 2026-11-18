@@ -35,7 +35,7 @@
 ## 步驟
 
 1. 從請求取 2 到 3 個關鍵字，執行 `tars script search <關鍵字1> <關鍵字2> --json`。
-2. 命中裡有 `kind` 是 `playbook` 而且合用的，讀它的 `path`，照它做，不再往下。有合用的腳本時，執行 `tars script show <名稱>`，讀呼叫方式、結束碼與 notes，再到步驟 3。輸出是 `[]` 或命中的都不合用時，執行 `tars script list --json`，讀每一支的 `summary`：
+2. 命中裡有 `kind` 是 `playbook` 而且合用的，讀它的 `path`，照它做，不再往下；它引用的檔案相對於那個檔案所在的目錄。有合用的腳本時，執行 `tars script show <名稱>`，讀呼叫方式、結束碼與 notes，再到步驟 3。輸出是 `[]` 或命中的都不合用時，執行 `tars script list --json`，讀每一支的 `summary`：
    - 有一支 `approved` 的能做這件事時，執行 `tars script note <名稱> "搜尋用詞：<這次的關鍵字>"`，下次搜得到它。再 `show` 它，到步驟 3。
    - 能做這件事的那支不是 `approved` 時，先執行 `tars script show <名稱>`。成功時庫裡有舊版，照步驟 3 跑它，回覆時提一句有一版更新在等核可。失敗時告訴使用者它的狀態，照上面表的「接下來」繼續。兩種都不另寫一支。
    - 沒有時，跳到步驟 6。
@@ -46,17 +46,17 @@
 7. 讀 `reference/script-writing.md`，把腳本寫在 `drafts/<名稱>/script.py`（相對於 workspace）。更新庫裡的腳本時，先建好 `drafts/<名稱>/`，再用 `tars script show <名稱> --source > drafts/<名稱>/script.py` 取得目前的全文。
 8. 執行 `tars script submit drafts/<名稱>`。失敗時照 `gate 1:` 開頭的行修改，再送一次。
 9. 開一個 subagent 做對抗式檢查。只給它 `tars script show <名稱> --pending` 的輸出與下面這段指示。更新時那份輸出只有和庫裡版本的差異，另外附上草稿全文。
-   「用 `tars script trial <名稱> -- <參數>` 讓這支腳本出錯：錯誤參數、空輸入、缺金鑰、網路錯誤。腳本寫的檔在 stderr 第一行 `evidence:` 印出的目錄。trial 不給金鑰，也連不到 `"secret:url"` 的主機；`external-write` 的腳本在 trial 完全沒有網路，不會真的寫出去。把每次試了什麼、結束碼、輸出寫成報告，存成 `drafts/<名稱>/review.md`。再執行 `tars script review <名稱> --report drafts/<名稱>/review.md`。不要改腳本。」
+   「用 `tars script trial <名稱> -- <參數>` 讓這支腳本出錯：錯誤參數、空輸入、缺金鑰、網路錯誤。腳本寫的檔在 stderr 第一行 `evidence:` 印出的目錄。trial 不給金鑰，也連不到 `"secret:url"` 的主機；`external-write` 的腳本在 trial 完全沒有網路，不會真的寫出去。把每次試了什麼、結束碼、輸出寫成報告，存成 `drafts/<名稱>/review.md`。報告不超過 32 KiB，長的輸出只留關鍵幾行。再執行 `tars script review <名稱> --report drafts/<名稱>/review.md`。不要改腳本。」換 session 接手時 `drafts/<名稱>/` 可能不在，先建好。
 10. 報告找到問題時，改草稿，回到步驟 8。重新送審後，舊的 trial 與報告不算數，步驟 9 要重做。
-11. 把 `submit` 印出的最後一行原樣交給使用者，請使用者在自己的終端機執行。那一行是 `tars script approve <名稱>`，資料目錄不是預設值時前面帶著 `TARS_DATA_DIR=…`。等使用者說核可了。
-12. 執行 `tars script show <名稱>` 確認已入庫，回到步驟 3 完成原本的請求。
+11. 把 `review` 印出的最後一行原樣交給使用者，請使用者在自己的終端機執行。跳過步驟 9 時用 `submit` 的最後一行；換 session 接手、這次沒跑過兩者時，用 `tars script show <名稱> --pending` 的最後一行。那一行是 `tars script approve <名稱>`，資料目錄不是預設值時前面帶著 `TARS_DATA_DIR=…`。等使用者說核可了。
+12. 執行 `tars script list --json`，確認這支的 `state` 是 `approved`，`version` 是送審的那一版，再回到步驟 3 完成原本的請求。仍是 `awaiting-approve` 時，核可沒有成功，問使用者。
 
 ## 判斷標準
 
 - 金鑰不經過對話。`run` 或 `submit` 回報缺金鑰或格式不符時，訊息裡寫著要執行的指令（`tars secret set <種類>` 或 `tars secret login <種類>`）。請使用者在自己的終端機執行，並說明格式。腳本宣告 `"secret:url"` 時是 `{"url": "<服務網址>", "key": "<金鑰>"}`，網址用 http 或 https。其他照腳本的說明。不要請使用者把金鑰貼進對話，不要把金鑰放進參數。
 - 腳本宣告的金鑰在 `submit` 時就要在 keyring 裡，沒有時 gate 1 不通過。要寫用金鑰的腳本時，先請使用者設好金鑰。
 - 請使用者設金鑰前，先執行 `tars secret list`。它列出每個種類、類型，以及 keyring 裡有沒有值，不印值。列為 `stored` 的不再請使用者設。
-- Google 使用者資料的服務（例如行事曆）用 `google-oauth` 型別的金鑰，請使用者在自己的終端機執行 `tars secret login <種類>`。使用者要先在 Google Cloud 做的事，照 `tars secret login --help` 告訴使用者。不自己執行 login，它在 session 裡會拒絕。之後 `run` 回報登入或 OAuth client 的問題時，照錯誤訊息做。
+- Google 使用者資料的服務（例如行事曆）用 `google-oauth` 型別的金鑰，請使用者在自己的終端機執行 `tars secret login <種類>`；腳本要的不是預設的行事曆唯讀權限時，指令帶上 `--scope <腳本要的 scope>`。使用者要先在 Google Cloud 做的事，照 `tars secret login --help` 告訴使用者。不自己執行 login，它在 session 裡會拒絕。之後 `run` 回報登入或 OAuth client 的問題時，照錯誤訊息做。
 - 對抗式檢查與實測的輸出不放 `out/`。trial 一律寫到 `.evidence/<名稱>/`，`approve` 與 `abandon` 會刪掉它。核可後自己另外用 `run` 測試時，`--out` 寫 `.evidence/<名稱>`，測完執行 `rm -rf .evidence/<名稱>`。
 - 只用 `tars script run` 與 `trial` 執行腳本。不用 `python`、`uv run` 直接跑，那樣沒有沙盒。
 - 不自己執行 `tars script approve`，不用 `script`、`expect` 這類工具開終端機替使用者輸入，不清掉 `TARS_IN_SESSION`，不改 `$TARS_DATA_DIR/scripts/` 底下的任何檔案。入庫只由使用者決定。

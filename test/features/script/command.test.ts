@@ -163,6 +163,7 @@ describe("tars script search", () => {
     );
     writeFileSync(join(dir, "notes.md"), "# 行程筆記\n");
     writeFileSync(join(dir, "README.txt"), "行程");
+    mkdirSync(join(dir, "drafts.md"));
     expect(await tars(deps, "search", "行程", "推播", "--json")).toBe(0);
     expect(JSON.parse(deps.io.stdout.join(""))).toEqual([
       {
@@ -182,6 +183,7 @@ describe("tars script search", () => {
       },
     ]);
     expect(deps.io.stderr.join("\n")).toContain("skipped playbook notes");
+    expect(deps.io.stderr.join("\n")).toContain("skipped playbook drafts");
     expect(deps.io.stderr.join("\n")).toContain("summary:");
     expect(readFileSync(join(scripts, "searches.jsonl"), "utf8")).toContain(
       '"hits":["bark-push","playbook:trip-plan"]',
@@ -418,6 +420,7 @@ describe("tars script review", () => {
       report: "tried x\n",
     });
     expect(deps.io.stdout.join("\n")).toContain(made.scriptSha.slice(0, 12));
+    expect(deps.io.stdout.at(-1)).toEndWith("tars script approve bark-push");
   });
 
   test("refuses a report that is too large, not UTF-8, or empty, and attaches nothing", async () => {
@@ -451,6 +454,7 @@ describe("tars script show --pending", () => {
     expect(out).toContain("  | print('pending body')");
     expect(out).toContain("== gate 1 ==");
     expect(out).toContain("!! no gate 2 report is attached");
+    expect(deps.io.stdout.at(-1)).toEndWith("tars script approve bark-push");
     expect((await readSubmission(scripts, "bark-push")).source).toBe(source);
   });
 

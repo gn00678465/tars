@@ -200,7 +200,10 @@ Examples:
       if (opts.pending) {
         const submission = await readSubmission(ctx.scriptsDir(), name);
         const dossier = await gatherDossier(ctx.scriptsDir(), submission, ctx.toolchain().index);
-        return ctx.io.out(renderDossier(dossier, ctx.now()).trimEnd());
+        ctx.io.out(renderDossier(dossier, ctx.now()).trimEnd());
+        return ctx.io.out(
+          `\nthe user approves it, in their own terminal:\n${ctx.approveCommand(name)}`,
+        );
       }
       const s = await approvedScript(name);
       if (opts.source) return ctx.io.out(s.source.trimEnd());
@@ -432,6 +435,8 @@ Examples:
       const submission = await readSubmission(ctx.scriptsDir(), name);
       await attachReview(submission, report, ctx.now());
       ctx.io.out(`attached the review to ${name} (script.py ${submission.scriptSha.slice(0, 12)})`);
+      ctx.io.out("then ask the user to run this in their own terminal:");
+      ctx.io.out(ctx.approveCommand(name));
     });
 
   script

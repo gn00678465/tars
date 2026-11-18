@@ -38,4 +38,4 @@ playbook 的路徑相對於這個 skill 的目錄。在 Claude Code 裡，tars �
 照 `reference/playbook-template.md` 的骨架寫。
 
 - tars 本身的流程：存到 `playbooks/`，再在路由表加一列。
-- 配合使用者腳本的流程：存到 `$TARS_DATA_DIR/playbooks/<名稱>.md`，輔助檔放 `$TARS_DATA_DIR/playbooks/<名稱>/`。不加路由表，從步驟 5 的 `tars script search` 進入。檔案開頭寫 `---`、`summary: <一行，寫出會用到它的請求字詞>`、`---` 三行；search 只比對檔名與 `summary`。不寫死腳本名稱，用 `tars script search` 找。
+- 配合使用者腳本的流程：存到 `$TARS_DATA_DIR/playbooks/<名稱>.md`（名稱只用小寫英數與 `-`），輔助檔放 `$TARS_DATA_DIR/playbooks/<名稱>/`。不加路由表，從步驟 5 的 `tars script search` 進入。檔案開頭寫 `---`、`summary: <一行，寫出會用到它的請求字詞>`、`---` 三行；search 只比對檔名與 `summary`。不寫死腳本名稱，用 `tars script search` 找。
