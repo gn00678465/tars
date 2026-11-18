@@ -340,6 +340,15 @@ describe("approve: the live run", () => {
     expect(live.map((l) => l.outDir)).toEqual([join(home, "data", "workspace", "out", "dl")]);
   });
 
+  test("a relative --out resolves against the directory the prompt names", async () => {
+    const { scripts, home, live, context } = world();
+    await submitted(scripts, V1);
+    const { ctx, terminal } = context(["y", "", "dl", "n", "nope"]);
+    await approve("probe", ctx);
+    expect(terminal.transcript.join("\n")).toContain(`relative to ${join(home, "launch")}`);
+    expect(live.map((l) => l.outDir)).toEqual([join(home, "launch", "dl")]);
+  });
+
   test("end of input in the middle of it declines and leaves no staged version", async () => {
     const { scripts, live, go } = world();
     await submitted(scripts, V1);

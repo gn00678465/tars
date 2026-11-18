@@ -29,6 +29,12 @@ function setup(secrets = fakeSecrets()) {
   return { deps, version };
 }
 
+function typeFile(deps: ReturnType<typeof setup>["deps"], text: string) {
+  const types = join(deps.env.TARS_DATA_DIR ?? "", "scripts/secrets");
+  mkdirSync(types, { recursive: true });
+  writeFileSync(join(types, "bark.json"), text);
+}
+
 describe("tars script run refuses before the sandbox", () => {
   test("a script changed after approval", async () => {
     const { deps, version } = setup();
@@ -52,6 +58,7 @@ describe("tars script run refuses before the sandbox", () => {
 
   test('a "secret:url" secret without a url', async () => {
     const { deps } = setup(fakeSecrets({ "script:bark": "just-a-token" }));
+    typeFile(deps, '{"type":"static"}');
     expect(await run(["script", "run", "bark-push"], deps)).toBe(1);
     expect(deps.io.stderr.join("\n")).toContain("must be JSON");
     expect(deps.io.stderr.join("\n")).not.toContain("just-a-token");
@@ -71,6 +78,13 @@ describe("tars script run refuses before the sandbox", () => {
     writeFileSync(join(types, "bark.json"), "{");
     expect(await run(["script", "run", "bark-push"], deps)).toBe(1);
     expect(deps.io.stderr.join("\n")).toContain("tars secret set bark");
+  });
+
+  test("a secret whose type file is gone: a Google credential is not handed over as static", async () => {
+    const credential = '{"client_id":"c","client_secret":"s","refresh_token":"r","scope":"x"}';
+    const { deps } = setup(fakeSecrets({ "script:bark": credential }));
+    expect(await run(["script", "run", "bark-push"], deps)).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("the type of script:bark is unknown");
   });
 
   test("--timeout outside 1 to 3600 is a usage error", async () => {

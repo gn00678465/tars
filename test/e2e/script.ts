@@ -770,6 +770,22 @@ async function inner(): Promise<number> {
         .join(",")}`,
     );
 
+    const abandoned = await step(
+      "abandon-during-run",
+      `tars script run gated -- sleep 4 & slow=$!
+       until pgrep -f '[s]cript.py sleep 4' > /dev/null; do sleep 0.2; done
+       tars script abandon gated; wait $slow; echo "slow-exit $?"`,
+    );
+    check(
+      "abandon-during-run",
+      "a run whose script is abandoned while it runs still ends with the script's own exit code",
+      abandoned.stdout.includes("gated v2 woke") &&
+        abandoned.stdout.includes("slow-exit 0") &&
+        !existsSync(gatedHome) &&
+        !abandoned.stderr.includes("ENOENT"),
+      `${abandoned.stdout.trim().replaceAll("\n", " | ")}; ${abandoned.stderr.trim().slice(0, 200)}`,
+    );
+
     const lib = join(
       host.fakeHome,
       ".local/share/tars/scripts/library/probe/versions/v1/script.py",

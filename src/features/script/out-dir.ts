@@ -58,6 +58,11 @@ export async function prepareOutDir(requested: string, rules: OutDirRules): Prom
       if ((within(path, f) && !(f === realData && carvedOut(path))) || within(f, path))
         throw new TarsError(`--out ${requested} overlaps ${f}`);
     }
+    // The root itself holds the user's project, or every script's output: give one subdirectory.
+    if (roots.some((root) => path === root))
+      throw new TarsError(
+        `--out ${requested} must be a subdirectory, for example ${join(requested, "<name>")}`,
+      );
     // sandbox-runtime guards .git/hooks, .vscode and the like only below --out, never --out
     // itself, so a dot directory anywhere below the allowed root cannot be the one handed out.
     const dotted = (root: string) =>

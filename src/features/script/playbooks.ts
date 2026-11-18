@@ -29,7 +29,12 @@ export async function listPlaybooks(dir: string): Promise<{
       broken.push({ name: file, reason: `${path}: name it with lowercase letters, digits and -` });
       continue;
     }
-    const summary = frontSummary(await readFile(path, "utf8"));
+    const text = await readFile(path, "utf8").catch((err: NodeJS.ErrnoException) => err);
+    if (text instanceof Error) {
+      broken.push({ name, reason: `${path}: ${text.code ?? text.message}` });
+      continue;
+    }
+    const summary = frontSummary(text);
     if (summary === undefined)
       broken.push({ name, reason: `${path} must start with front matter:\n${FORMAT}` });
     else playbooks.push({ name, summary, path });

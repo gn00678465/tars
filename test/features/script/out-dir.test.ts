@@ -48,6 +48,15 @@ describe("prepareOutDir", () => {
     },
   );
 
+  test.each([
+    ["the launch dir", (r: OutDirRules) => r.launchDir],
+    ["the workspace's out/", (r: OutDirRules) => join(r.data, "workspace/out")],
+    ["the workspace's .evidence/", (r: OutDirRules) => join(r.data, "workspace/.evidence")],
+  ])("%s itself is refused: a script gets a subdirectory", async (_, path) => {
+    const r = rules();
+    await expect(prepareOutDir(path(r), r)).rejects.toThrow("must be a subdirectory");
+  });
+
   test("<launch>/out/files is allowed", async () => {
     const r = rules();
     const out = join(r.launchDir, "out/files");

@@ -49,7 +49,12 @@ export async function runApproved(
     exit: outcome.exit,
     ms: outcome.ms,
   };
-  await appendFile(join(script.dir, "runs.jsonl"), `${JSON.stringify(record)}\n`);
+  // abandon may have moved the script to retired/ while it ran; the run itself still stands.
+  await appendFile(join(script.dir, "runs.jsonl"), `${JSON.stringify(record)}\n`).catch(
+    (err: NodeJS.ErrnoException) => {
+      if (err.code !== "ENOENT") throw err;
+    },
+  );
   return outcome;
 }
 
@@ -89,6 +94,11 @@ export async function handOver(
   if (stored === undefined)
     throw new TarsError(
       `no ${secretName(kind)} in the keyring. Ask the user to run, in their own terminal: ${obtain}`,
+    );
+  // Without its type file a google-oauth credential would pass as static: refresh token and all.
+  if (type === undefined)
+    throw new TarsError(
+      `the type of ${secretName(kind)} is unknown. Ask the user to store it again, in their own terminal: tars secret set ${kind}, or tars secret login ${kind} for a Google account`,
     );
   if (type !== "google-oauth") {
     const host = wantsUrl ? secretUrlHost(stored) : undefined;

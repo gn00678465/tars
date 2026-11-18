@@ -181,10 +181,12 @@ async function liveRun(
   const { terminal } = ctx;
   const args = await askArgs(terminal);
   if (args === undefined) return "end of input";
-  const out = await terminal.ask("--out directory the script may write (empty line for none): ");
+  const rules = ctx.outDirRules();
+  const out = await terminal.ask(
+    `--out directory the script may write, relative to ${rules.cwd} (empty line for none): `,
+  );
   if (out === undefined) return "end of input";
   try {
-    const rules = ctx.outDirRules();
     // No shell reads this line, so a leading ~ would otherwise name a directory called "~".
     const requested = out.trim().replace(/^~(?=\/|$)/, rules.realHome);
     const outDir = requested === "" ? undefined : await prepareOutDir(requested, rules);

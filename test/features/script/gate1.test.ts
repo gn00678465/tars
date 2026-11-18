@@ -164,6 +164,8 @@ describe("submit", () => {
   test('a "secret:url" secret of the wrong shape is refused without printing it', async () => {
     const scripts = tempHome();
     const source = sampleScript({ name: "probe", dependencies: [] });
+    mkdirSync(join(scripts, "secrets"), { recursive: true });
+    writeFileSync(join(scripts, "secrets", "bark.json"), '{"type":"static"}');
     const secrets = fakeSecrets({ "script:bark": "just-a-TOKEN-value" });
     const result = await submit(draftDir(source), context(scripts, { secrets }));
     expect(kinds(result)).toEqual(["secret-shape"]);
@@ -175,6 +177,15 @@ describe("submit", () => {
       }),
     );
     expect(ok.ok).toBe(true);
+  });
+
+  test("a secret whose type file is gone is refused, so a Google credential never passes as static", async () => {
+    const scripts = tempHome();
+    const source = sampleScript({ name: "probe", dependencies: [] });
+    const secrets = fakeSecrets({ "script:bark": '{"url": "https://push.example", "key": "k"}' });
+    const result = await submit(draftDir(source), context(scripts, { secrets }));
+    expect(kinds(result)).toEqual(["secret-shape"]);
+    expect(texts(result)).toContain("its type is unknown");
   });
 
   describe("a google-oauth secret", () => {

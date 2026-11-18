@@ -126,6 +126,15 @@ async function secretProblems(
   if (type === "google-oauth" && wantsUrl) return [{ kind: "secret-oauth-url", secret }];
   const value = await ctx.secrets.get(secretName(secret));
   if (value === null) return [{ kind: "secret-missing", secret, obtain }];
+  if (type === undefined)
+    return [
+      {
+        kind: "secret-shape",
+        secret,
+        detail: "its type is unknown",
+        obtain: `${obtain} (or tars secret login ${secret} for a Google account)`,
+      },
+    ];
   const shape =
     type === "google-oauth"
       ? parseGoogleCredential(value)
