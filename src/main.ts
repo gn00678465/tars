@@ -58,6 +58,7 @@ Examples:
   registerScriptCommands(program, {
     io: deps.io,
     scriptsDir: () => resolvePaths(deps.env).scripts,
+    playbooksDir: () => resolvePaths(deps.env).playbooks,
     now: () => new Date(),
     secrets: deps.secrets,
     ...runtime,

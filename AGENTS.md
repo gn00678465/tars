@@ -25,7 +25,7 @@ tars install ─ 複製 tars-skills/ 的每個 skill（外部的列在 upstream.
 | 要加的 | 放哪裡 | 怎麼接上 | 邊界 |
 |---|---|---|---|
 | playbook | `tars-skills/tars-mode/playbooks/<名稱>.md`，照 `reference/playbook-template.md` 寫 | 在 tars-mode 的路由表加一列。不帶「hey tars」也要進來時，description 加上請求的字詞 | tars 處理一類請求的流程。自己沒有觸發條件，只從路由表進入 |
-| 使用者的 playbook | 不進 repo。agent 在使用者的 tars session 寫到 `$TARS_DATA_DIR/playbooks/` | 不改路由表。路由表沒命中時，tars-mode 讀它的「進入」 | 配合使用者腳本的流程。`tars install` 不碰它 |
+| 使用者的 playbook | 不進 repo。agent 在使用者的 tars session 寫到 `$TARS_DATA_DIR/playbooks/` | 不改路由表。路由表沒命中時，tars-mode 用 `tars script search` 依開頭的 `summary` 找到它 | 配合使用者腳本的流程。`tars install` 不碰它 |
 | skill | `tars-skills/<名稱>/SKILL.md`。外部的照原樣複製，記進 `upstream.json` | `scripts/build.ts` 打包整個 `tars-skills/`，不用另外登記。要從 tars-mode 進入時，路由表加一列 | 有自己的 description，能單獨觸發，也能被 playbook 載入。用到 tars 指令時，用法寫在這個 skill |
 | 腳本 | 不進 repo。使用者在 tars session 請 agent 寫，走 `script-mode.md` 三道關入庫。`examples/scripts/` 只是範本 | 不改路由表與 `script-mode.md`，playbook 不點名個別腳本。agent 執行時用 `tars script search` 與 `list` 找 | 對外部服務做事或取資料，而且會重複做、要用金鑰或會寫到外部。只在沙盒跑，入庫只由使用者核可 |
 

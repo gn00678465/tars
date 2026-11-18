@@ -35,7 +35,7 @@
 ## 步驟
 
 1. 從請求取 2 到 3 個關鍵字，執行 `tars script search <關鍵字1> <關鍵字2> --json`。
-2. 有合用的命中時，執行 `tars script show <名稱>`，讀呼叫方式、結束碼與 notes，再到步驟 3。輸出是 `[]` 或命中的都不合用時，執行 `tars script list --json`，讀每一支的 `summary`：
+2. 命中裡有 `kind` 是 `playbook` 而且合用的，讀它的 `path`，照它做，不再往下。有合用的腳本時，執行 `tars script show <名稱>`，讀呼叫方式、結束碼與 notes，再到步驟 3。輸出是 `[]` 或命中的都不合用時，執行 `tars script list --json`，讀每一支的 `summary`：
    - 有一支 `approved` 的能做這件事時，執行 `tars script note <名稱> "搜尋用詞：<這次的關鍵字>"`，下次搜得到它。再 `show` 它，到步驟 3。
    - 能做這件事的那支不是 `approved` 時，先執行 `tars script show <名稱>`。成功時庫裡有舊版，照步驟 3 跑它，回覆時提一句有一版更新在等核可。失敗時告訴使用者它的狀態，照上面表的「接下來」繼續。兩種都不另寫一支。
    - 沒有時，跳到步驟 6。
@@ -56,12 +56,7 @@
 - 金鑰不經過對話。`run` 或 `submit` 回報缺金鑰或格式不符時，訊息裡寫著要執行的指令（`tars secret set <種類>` 或 `tars secret login <種類>`）。請使用者在自己的終端機執行，並說明格式。腳本宣告 `"secret:url"` 時是 `{"url": "<服務網址>", "key": "<金鑰>"}`，網址用 http 或 https。其他照腳本的說明。不要請使用者把金鑰貼進對話，不要把金鑰放進參數。
 - 腳本宣告的金鑰在 `submit` 時就要在 keyring 裡，沒有時 gate 1 不通過。要寫用金鑰的腳本時，先請使用者設好金鑰。
 - 請使用者設金鑰前，先執行 `tars secret list`。它列出每個種類、類型，以及 keyring 裡有沒有值，不印值。列為 `stored` 的不再請使用者設。
-- Google 的服務（例如行事曆）用 `google-oauth` 型別的金鑰。腳本只拿到約一小時有效的 access token；OAuth client 與 refresh token 留在 keyring。
-  - keyring 沒有時，請使用者在自己的終端機執行 `tars secret login <種類>`。它會問 client ID 與 client secret，印出一個網址讓使用者在瀏覽器同意。
-  - 使用者要先在自己的 Google Cloud 專案做三件事：啟用要用的 API（例如 Google Calendar API）；建一個「Desktop app」型別的 OAuth client，client secret 只在建立時看得到，要當場複製；在 OAuth 同意畫面按「Publish app」。停在 Testing 的話，登入七天後失效。
-  - 預設只要求讀自己日曆行程的權限。腳本要別的權限時，請使用者加 `--scope <scope>` 重新登入。
-  - 不自己執行 `tars secret login`，它在 session 裡會拒絕。不請使用者把 client secret 或 token 貼進對話。
-  - `run` 回報 `invalid_grant` 時，登入過期或被撤銷了，請使用者再執行一次 `tars secret login <種類>`。回報 `invalid_client` 或 `deleted_client` 時，請使用者到 Google Cloud Console 檢查那個 OAuth client。
+- Google 使用者資料的服務（例如行事曆）用 `google-oauth` 型別的金鑰，請使用者在自己的終端機執行 `tars secret login <種類>`。使用者要先在 Google Cloud 做的事，照 `tars secret login --help` 告訴使用者。不自己執行 login，它在 session 裡會拒絕。之後 `run` 回報登入或 OAuth client 的問題時，照錯誤訊息做。
 - 只用 `tars script run` 與 `trial` 執行腳本。不用 `python`、`uv run` 直接跑，那樣沒有沙盒。
 - 不自己執行 `tars script approve`，不用 `script`、`expect` 這類工具開終端機替使用者輸入，不清掉 `TARS_IN_SESSION`，不改 `$TARS_DATA_DIR/scripts/` 底下的任何檔案。入庫只由使用者決定。
 - gate 1 回報 OSV 公告時，換成修正過、發布滿 7 天的版本再送。不刪檢查，不換套件名稱繞過。

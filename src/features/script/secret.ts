@@ -161,7 +161,8 @@ Examples:
       `
 Needs an OAuth client of type "Desktop app" from your own Google Cloud project, with the
 API enabled and the app published ("In production"); a "Testing" app's sign-in ends after
-7 days. Asks for the client ID and secret on /dev/tty (the secret is not shown), prints an
+7 days. The client secret is shown only when the client is created: copy it then. The
+default scope reads your own calendar's events; a script that needs more takes --scope. Asks for the client ID and secret on /dev/tty (the secret is not shown), prints an
 address to open, and waits up to 5 minutes for the browser to come back to a port on
 127.0.0.1. Stores the client, the refresh token and the granted scope in the keyring and
 prints none of them. Scripts only ever get a short-lived access token. Refuses inside a

@@ -16,6 +16,7 @@ import { ensureSymlink, uniqueTemp, writeFileAtomic } from "../../core/fs.ts";
 import { sha256 } from "../../core/hash.ts";
 import type { PackageName } from "./lock.ts";
 import { isRecord, requireScriptMeta, SLUG, type ScriptMeta } from "./metadata.ts";
+import type { UserPlaybook } from "./playbooks.ts";
 import { approvePackages, ensureVenv, LOCK_FILE, type Toolchain } from "./supply.ts";
 
 export interface ScriptsLayout {
@@ -139,30 +140,41 @@ export async function listScripts(
 export const readNotes = (script: LibraryScript) =>
   readFile(join(script.dir, "NOTES.md"), "utf8").catch(() => "");
 
-export interface SearchHit {
-  readonly script: LibraryScript;
-  readonly matched: number;
-}
+export type SearchHit = { readonly matched: number } & (
+  | { readonly kind: "script"; readonly script: LibraryScript }
+  | { readonly kind: "playbook"; readonly playbook: UserPlaybook }
+);
 
+/** Approved scripts by name, summary, args and notes; the user's playbooks by name and summary. */
 export async function searchScripts(
   layout: ScriptsLayout,
+  playbooks: readonly UserPlaybook[],
   terms: readonly string[],
   now: Date,
 ): Promise<SearchHit[]> {
   const { scripts } = await listScripts(layout);
   const needles = terms.map((t) => t.toLowerCase());
+  const matched = (...fields: string[]) => {
+    const haystack = fields.join("\n").toLowerCase();
+    return needles.filter((n) => haystack.includes(n)).length;
+  };
   const hits: SearchHit[] = [];
   for (const script of scripts) {
     const { name, summary, args } = script.meta;
-    const haystack = [name, summary, args, await readNotes(script)].join("\n").toLowerCase();
-    const matched = needles.filter((n) => haystack.includes(n)).length;
-    if (matched > 0) hits.push({ script, matched });
+    const n = matched(name, summary, args, await readNotes(script));
+    if (n > 0) hits.push({ kind: "script", script, matched: n });
   }
-  hits.sort((a, b) => b.matched - a.matched || a.script.name.localeCompare(b.script.name));
+  for (const playbook of playbooks) {
+    const n = matched(playbook.name, playbook.summary);
+    if (n > 0) hits.push({ kind: "playbook", playbook, matched: n });
+  }
+  const label = (h: SearchHit) =>
+    h.kind === "script" ? h.script.name : `playbook:${h.playbook.name}`;
+  hits.sort((a, b) => b.matched - a.matched || label(a).localeCompare(label(b)));
   await appendJsonLine(layout.searches, {
     time: now.toISOString(),
     terms,
-    hits: hits.map((h) => h.script.name),
+    hits: hits.map(label),
   });
   return hits;
 }

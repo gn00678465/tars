@@ -152,6 +152,42 @@ describe("tars script search", () => {
     });
   });
 
+  test("finds the user's playbooks by file name and summary only, and warns about one without a summary", async () => {
+    const { scripts, deps } = setup();
+    installSample(scripts, "bark-push");
+    const dir = join(scripts, "..", "playbooks");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "trip-plan.md"),
+      "---\nsummary: 排旅行行程、檢查已存的行程\n---\n# 旅行規劃\n推播\n",
+    );
+    writeFileSync(join(dir, "notes.md"), "# 行程筆記\n");
+    writeFileSync(join(dir, "README.txt"), "行程");
+    expect(await tars(deps, "search", "行程", "推播", "--json")).toBe(0);
+    expect(JSON.parse(deps.io.stdout.join(""))).toEqual([
+      {
+        kind: "script",
+        name: "bark-push",
+        summary: "推播一則通知到手機",
+        secret: "bark",
+        effects: "external-write",
+        matched: 1,
+      },
+      {
+        kind: "playbook",
+        name: "trip-plan",
+        summary: "排旅行行程、檢查已存的行程",
+        path: join(dir, "trip-plan.md"),
+        matched: 1,
+      },
+    ]);
+    expect(deps.io.stderr.join("\n")).toContain("skipped playbook notes");
+    expect(deps.io.stderr.join("\n")).toContain("summary:");
+    expect(readFileSync(join(scripts, "searches.jsonl"), "utf8")).toContain(
+      '"hits":["bark-push","playbook:trip-plan"]',
+    );
+  });
+
   test("no match exits 0, prints nothing on stdout, and is still logged", async () => {
     const { scripts, deps } = setup();
     installSample(scripts, "bark-push");

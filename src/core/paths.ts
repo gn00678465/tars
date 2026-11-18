@@ -13,6 +13,8 @@ export interface TarsPaths {
   readonly workspace: string;
   readonly harness: string;
   readonly scripts: string;
+  /** The user's own playbooks; tars install never touches them. */
+  readonly playbooks: string;
   /** Directory `tars install` copies the executable into. */
   readonly bin: string;
 }
@@ -41,6 +43,7 @@ export function resolvePaths(env: Env): TarsPaths {
     workspace: join(data, "workspace"),
     harness: join(data, "harness"),
     scripts: join(data, "scripts"),
+    playbooks: join(data, "playbooks"),
     bin: xdgDir(env.XDG_BIN_HOME, home, "bin"),
   };
 }

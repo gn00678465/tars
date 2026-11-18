@@ -21,6 +21,7 @@ import { gatherDossier, renderDossier } from "./dossier.ts";
 import type { GoogleEndpoints } from "./google.ts";
 import { hostText, OUTPUT_LIMIT, parseSlug, type Domain, type ScriptMeta } from "./metadata.ts";
 import type { OsvEndpoint } from "./osv.ts";
+import { listPlaybooks } from "./playbooks.ts";
 import { prepareOutDir, type OutDirRules } from "./out-dir.ts";
 import {
   attachReview,
@@ -36,6 +37,7 @@ import type { Toolchain } from "./supply.ts";
 export interface ScriptCommandContext {
   readonly io: Io;
   scriptsDir(): string;
+  playbooksDir(): string;
   now(): Date;
   readonly secrets: SecretStore;
   sandboxHost(): Promise<SandboxHost>;
@@ -132,25 +134,43 @@ Exit codes: 0 done, 1 failure, 2 usage error.`,
 
   script
     .command("search")
-    .description("Find scripts whose name, summary, args or notes contain any of the words.")
-    .argument("<words...>", "words to look for; a script matching more words ranks higher")
+    .description("Find approved scripts, and the user's playbooks, that contain any of the words.")
+    .argument("<words...>", "words to look for; a hit matching more words ranks higher")
     .option("--json", "print the result as JSON")
     .addHelpText(
       "after",
       `
+A script matches on its name, summary, args or notes. A playbook in the user's playbooks
+directory matches on its file name and the summary in its front matter; read it at "path".
+Each JSON hit has "kind": "script" or "playbook".
+
 Exit codes: 0 done (also when nothing matched), 1 failure, 2 usage error.
 
 Examples:
   tars script search push notification --json`,
     )
     .action(async (words: string[], opts: { json?: boolean }) => {
-      const hits = await searchScripts(layout(), words, ctx.now());
+      const { playbooks, broken } = await listPlaybooks(ctx.playbooksDir());
+      for (const b of broken) ctx.io.err(`warning: skipped playbook ${b.name}: ${b.reason}`);
+      const hits = await searchScripts(layout(), playbooks, words, ctx.now());
       if (opts.json)
         ctx.io.out(
-          JSON.stringify(hits.map((h) => ({ ...summaryJson(h.script.meta), matched: h.matched }))),
+          JSON.stringify(
+            hits.map((h) =>
+              h.kind === "script"
+                ? { kind: h.kind, ...summaryJson(h.script.meta), matched: h.matched }
+                : { kind: h.kind, ...h.playbook, matched: h.matched },
+            ),
+          ),
         );
-      else if (hits.length === 0) ctx.io.err("no script matched");
-      else for (const h of hits) ctx.io.out(summaryLine(h.script.meta));
+      else if (hits.length === 0) ctx.io.err("nothing matched");
+      else
+        for (const h of hits)
+          ctx.io.out(
+            h.kind === "script"
+              ? summaryLine(h.script.meta)
+              : `${h.playbook.name}\tplaybook\t-\t${h.playbook.summary}\t${h.playbook.path}`,
+          );
     });
 
   script
