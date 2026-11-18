@@ -12,12 +12,20 @@ export interface TarsPaths {
   readonly skills: string;
   readonly workspace: string;
   readonly harness: string;
+  readonly scripts: string;
+  /** The user's own playbooks; tars install never touches them. */
+  readonly playbooks: string;
   /** Directory `tars install` copies the executable into. */
   readonly bin: string;
 }
 
 /** Set by tars for every harness it starts, so `tars` run inside a session finds the same data dir. */
 export const DATA_DIR_VAR = "TARS_DATA_DIR";
+
+export const LAUNCH_DIR_VAR = "TARS_LAUNCH_DIR";
+
+/** Set for every harness tars starts; `tars script approve` refuses to run where it is set. */
+export const IN_SESSION_VAR = "TARS_IN_SESSION";
 
 export function resolvePaths(env: Env): TarsPaths {
   const home = env.HOME;
@@ -34,6 +42,8 @@ export function resolvePaths(env: Env): TarsPaths {
     skills: join(data, "skills"),
     workspace: join(data, "workspace"),
     harness: join(data, "harness"),
+    scripts: join(data, "scripts"),
+    playbooks: join(data, "playbooks"),
     bin: xdgDir(env.XDG_BIN_HOME, home, "bin"),
   };
 }

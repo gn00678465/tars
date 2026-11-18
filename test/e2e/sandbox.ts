@@ -1,8 +1,30 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, rmSync } from "node:fs";
 import { basename, dirname } from "node:path";
 
 /** Exit code when a prerequisite is missing; the automake convention for a skipped test. */
 export const EXIT_SKIP = 77;
+
+export interface Check {
+  readonly id: string;
+  readonly claim: string;
+  readonly pass: boolean;
+  readonly evidence: string;
+}
+
+export function printChecks(checks: readonly Check[]): void {
+  console.log("Checks:");
+  for (const c of checks)
+    console.log(`  ${c.pass ? "PASS" : "FAIL"}  ${c.id}: ${c.claim}\n        ${c.evidence}`);
+}
+
+/** Prints the tally, removes the scratch dir unless a check failed or TARS_E2E_KEEP=1, returns the exit code. */
+export function finishChecks(checks: readonly Check[], work: string, tallySuffix = ""): number {
+  const failed = checks.filter((c) => !c.pass).length;
+  console.log(`\n${checks.length - failed}/${checks.length} checks passed${tallySuffix}`);
+  if (failed > 0 || process.env.TARS_E2E_KEEP === "1") console.log(`scratch dir kept: ${work}`);
+  else rmSync(work, { recursive: true, force: true });
+  return failed > 0 ? 1 : 0;
+}
 
 const SYSTEM_TOOLS = [
   "bwrap",
@@ -19,17 +41,25 @@ export type Harness = (typeof HARNESSES)[number];
 
 export const overrideVar = (harness: Harness) => `TARS_E2E_${harness.toUpperCase()}`;
 
-/**
- * The real binary behind `harness`: the override variable, else the one on PATH. A mise
- * command wrapper resolves to the mise executable itself, which needs mise's config from the
- * real home, so it is asked for the tool's own binary instead.
- */
+/** The real binary behind `harness`: the override variable, else the one on PATH. */
 export function resolveHarness(harness: Harness, env: NodeJS.ProcessEnv): string | undefined {
-  const given = env[overrideVar(harness)] || Bun.which(harness);
+  return resolveTool(harness, env, env[overrideVar(harness)] || undefined);
+}
+
+/**
+ * The real binary behind `tool` on PATH, or behind `given`. A mise command wrapper resolves to
+ * the mise executable itself, which needs mise's config from the real home, so it is asked for
+ * the tool's own binary instead.
+ */
+export function resolveTool(
+  tool: string,
+  env: NodeJS.ProcessEnv,
+  given = Bun.which(tool),
+): string | undefined {
   if (!given || !existsSync(given)) return undefined;
   const real = realpathSync(given);
   if (basename(real) !== "mise") return real;
-  const found = Bun.spawnSync([real, "which", harness], { env }).stdout.toString().trim();
+  const found = Bun.spawnSync([real, "which", tool], { env }).stdout.toString().trim();
   return found && existsSync(found) ? realpathSync(found) : undefined;
 }
 
@@ -107,9 +137,12 @@ export interface StepResult {
 }
 
 const KEYRING_PASSWORD = "e2e-keyring-password";
+let busCount = 0;
 
 // The bus listens on an abstract socket, which exists only inside this network namespace.
 // gnome-keyring keeps its keyring under the fake home, so entries survive from step to step.
+// Each step gets its own address: with one shared name, a step sometimes found it still bound
+// (EADDRINUSE) right after the step before had exited.
 const WITH_PRIVATE_KEYRING = `set -e
 dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --print-pid >/dev/null
 printf '%s' "$E2E_KEYRING_PASSWORD" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
@@ -134,7 +167,6 @@ export function baseEnv(host: Host): Record<string, string> {
     LANG: "C.UTF-8",
     TMPDIR: "/tmp",
     XDG_RUNTIME_DIR: `/run/user/${host.uid}`,
-    DBUS_SESSION_BUS_ADDRESS: "unix:abstract=tars-e2e-session-bus",
     E2E_KEYRING_PASSWORD: KEYRING_PASSWORD,
   };
 }
@@ -182,7 +214,11 @@ export async function runStep(host: Host, step: Step): Promise<StepResult> {
   ];
   const started = performance.now();
   const child = Bun.spawn(bwrap, {
-    env: { ...baseEnv(host), ...step.env },
+    env: {
+      ...baseEnv(host),
+      DBUS_SESSION_BUS_ADDRESS: `unix:abstract=tars-e2e-session-bus-${++busCount}`,
+      ...step.env,
+    },
     stdin: step.stdin === undefined ? "ignore" : new TextEncoder().encode(step.stdin),
     stdout: "pipe",
     stderr: "pipe",

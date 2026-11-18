@@ -1,0 +1,8 @@
+# zod 3 comes in through @anthropic-ai/sandbox-runtime, which requires ^3.25; only zod 4.6.6 has
+# the fix. tars uses sandbox-runtime as a library, where zod parses no outside input: only the
+# `srt` CLI config loader and the external-decider mode call it, and tars uses neither (r54).
+# Re-check when this expires or when sandbox-runtime is upgraded.
+[[IgnoredVulns]]
+id = "GHSA-mrhx-c7xc-m3w5"
+ignoreUntil = 2026-12-16
+reason = "zod parses no outside input in the sandbox-runtime library path tars uses (r54)"

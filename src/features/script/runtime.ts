@@ -1,0 +1,86 @@
+import { isAbsolute, join } from "node:path";
+import { accountHome } from "../../core/account.ts";
+import { TarsError } from "../../core/exit.ts";
+import {
+  DATA_DIR_VAR,
+  IN_SESSION_VAR,
+  LAUNCH_DIR_VAR,
+  resolvePaths,
+  type Env,
+} from "../../core/paths.ts";
+import type { GoogleEndpoints } from "./google.ts";
+import type { OsvEndpoint } from "./osv.ts";
+import type { OutDirRules } from "./out-dir.ts";
+import type { SandboxHost } from "./sandbox.ts";
+import { seccompHelper } from "./seccomp.ts";
+import { parsePythonVersion, SYSTEM_PYTHON, type Toolchain } from "./supply.ts";
+
+const PYPI_INDEX = "https://pypi.org/simple";
+const OSV: OsvEndpoint = { url: "https://api.osv.dev", timeoutMs: 30_000 };
+// Constants on purpose: an address read from the environment or the keyring could send the
+// refresh token and the client secret somewhere else.
+const GOOGLE: GoogleEndpoints = {
+  auth: "https://accounts.google.com/o/oauth2/v2/auth",
+  token: "https://oauth2.googleapis.com/token",
+  timeoutMs: 30_000,
+};
+
+/**
+ * The line `submit` tells the agent to hand to the user. The user's own shell resolves the data
+ * directory from their environment, so it is pinned whenever it is not the account's default.
+ */
+export function approveCommand(name: string, data: string, accountHome: string): string {
+  const pin =
+    data === join(accountHome, ".local", "share", "tars")
+      ? ""
+      : `${DATA_DIR_VAR}='${data.replaceAll("'", "'\\''")}' `;
+  return `${pin}tars script approve ${name}`;
+}
+
+export function scriptRuntime(env: Env, cwd: string) {
+  let home: string | undefined;
+  const realHome = () => (home ??= accountHome());
+  const bins = () => [...new Set([resolvePaths(env).bin, join(realHome(), ".local", "bin")])];
+  return {
+    inSession: () => (env[IN_SESSION_VAR] ?? "") !== "",
+    osv: () => OSV,
+    google: () => GOOGLE,
+    approveCommand: (name: string) => approveCommand(name, resolvePaths(env).data, realHome()),
+    sandboxHost: async (): Promise<SandboxHost> => {
+      const { data } = resolvePaths(env);
+      return {
+        realHome: realHome(),
+        data,
+        bins: bins(),
+        seccomp: await seccompHelper(data, Bun.embeddedFiles),
+      };
+    },
+    outDirRules: (): OutDirRules => {
+      const launch = env[LAUNCH_DIR_VAR];
+      return {
+        cwd,
+        launchDir: launch && isAbsolute(launch) ? launch : cwd,
+        realHome: realHome(),
+        data: resolvePaths(env).data,
+        bins: bins(),
+      };
+    },
+    toolchain: (): Toolchain => {
+      const proc = Bun.spawnSync([
+        SYSTEM_PYTHON,
+        "-c",
+        "import sys; print('%d.%d' % sys.version_info[:2])",
+      ]);
+      const version = parsePythonVersion(proc.stdout.toString().trim());
+      if (proc.exitCode !== 0 || version === undefined)
+        throw new TarsError(`${SYSTEM_PYTHON} is missing or broken; scripts need it`);
+      return {
+        index: PYPI_INDEX,
+        python: { path: SYSTEM_PYTHON, version },
+        path: env.PATH ?? "",
+        realHome: realHome(),
+        cacheDir: join(resolvePaths(env).data, "uv-cache"),
+      };
+    },
+  };
+}

@@ -11,13 +11,20 @@ export const processIo: Io = {
   err: (line) => void process.stderr.write(`${line}\n`),
 };
 
-/** Reads one secret: from a TTY with a prompt on stderr and no echo, otherwise all of stdin. */
+/**
+ * Reads one secret: from a TTY with a prompt on stderr and a "*" for each character typed,
+ * otherwise all of stdin. Escape sequences are dropped: a terminal with bracketed paste on wraps
+ * a pasted token in ESC[200~ and ESC[201~, which would otherwise become part of the secret.
+ */
 export async function readSecret(prompt: string): Promise<string> {
   if (!process.stdin.isTTY) return Bun.stdin.text();
-  process.stderr.write(prompt);
   const stdin = process.stdin;
+  // Raw mode first: a key typed in answer to a prompt shown earlier would be echoed by the kernel.
+  stdin.setRawMode(true);
+  process.stderr.write(prompt);
   return new Promise((resolve, reject) => {
     let value = "";
+    let escape: "" | "esc" | "csi" = "";
     const finish = (settle: () => void) => {
       stdin.off("data", onData);
       stdin.setRawMode(false);
@@ -27,12 +34,27 @@ export async function readSecret(prompt: string): Promise<string> {
     };
     const onData = (chunk: Buffer) => {
       for (const ch of chunk.toString("utf8")) {
-        if (ch === "\r" || ch === "\n" || ch === "\u0004") return finish(() => resolve(value));
-        if (ch === "\u0003") return finish(() => reject(new TarsError("cancelled")));
-        value = ch === "\u007f" || ch === "\b" ? value.slice(0, -1) : value + ch;
+        if (escape === "esc") {
+          escape = ch === "[" ? "csi" : "";
+          continue;
+        }
+        if (escape === "csi") {
+          if (ch >= "@" && ch <= "~") escape = "";
+          continue;
+        }
+        if (ch === "\u001b") escape = "esc";
+        else if (ch === "\r" || ch === "\n" || ch === "\u0004") return finish(() => resolve(value));
+        else if (ch === "\u0003") return finish(() => reject(new TarsError("cancelled")));
+        else if (ch === "\u007f" || ch === "\b") {
+          if (value === "") continue;
+          value = [...value].slice(0, -1).join("");
+          process.stderr.write("\b \b");
+        } else if (ch >= " ") {
+          value += ch;
+          process.stderr.write("*");
+        }
       }
     };
-    stdin.setRawMode(true);
     stdin.resume();
     stdin.on("data", onData);
   });

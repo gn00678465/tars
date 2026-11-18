@@ -45,6 +45,7 @@ export const GEMINI_LEAKS = {
 export const SIDE_EFFECTS = {
   claudeHook: "claude-hook",
   claudeMcp: "claude-mcp",
+  claudeLocalMcp: "claude-local-mcp",
   geminiHook: "gemini-hook",
   geminiMcp: "gemini-mcp",
 } as const;
@@ -104,6 +105,7 @@ export function writeFixtures(host: Host): void {
   mkdirSync(l.logs, { recursive: true });
   put(home(".tars-e2e-fake-home"), "fake\n");
   mkdirSync(at(l.scratchDir), { recursive: true });
+  mkdirSync(at(l.workspace), { recursive: true });
 
   put(home(".claude/CLAUDE.md"), `${SENTINEL.userClaudeMd}\n`);
   put(home(".claude/rules/x.md"), `${SENTINEL.userClaudeRule}\n`);
@@ -127,6 +129,18 @@ export function writeFixtures(host: Host): void {
           type: "stdio",
           command: "/bin/sh",
           args: ["-c", touch(SIDE_EFFECTS.claudeMcp)],
+        },
+      },
+      projects: {
+        [l.workspace]: {
+          hasTrustDialogAccepted: true,
+          mcpServers: {
+            "l-mcp": {
+              type: "stdio",
+              command: "/bin/sh",
+              args: ["-c", touch(SIDE_EFFECTS.claudeLocalMcp)],
+            },
+          },
         },
       },
     }),
@@ -166,9 +180,13 @@ export function snapshotUserConfig(host: Host): Map<string, string> {
     else if (stat.isDirectory()) for (const name of readdirSync(path)) walk(join(path, name));
     else entries.set(rel, createHash("sha256").update(readFileSync(path)).digest("hex"));
   };
+  // Claude Code keeps its login and state in ~/.claude and ~/.claude.json, which tars now shares
+  // (r55); only the user's config files there must stay as they were.
   for (const rel of [
-    ".claude",
-    ".claude.json",
+    ".claude/CLAUDE.md",
+    ".claude/rules",
+    ".claude/settings.json",
+    ".claude/skills",
     ".gemini",
     ".config",
     ".agents",
