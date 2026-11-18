@@ -87,6 +87,18 @@ describe("tars script trial builds a missing venv", () => {
     const deps = testDeps({ env: { HOME: home, TARS_DATA_DIR: data, PATH: tempHome() } });
     expect(await run(["script", "trial", "bark-push"], deps)).toBe(1);
     expect(deps.io.stderr.join("\n")).toContain("uv is not on PATH");
+    const evidence = join(data, "workspace", ".evidence", "bark-push");
+    expect(deps.io.stderr[0]).toBe(`evidence: ${evidence}`);
+    expect(existsSync(evidence)).toBe(true);
+  });
+
+  test("--out is a usage error: a trial writes only to its evidence directory", async () => {
+    const home = tempHome();
+    const data = join(home, "data");
+    await submitted(join(data, "scripts"), plainScript("bark-push"));
+    const deps = testDeps({ env: { HOME: home, TARS_DATA_DIR: data } });
+    expect(await run(["script", "trial", "bark-push", "--out", "out/trial"], deps)).toBe(2);
+    expect(existsSync(join(data, "workspace", "out", "trial"))).toBe(false);
   });
 });
 

@@ -17,7 +17,7 @@ import {
 } from "./library.ts";
 import type { ScriptMeta } from "./metadata.ts";
 import { findAdvisories, type OsvEndpoint } from "./osv.ts";
-import { prepareOutDir, type OutDirRules } from "./out-dir.ts";
+import { prepareOutDir, removeEvidence, type OutDirRules } from "./out-dir.ts";
 import { readSubmission, removeSubmission, type Submission } from "./pending.ts";
 import type { SandboxResult } from "./sandbox.ts";
 import { problemText, type Toolchain } from "./supply.ts";
@@ -61,6 +61,10 @@ const LIVE_TIMEOUT_MS = 120_000;
  * approved. Nothing in the library changes before the name is typed, and a kill anywhere after
  * leaves a state the next approve of the same submission completes.
  */
+/** The trials' files served the review; like the pending directory, they must not fail an approval. */
+const dropEvidence = (ctx: ApproveContext, name: string) =>
+  removeEvidence(ctx.outDirRules().data, name).catch(() => undefined);
+
 export async function approve(name: string, ctx: ApproveContext): Promise<ApproveOutcome> {
   const { scriptsDir, terminal } = ctx;
   const layout = scriptsLayout(scriptsDir);
@@ -74,6 +78,7 @@ export async function approve(name: string, ctx: ApproveContext): Promise<Approv
     typeof (await checkApproval(base.script.versionDir, base.script.source)) !== "string"
   ) {
     const left = await removeSubmission(scriptsDir, submission);
+    await dropEvidence(ctx, name);
     return {
       kind: "already-approved",
       version,
@@ -139,6 +144,7 @@ export async function approve(name: string, ctx: ApproveContext): Promise<Approv
       (left) => (left === "removed" ? "removed" : "newer"),
       () => "stuck" as const,
     );
+    await dropEvidence(ctx, name);
     return { kind: "approved", version, reused: installed === "reused", pending };
   } finally {
     if (stage.made !== undefined) await discardStaged(stage.made);

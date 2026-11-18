@@ -258,8 +258,11 @@ describe("tars script retire", () => {
     for (let i = 0; i < 2; i++) {
       const dir = installSample(scripts, "bark-push");
       writeFileSync(join(dir, "NOTES.md"), `- note ${i}\n`);
+      const evidence = join(scripts, "..", "workspace", ".evidence", "bark-push");
+      mkdirSync(evidence, { recursive: true });
       expect(await tars(deps, "retire", "bark-push")).toBe(0);
       expect(existsSync(dir)).toBe(false);
+      expect(existsSync(evidence)).toBe(false);
     }
     const retired = readdirSync(join(scripts, "retired"));
     expect(retired).toHaveLength(2);

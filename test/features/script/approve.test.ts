@@ -186,6 +186,9 @@ describe("approve", () => {
   test("typing the name installs the reviewed bytes, records the three gates and removes the submission", async () => {
     const { scripts, go } = world();
     const submission = await submitted(scripts, V1);
+    const evidence = join(scripts, "..", "workspace", ".evidence", "probe");
+    mkdirSync(evidence, { recursive: true });
+    writeFileSync(join(evidence, "trial.json"), "{}");
     await recordTrial(submission, ["--title", "private text"], { ...RESULT, exit: 3 }, new Date());
     await attachReview(submission, "tried an empty title\n", new Date());
     const outcome = await go(["n", "probe"]);
@@ -206,6 +209,7 @@ describe("approve", () => {
     expect(record.gate3).toEqual({ liveRuns: [], newPackages: [], replaced: null });
     expect(JSON.stringify(record)).not.toContain("private text");
     expect(staged(scripts)).toEqual([]);
+    expect(existsSync(evidence)).toBe(false);
   });
 
   test("another name, or end of input, changes nothing", async () => {

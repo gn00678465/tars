@@ -109,6 +109,9 @@ async function inner(): Promise<number> {
   const outDir = (name: string) => join(dataDir, "workspace/out", name);
   const listOut = (name: string) =>
     existsSync(outDir(name)) ? readdirSync(outDir(name)).toSorted() : [];
+  const evidence = (name: string) => join(dataDir, "workspace/.evidence", name);
+  const listEvidence = (name: string) =>
+    existsSync(evidence(name)) ? readdirSync(evidence(name)).toSorted() : [];
   try {
     const set = await step(
       "bark-secret",
@@ -234,7 +237,7 @@ async function inner(): Promise<number> {
       "download-open",
       `tars script submit ${draft("download", downloadSource)} &&
        for h in 127.0.0.1 localhost; do
-         tars script trial download --out ~/.local/share/tars/workspace/out/open -- "http://$h:${SITE_PORT}/file.bin"; echo "$h $?"
+         tars script trial download -- "http://$h:${SITE_PORT}/file.bin"; echo "$h $?"
        done`,
     );
     check(
@@ -244,8 +247,8 @@ async function inner(): Promise<number> {
         exitOf(opened.stdout, "127.0.0.1") === 1 &&
         exitOf(opened.stdout, "localhost") === 1 &&
         hitCount("/file.bin") === 0 &&
-        listOut("open").length === 0,
-      `${opened.stdout.trim().replaceAll("\n", " | ")}; site served /file.bin ${hitCount("/file.bin")} time(s); out/open holds ${JSON.stringify(listOut("open"))}; ${opened.stderr.trim().slice(0, 300)}`,
+        listEvidence("download").length === 0,
+      `${opened.stdout.trim().replaceAll("\n", " | ")}; site served /file.bin ${hitCount("/file.bin")} time(s); .evidence/download holds ${JSON.stringify(listEvidence("download"))}; ${opened.stderr.trim().slice(0, 300)}`,
     );
 
     const allowed = downloadSource.replace(
@@ -256,13 +259,13 @@ async function inner(): Promise<number> {
     const dlGates = await step(
       "download-gates-1-2",
       `tars script submit ${draft("download", allowed)} &&
-       { tars script trial download --out ~/.local/share/tars/workspace/out/trial -- ${SITE}/file.bin; echo "trial-exit $?"; } &&
+       { tars script trial download -- ${SITE}/file.bin; echo "trial-exit $?"; } &&
        tars script review download --report ~/download-review.md`,
     );
-    const trialSaved = join(outDir("trial"), "file.bin");
+    const trialSaved = join(evidence("download"), "file.bin");
     check(
       "download-gates-1-2",
-      "with the test's allow list in place of *, download passes gate 1 and its trial saves the file into --out",
+      "with the test's allow list in place of *, download passes gate 1 and its trial saves the file into .evidence/download",
       allowed !== downloadSource &&
         dlGates.exitCode === 0 &&
         exitOf(dlGates.stdout, "trial-exit") === 0 &&
@@ -282,12 +285,13 @@ async function inner(): Promise<number> {
     });
     check(
       "download-approve",
-      "in a pty the user approves download by its name",
+      "in a pty the user approves download by its name, and the trial's evidence is removed",
       dlApprove.exitCode === 0 &&
         dlApprove.missed === undefined &&
         /^approved download [0-9a-f]{16}$/.test(dlApprove.stdout.trim()) &&
-        dlApprove.transcript.includes("  | DOWNLOAD-REVIEW: trial saved"),
-      `exit ${dlApprove.exitCode}, missed ${dlApprove.missed}, stdout ${JSON.stringify(dlApprove.stdout.trim())}; ${dlApprove.stderr.trim().slice(0, 200)}`,
+        dlApprove.transcript.includes("  | DOWNLOAD-REVIEW: trial saved") &&
+        !existsSync(evidence("download")),
+      `exit ${dlApprove.exitCode}, missed ${dlApprove.missed}, stdout ${JSON.stringify(dlApprove.stdout.trim())}; evidence ${existsSync(evidence("download")) ? "left" : "removed"}; ${dlApprove.stderr.trim().slice(0, 200)}`,
     );
 
     const OUT = "--out ~/.local/share/tars/workspace/out/dl";

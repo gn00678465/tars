@@ -27,12 +27,19 @@ describe("prepareOutDir", () => {
     expect(existsSync(dir)).toBe(true);
   });
 
+  test("the workspace's .evidence/<name> is allowed, though it is a dot directory", async () => {
+    const r = rules();
+    expect(await prepareOutDir(".evidence/trip-check", r)).toBe(
+      join(r.data, "workspace/.evidence/trip-check"),
+    );
+  });
+
   test("a directory under the launch dir is allowed", async () => {
     const r = rules();
     expect(await prepareOutDir(join(r.launchDir, "dl"), r)).toBe(join(r.launchDir, "dl"));
   });
 
-  test.each([".git/hooks", ".vscode", "out/.git"])(
+  test.each([".git/hooks", ".vscode", "out/.git", ".evidence/x"])(
     "a dot directory below the launch dir, <launch>/%s, is refused",
     async (path) => {
       const r = rules();

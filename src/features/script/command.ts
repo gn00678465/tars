@@ -22,7 +22,7 @@ import type { GoogleEndpoints } from "./google.ts";
 import { hostText, OUTPUT_LIMIT, parseSlug, type Domain, type ScriptMeta } from "./metadata.ts";
 import type { OsvEndpoint } from "./osv.ts";
 import { listPlaybooks } from "./playbooks.ts";
-import { prepareOutDir, type OutDirRules } from "./out-dir.ts";
+import { evidenceDir, prepareOutDir, removeEvidence, type OutDirRules } from "./out-dir.ts";
 import {
   attachReview,
   listSubmissions,
@@ -221,6 +221,9 @@ Examples:
       `
 For a google-oauth secret the script gets a fresh access token, never the stored credential;
 --timeout may not be longer than that token lasts (about an hour).
+--out holds what the script makes for the user: under the workspace's out/ or the directory
+the session started in. A test run goes to <data>/workspace/.evidence/<name> instead, which
+approve and retire remove.
 Exit codes: the script's own code (0 to 123, see tars script show <name>);
 1 when tars refuses or fails before the script starts; 2 usage error;
 124 timed out; 128+n stopped by signal n.
@@ -244,7 +247,7 @@ Examples:
       ctx.exitWith(outcome.exit);
     });
 
-  addRunOptions(script.command("trial"))
+  addRunOptions(script.command("trial"), { out: false })
     .description(
       "Run a submitted script in the sandbox without any secret, to test it before approval.",
     )
@@ -253,21 +256,29 @@ Examples:
       `
 No secret, no "secret:url" host, and no network at all for an external-write script, so a
 trial never writes to the outside world. The output is also saved under the submission's
-trials/ for the approver to read.
+trials/ for the approver to read. What it writes goes to TARS_OUT, which is always
+<data>/workspace/.evidence/<name> (printed first, on stderr); approve and retire remove it.
 Exit codes: as tars script run.
 
 Examples:
   tars script trial bark-push -- --title ""
-  tars script trial download --out out/trial -- not-a-url`,
+  tars script trial download -- not-a-url`,
     )
     .action(async (name: string, args: string[], opts: RunOptions) => {
       const submission = await readSubmission(ctx.scriptsDir(), name);
+      const rules = ctx.outDirRules();
+      const outDir = await prepareOutDir(evidenceDir(rules.data, name), rules);
+      ctx.io.err(`evidence: ${outDir}`);
       const { runTrial } = await import("./execute.ts");
-      const outcome = await runTrial(submission, await executeOptions(args, opts), {
-        host: await ctx.sandboxHost(),
-        toolchain: ctx.toolchain(),
-        now: ctx.now(),
-      });
+      const outcome = await runTrial(
+        submission,
+        { args, timeoutMs: opts.timeout * 1000, outDir },
+        {
+          host: await ctx.sandboxHost(),
+          toolchain: ctx.toolchain(),
+          now: ctx.now(),
+        },
+      );
       report(ctx.io, outcome);
       ctx.exitWith(outcome.exit);
     });
@@ -306,6 +317,7 @@ Examples:
     )
     .action(async (name: string) => {
       const target = await retireScript(layout(), await approvedScript(name), ctx.now());
+      await removeEvidence(ctx.outDirRules().data, name);
       ctx.io.out(`retired ${name} to ${target}`);
     });
 
@@ -447,12 +459,14 @@ Examples:
     });
 }
 
-function addRunOptions(cmd: Command): Command {
-  return cmd
+function addRunOptions(cmd: Command, { out = true } = {}): Command {
+  cmd
     .argument("<name>", "script name", parseName)
     .argument("[args...]", "arguments for the script, after --")
-    .option("--timeout <seconds>", "stop the script after this many seconds", parseTimeout, 120)
-    .option("--out <dir>", "a directory the script may write; it gets the path in TARS_OUT");
+    .option("--timeout <seconds>", "stop the script after this many seconds", parseTimeout, 120);
+  return out
+    ? cmd.option("--out <dir>", "a directory the script may write; it gets the path in TARS_OUT")
+    : cmd;
 }
 
 function parseTimeout(value: string): number {
