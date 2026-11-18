@@ -77,17 +77,21 @@ const pendingRoot = (scriptsDir: string, name: string) => join(scriptsDir, "pend
 const resubmit = (name: string, why: string) =>
   new TarsError(`${name}: ${why}. Submit it again: tars script submit <draft dir>`);
 
-export async function readSubmission(scriptsDir: string, name: string): Promise<Submission> {
+/** The directory pending/<name>/current points at, refused when it leaves pending/<name>/. */
+async function currentDir(scriptsDir: string, name: string): Promise<string> {
   if (!SLUG.test(name)) throw new TarsError(`invalid script name ${JSON.stringify(name)}`);
   const root = pendingRoot(scriptsDir, name);
-  const nothing = () =>
-    new TarsError(`nothing is submitted for ${name}; run: tars script submit <draft dir>`);
   const dir = await realpath(join(root, "current")).catch(() => {
-    throw nothing();
+    throw new TarsError(`nothing is submitted for ${name}; run: tars script submit <draft dir>`);
   });
   const inside = (await realpath(root)) + sep;
   if (!dir.startsWith(inside) || dir.slice(inside.length).includes(sep))
     throw new TarsError(`${name}: ${join(root, "current")} points outside ${inside}`);
+  return dir;
+}
+
+export async function readSubmission(scriptsDir: string, name: string): Promise<Submission> {
+  const dir = await currentDir(scriptsDir, name);
   const read = (file: string) => readFile(join(dir, file), "utf8").catch(() => undefined);
   const [gate1Text, source, lockText] = await Promise.all([
     read(GATE1),
@@ -171,6 +175,17 @@ async function leftovers(root: string, own: string, now: Date): Promise<string[]
  * The directory is renamed away first, so a kill midway never leaves half a submission behind
  * current.
  */
+/**
+ * Takes back what is submitted for `name`, complete or broken, as approve does after installing:
+ * current is left dangling, which means nothing is submitted. The library is not touched.
+ */
+export async function withdrawSubmission(scriptsDir: string, name: string): Promise<void> {
+  const dir = await currentDir(scriptsDir, name);
+  const doomed = uniqueTemp(dir);
+  await rename(dir, doomed);
+  await rm(doomed, { recursive: true, force: true });
+}
+
 export async function removeSubmission(
   scriptsDir: string,
   approved: Submission,

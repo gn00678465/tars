@@ -29,6 +29,7 @@ import {
   pendingState,
   readSubmission,
   REPORT_LIMIT,
+  withdrawSubmission,
   type PendingState,
 } from "./pending.ts";
 import type { SandboxHost, SandboxResult } from "./sandbox.ts";
@@ -319,6 +320,31 @@ Examples:
       const target = await retireScript(layout(), await approvedScript(name), ctx.now());
       await removeEvidence(ctx.outDirRules().data, name);
       ctx.io.out(`retired ${name} to ${target}`);
+    });
+
+  script
+    .command("withdraw")
+    .description("Take back the submission of a script that is under review, complete or not.")
+    .argument("<name>", "script name", parseName)
+    .addHelpText(
+      "after",
+      `
+The approved version in the library, if any, stays and keeps running. The trials' evidence
+directory goes too.
+
+Exit codes: 0 withdrawn, 1 nothing submitted or failure, 2 usage error.
+
+Examples:
+  tars script withdraw probe-web-md`,
+    )
+    .action(async (name: string) => {
+      await withdrawSubmission(ctx.scriptsDir(), name);
+      await removeEvidence(ctx.outDirRules().data, name);
+      const kept = await loadScript(layout(), name).then(
+        (s) => `; the library keeps ${s.version}`,
+        () => "",
+      );
+      ctx.io.out(`withdrew ${name}${kept}`);
     });
 
   script

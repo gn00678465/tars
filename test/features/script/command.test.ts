@@ -271,6 +271,36 @@ describe("tars script retire", () => {
   });
 });
 
+describe("tars script withdraw", () => {
+  test("takes back a submission, complete or broken, and leaves the library version running", async () => {
+    const { scripts, deps } = setup();
+    installSample(scripts, "bark-push");
+    await submitted(scripts, plainScript("bark-push"));
+    const broken = await submitted(scripts, plainScript("probe"));
+    rmSync(join(broken.dir, "gate1.json"));
+    const evidence = join(scripts, "..", "workspace", ".evidence", "probe");
+    mkdirSync(evidence, { recursive: true });
+
+    expect(await tars(deps, "withdraw", "probe")).toBe(0);
+    expect(deps.io.stdout.at(-1)).toBe("withdrew probe");
+    expect(existsSync(broken.dir)).toBe(false);
+    expect(existsSync(evidence)).toBe(false);
+    expect(await tars(deps, "withdraw", "bark-push")).toBe(0);
+    expect(deps.io.stdout.at(-1)).toBe("withdrew bark-push; the library keeps 0123456789abcdef");
+
+    deps.io.stdout.length = 0;
+    expect(await tars(deps, "list", "--json")).toBe(0);
+    expect(
+      JSON.parse(deps.io.stdout.join("")).map((s: { name: string; state: string }) => [
+        s.name,
+        s.state,
+      ]),
+    ).toEqual([["bark-push", "approved"]]);
+    expect(await tars(deps, "withdraw", "probe")).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("nothing is submitted for probe");
+  });
+});
+
 describe("library boundaries", () => {
   test("library/<name> as a symlink is refused, even to a valid script", async () => {
     const { scripts, deps } = setup();
