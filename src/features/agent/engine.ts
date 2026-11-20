@@ -14,7 +14,8 @@ import {
   SUMMARIZATION_SYSTEM,
   validateSummary,
 } from "./compaction.ts";
-import type { Limits } from "./config.ts";
+import type { WikiSpend } from "../wiki/db.ts";
+import type { Limits, ProviderConfig } from "./config.ts";
 import { effectiveEffort } from "./effort.ts";
 import type { Frontend } from "./frontend.ts";
 import {
@@ -86,6 +87,8 @@ export interface EngineDeps {
   readonly log: Log;
   /** Setup warnings: a cleared ANTHROPIC_* variable, a skill without front matter. */
   warn(message: string): void;
+  /** What wiki sync spent with this provider; undefined when wiki.db cannot be read. */
+  otherSpend(provider: Provider, cfg: ProviderConfig, now: Date): WikiSpend | undefined;
 }
 
 export interface TurnInput {
@@ -184,6 +187,8 @@ export function createEngine(deps: EngineDeps) {
   const activeHistory = (convId: string) => buildActiveHistory(store.readActiveItems(db, convId));
   const historyBytes = (items: readonly ContextItem[], limits: Limits) =>
     items.reduce((n, i) => n + sentBytes(i, limits.tool_result_bytes), 0);
+  /** Read at every check, never kept: rather not send than count short. */
+  const otherSpend = (s: Setup) => deps.otherSpend(s.model.provider, s.cfg, deps.now());
 
   /**
    * The input tokens a chat request with this history is expected to take. The last measured
@@ -215,8 +220,11 @@ export function createEngine(deps: EngineDeps) {
     turnId: string | undefined,
   ) {
     const { s } = t;
+    const other = otherSpend(s);
+    if (other === undefined) return { ok: false, reason: "budget_unreadable" } as const;
     const estInput = estimateChat(t, conv, history);
     return reserve({
+      other,
       db,
       provider: s.cfg,
       limits: s.limits,
@@ -262,6 +270,7 @@ export function createEngine(deps: EngineDeps) {
   ): Promise<TurnOutcome> {
     const s = await prepareModel(deps, input.provider, input.model);
     if ("kind" in s) return s;
+    if (otherSpend(s) === undefined) return rejected("budget_unreadable");
     let system: SystemBlock[];
     let skills: SkillEntry[];
     try {
@@ -645,13 +654,18 @@ export function createEngine(deps: EngineDeps) {
 
   /** Budget first: with the quota spent, the owner should not be asked to approve anything. */
   function budgetHalt(t: Turn, call: ToolCallItem): Halt | undefined {
-    const reason = limitReached(db, {
-      provider: t.s.model.provider,
-      cfg: t.s.cfg,
-      limits: t.s.limits,
-      turnId: t.turnId,
-      now: deps.now(),
-    });
+    const other = otherSpend(t.s);
+    const reason =
+      other === undefined
+        ? "budget_unreadable"
+        : limitReached(db, {
+            provider: t.s.model.provider,
+            cfg: t.s.cfg,
+            limits: t.s.limits,
+            turnId: t.turnId,
+            now: deps.now(),
+            other,
+          });
     if (reason === null) return undefined;
     ended(t, call, "refused", `${REASON_TEXT[reason]}，沒有執行`);
     return { end: { state: "failed", reason } };
@@ -781,7 +795,9 @@ export function createEngine(deps: EngineDeps) {
           autoCompact: s.limits.auto_compact ? "on" : "off",
         },
       });
-    const spentUsd = spent(db, s.model.provider, s.cfg, deps.now());
+    const other = otherSpend(s);
+    if (other === undefined) return;
+    const spentUsd = spent(db, s.model.provider, s.cfg, deps.now()) + other.period;
     if (spentUsd >= s.cfg.quota_usd * s.cfg.warn_ratio)
       t.frontend.emit({
         type: "notice",
@@ -838,7 +854,10 @@ export function createEngine(deps: EngineDeps) {
       (p) => estimate(p) <= room,
     );
     if (prompt === undefined) return compactFailed("compact_too_large");
+    const other = otherSpend(s);
+    if (other === undefined) return compactFailed("budget_unreadable");
     const r = reserve({
+      other,
       db,
       provider: s.cfg,
       limits: s.limits,

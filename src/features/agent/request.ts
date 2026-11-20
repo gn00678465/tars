@@ -22,6 +22,7 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   budget_stopped: "本期花費已到停用門檻",
   daily_cap: "今日花費已到上限",
   turn_cap: "這個回合的花費已到上限",
+  budget_unreadable: "讀不到 wiki.db 的用量帳（它可能由較新的 tars 建立），請更新 tars",
   request_limit: "這個回合的模型請求次數已到上限",
   provider_spend_limit: "provider 端的花費上限已到",
   auth: "provider 拒絕了 API 金鑰",

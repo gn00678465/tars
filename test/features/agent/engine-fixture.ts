@@ -4,6 +4,7 @@ import { join, resolve as resolvePath } from "node:path";
 import { resolvePaths, type Env, type TarsPaths } from "../../../src/core/paths.ts";
 import type { ModelEntry } from "../../../src/features/agent/catalog.ts";
 import { CONFIG_TEMPLATE } from "../../../src/features/agent/config.ts";
+import type { WikiSpend } from "../../../src/features/wiki/db.ts";
 import { openDb } from "../../../src/features/agent/db.ts";
 import { createEngine, type Engine } from "../../../src/features/agent/engine.ts";
 import type { Frontend, FrontendEvent } from "../../../src/features/agent/frontend.ts";
@@ -82,6 +83,8 @@ export interface EngineHarness {
   /** Every wait the engine asked for, in ms; the fake sleep returns at once. */
   readonly sleeps: number[];
   readonly warnings: string[];
+  /** What otherSpend returns: wiki sync's spend, all zero unless a test sets it. */
+  otherSpend: WikiSpend | undefined;
   /** Rebuilds the engine on the same database, as a restart of tars chat would. */
   restart(): Engine;
   stop(): Promise<void>;
@@ -145,6 +148,9 @@ export async function engineHarness(opts: HarnessOptions = {}): Promise<EngineHa
   const secrets = fakeSecrets({ "llm:anthropic": "sk-test" });
   const sleeps: number[] = [];
   const warnings: string[] = [];
+  const spend = {
+    value: { period: 0, today: 0, rawToday: 0, rawMonth: 0 } as WikiSpend | undefined,
+  };
   const build = () =>
     createEngine({
       db,
@@ -158,6 +164,7 @@ export async function engineHarness(opts: HarnessOptions = {}): Promise<EngineHa
       sleep: async (ms) => void sleeps.push(ms),
       log: createLog(paths.agentLog, () => clock.now()),
       warn: (w) => void warnings.push(w),
+      otherSpend: () => spend.value,
     });
   return {
     paths,
@@ -170,6 +177,12 @@ export async function engineHarness(opts: HarnessOptions = {}): Promise<EngineHa
     secrets,
     sleeps,
     warnings,
+    get otherSpend() {
+      return spend.value;
+    },
+    set otherSpend(value) {
+      spend.value = value;
+    },
     restart: build,
     stop: async () => {
       db.close();

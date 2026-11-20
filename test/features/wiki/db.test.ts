@@ -2,8 +2,10 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { openDb } from "../../../src/features/agent/db.ts";
-import { openWikiDb, WIKI_MIGRATIONS } from "../../../src/features/wiki/db.ts";
-import { isolatedPaths } from "../agent/db-fixture.ts";
+import { adjust } from "../../../src/features/agent/ledger.ts";
+import { openWikiDb, WIKI_MIGRATIONS, wikiSpend } from "../../../src/features/wiki/db.ts";
+import { isolatedPaths, NOW, PROVIDER } from "../agent/db-fixture.ts";
+import { syncUsage } from "./wiki-fixture.ts";
 
 const columns = (db: Database, table: string) =>
   db.query(`SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info('${table}')`).all();
@@ -84,5 +86,65 @@ describe("the tables ledger.ts writes keep agent.db's shape", () => {
       expect(turnCols).toContainEqual(expect.objectContaining({ name }));
     agent.close();
     wiki.close();
+  });
+});
+
+describe("wikiSpend", () => {
+  const LAST_MONTH = new Date("2026-10-30T00:00:00Z");
+  const EARLIER = new Date("2026-11-19T01:00:00Z");
+  const LATER = new Date("2026-11-19T11:00:00Z");
+
+  test("without wiki.db: four zeros", () => {
+    expect(wikiSpend(isolatedPaths(), undefined, "anthropic", PROVIDER, NOW)).toEqual({
+      period: 0,
+      today: 0,
+      rawToday: 0,
+      rawMonth: 0,
+    });
+  });
+
+  test("without agent.db, or without an adjustment: plain sums", async () => {
+    const paths = isolatedPaths();
+    await syncUsage(paths, 1, LAST_MONTH);
+    await syncUsage(paths, 2, new Date("2026-11-02T00:00:00Z"));
+    await syncUsage(paths, 3, EARLIER);
+    const expected = { period: 5, today: 3, rawToday: 3, rawMonth: 5 };
+    expect(wikiSpend(paths, undefined, "anthropic", PROVIDER, NOW)).toEqual(expected);
+    const agent = await openDb(paths);
+    expect(wikiSpend(paths, agent, "anthropic", PROVIDER, NOW)).toEqual(expected);
+    agent.close();
+  });
+
+  test("after an adjustment only later rows and rows still reserved count for the provider", async () => {
+    const paths = isolatedPaths();
+    await syncUsage(paths, 3, EARLIER);
+    await syncUsage(paths, 4, EARLIER, true);
+    const agent = await openDb(paths);
+    adjust(agent, "anthropic", 20, undefined, new Date("2026-11-19T06:00:00Z"));
+    await syncUsage(paths, 5, LATER);
+    expect(wikiSpend(paths, agent, "anthropic", PROVIDER, NOW)).toEqual({
+      period: 9,
+      today: 12,
+      rawToday: 12,
+      rawMonth: 12,
+    });
+    agent.close();
+  });
+
+  test('period "total" reaches back past this month', async () => {
+    const paths = isolatedPaths();
+    await syncUsage(paths, 1, LAST_MONTH);
+    await syncUsage(paths, 2, EARLIER);
+    const total = { ...PROVIDER, period: "total" as const };
+    expect(wikiSpend(paths, undefined, "anthropic", total, NOW)?.period).toBe(3);
+    expect(wikiSpend(paths, undefined, "anthropic", PROVIDER, NOW)?.period).toBe(2);
+  });
+
+  test("a wiki.db from a newer tars gives undefined, not an exception", async () => {
+    const paths = isolatedPaths();
+    const db = await openWikiDb(paths);
+    db.run("UPDATE meta SET value = '99' WHERE key = 'schema_version'");
+    db.close();
+    expect(wikiSpend(paths, undefined, "anthropic", PROVIDER, NOW)).toBeUndefined();
   });
 });

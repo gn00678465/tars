@@ -234,12 +234,14 @@ export type RejectReason =
   | "no_key"
   | ModelReason
   | "conv_too_long"
-  | BudgetReason;
+  | BudgetReason
+  | "budget_unreadable";
 
 /** Why a turn ended as failed. */
 export type FailReason =
   | "conv_too_long"
   | BudgetReason
+  | "budget_unreadable"
   | "request_limit"
   | "provider_spend_limit"
   | "auth"

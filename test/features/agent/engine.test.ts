@@ -391,6 +391,39 @@ describe("rejections", () => {
     expect(counts(h.db)).toEqual(before);
   });
 
+  test("wiki sync's spend at the stop line refuses the message", async () => {
+    const h = await harness();
+    h.otherSpend = { period: 95, today: 0, rawToday: 0, rawMonth: 0 };
+    expect(await runTurn(h, "hi")).toMatchObject({ kind: "rejected", reason: "budget_stopped" });
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("an unreadable wiki.db refuses the message before any turn exists", async () => {
+    const h = await harness();
+    const before = counts(h.db);
+    h.otherSpend = undefined;
+    expect(await runTurn(h, "hi")).toMatchObject({
+      kind: "rejected",
+      reason: "budget_unreadable",
+    });
+    expect(counts(h.db)).toEqual(before);
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("wiki.db turning unreadable mid-turn ends the turn as failed, never left running", async () => {
+    const h = await harness();
+    const emit = h.frontend.emit;
+    h.frontend.emit = (e) => {
+      emit(e);
+      if (e.type === "item" && e.item.kind === "tool_result") h.otherSpend = undefined;
+    };
+    h.fake.reply(toolUse("tu1", "skill_load", { name: "demo" }));
+    const out = ended(await runTurn(h, "hi"));
+    expect(out).toMatchObject({ state: "failed", reason: "budget_unreadable" });
+    expect(rows(h.db, "SELECT state FROM turns")).toEqual([{ state: "failed" }]);
+    expect(h.fake.messages()).toHaveLength(1);
+  });
+
   test("a config edited between turns applies to the next one", async () => {
     const h = await harness();
     h.fake.reply(text("一"), text("二"));

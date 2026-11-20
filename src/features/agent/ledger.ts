@@ -135,7 +135,13 @@ export const cacheWritePrice = (price: Price, ttl: CacheTtl) =>
 export const effectiveWindow = (model: ResolvedModel, limits: Limits) =>
   Math.min(model.contextWindow, limits.max_input_tokens);
 
-export interface ReserveInput {
+/** Spend recorded in another database (wiki.db) against the same provider. */
+export interface OtherSpend {
+  readonly period: number;
+  readonly today: number;
+}
+
+export interface ReserveInput<X extends string = never> {
   readonly db: Database;
   readonly provider: ProviderConfig;
   readonly limits: Limits;
@@ -144,20 +150,26 @@ export interface ReserveInput {
   readonly prefixKey: string;
   readonly estInput: number;
   readonly turnId: string | undefined;
-  readonly turnKind: TurnKind;
+  readonly turnKind: TurnKind | "sync";
   /** Upper bound on the output, before the budget lowers it. */
   readonly maxOutput: number;
   readonly now: Date;
+  /** Added to what the provider's two caps see as spent. Absent: 0. */
+  readonly other?: OtherSpend;
+  /** The caller's own caps: the reason each one gives, and what is left under it. */
+  readonly extraCaps?: readonly (readonly [X, number])[];
+  /** true: refuse rather than lower maxOutput, since a cut-off answer is of no use. */
+  readonly exactOutput?: boolean;
 }
 
-export type Reservation =
+export type Reservation<X extends string = never> =
   | {
       readonly ok: true;
       readonly maxTokens: number;
       readonly inputUsd: number;
       readonly capped: boolean;
     }
-  | { readonly ok: false; readonly reason: BudgetReason | "conv_too_long" };
+  | { readonly ok: false; readonly reason: BudgetReason | "conv_too_long" | X };
 
 /**
  * The tokens the conversation's last measured chat request read from or wrote to the cache:
@@ -180,9 +192,10 @@ function lastCachedTokens(db: Database, convId: string): number {
  * rate; the rest at the dearer of input and cache write. The output limit shrinks to what the
  * tightest of the three budgets can pay, instead of refusing outright. A compaction turn is not
  * held to the per-turn cap: it happens when the context is nearly full, and refusing it would
- * leave the conversation too long to continue and too dear to shorten.
+ * leave the conversation too long to continue and too dear to shorten; a sync job is not held
+ * to it either, as each is one request.
  */
-export function reserve(r: ReserveInput): Reservation {
+export function reserve<X extends string = never>(r: ReserveInput<X>): Reservation<X> {
   const { limits, model, provider: cfg, now } = r;
   if (r.estInput > effectiveWindow(model, limits) * limits.context_stop_ratio)
     return { ok: false, reason: "conv_too_long" };
@@ -202,9 +215,14 @@ export function reserve(r: ReserveInput): Reservation {
     (cached * price.cacheRead +
       fresh * Math.max(price.input, cacheWritePrice(price, limits.cache_ttl))) /
     1e6;
-  const caps: [BudgetReason, number][] = [
-    ["budget_stopped", cfg.quota_usd * cfg.stop_ratio - spent(r.db, model.provider, cfg, now)],
-    ["daily_cap", cfg.daily_cap_usd - spentToday(r.db, model.provider, now)],
+  const other = r.other ?? { period: 0, today: 0 };
+  const caps: (readonly [BudgetReason | X, number])[] = [
+    [
+      "budget_stopped",
+      cfg.quota_usd * cfg.stop_ratio - (spent(r.db, model.provider, cfg, now) + other.period),
+    ],
+    ["daily_cap", cfg.daily_cap_usd - (spentToday(r.db, model.provider, now) + other.today)],
+    ...(r.extraCaps ?? []),
   ];
   if (r.turnKind === "chat")
     caps.push([
@@ -215,7 +233,8 @@ export function reserve(r: ReserveInput): Reservation {
   const headroom = room - inputUsd;
   const affordable =
     price.output > 0 ? Math.floor((headroom * 1e6) / price.output) : headroom >= 0 ? Infinity : -1;
-  if (affordable < MIN_OUTPUT) return { ok: false, reason: tightest };
+  if (affordable < (r.exactOutput === true ? r.maxOutput : MIN_OUTPUT))
+    return { ok: false, reason: tightest };
   const maxTokens = Math.min(r.maxOutput, affordable);
   return { ok: true, maxTokens, inputUsd, capped: maxTokens < r.maxOutput };
 }
@@ -336,7 +355,7 @@ export function recordEnd(
     usageId: number;
     usage: Usage;
     costUsd?: number;
-    turnKind: TurnKind;
+    turnKind: TurnKind | "sync";
     prefixKey: string;
   },
 ): void {
@@ -435,11 +454,19 @@ export function reconcileLedger(db: Database, now: Date): { usage: number; turns
 /** Before a tool runs: the first budget line already reached, or null. */
 export function limitReached(
   db: Database,
-  s: { provider: Provider; cfg: ProviderConfig; limits: Limits; turnId: string; now: Date },
+  s: {
+    provider: Provider;
+    cfg: ProviderConfig;
+    limits: Limits;
+    turnId: string;
+    now: Date;
+    other?: OtherSpend;
+  },
 ): BudgetReason | null {
-  if (spent(db, s.provider, s.cfg, s.now) >= s.cfg.quota_usd * s.cfg.stop_ratio)
+  const other = s.other ?? { period: 0, today: 0 };
+  if (spent(db, s.provider, s.cfg, s.now) + other.period >= s.cfg.quota_usd * s.cfg.stop_ratio)
     return "budget_stopped";
-  if (spentToday(db, s.provider, s.now) >= s.cfg.daily_cap_usd) return "daily_cap";
+  if (spentToday(db, s.provider, s.now) + other.today >= s.cfg.daily_cap_usd) return "daily_cap";
   if (turnSpent(db, s.turnId) >= s.limits.turn_cap_usd) return "turn_cap";
   return null;
 }
@@ -456,19 +483,21 @@ export interface BudgetStatus {
   readonly state: "ok" | "warn" | "stopped";
 }
 
-/** db undefined: no database yet, so nothing spent. */
+/** db undefined: no database yet, so nothing spent. `other` is added to both sums. */
 export function status(
   db: Database | undefined,
   provider: Provider,
   cfg: ProviderConfig,
   now: Date,
+  other: OtherSpend = { period: 0, today: 0 },
 ): BudgetStatus {
   const spentUsd =
-    db === undefined
+    other.period +
+    (db === undefined
       ? cfg.period === "total"
         ? cfg.prior_spend_usd
         : 0
-      : spent(db, provider, cfg, now);
+      : spent(db, provider, cfg, now));
   const warnUsd = cfg.quota_usd * cfg.warn_ratio;
   const stopUsd = cfg.quota_usd * cfg.stop_ratio;
   return {
@@ -478,7 +507,7 @@ export function status(
     quotaUsd: cfg.quota_usd,
     warnUsd,
     stopUsd,
-    todayUsd: db === undefined ? 0 : spentToday(db, provider, now),
+    todayUsd: other.today + (db === undefined ? 0 : spentToday(db, provider, now)),
     dailyCapUsd: cfg.daily_cap_usd,
     state: spentUsd >= stopUsd ? "stopped" : spentUsd >= warnUsd ? "warn" : "ok",
   };

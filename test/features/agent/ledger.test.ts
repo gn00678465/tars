@@ -346,6 +346,55 @@ describe("reserve", () => {
     });
   });
 
+  test("other spend brings each provider cap closer", async () => {
+    const { db } = await agentDb();
+    expect(reserve(base(db, { conv: undefined })).ok).toBe(true);
+    expect(reserve(base(db, { conv: undefined, other: { period: 94.99, today: 0 } }))).toEqual({
+      ok: false,
+      reason: "budget_stopped",
+    });
+    expect(reserve(base(db, { conv: undefined, other: { period: 0, today: 9.99 } }))).toEqual({
+      ok: false,
+      reason: "daily_cap",
+    });
+  });
+
+  test("an extra cap that is the tightest names the refusal", async () => {
+    const { db } = await agentDb();
+    const r = reserve({ ...base(db, { conv: undefined }), extraCaps: [["wiki_daily_cap", 0.01]] });
+    expect(r).toEqual({ ok: false, reason: "wiki_daily_cap" });
+    const roomy = reserve({ ...base(db, { conv: undefined }), extraCaps: [["wiki_daily_cap", 5]] });
+    expect(roomy.ok).toBe(true);
+  });
+
+  test('a "sync" job ignores a warm cache and the per-turn cap', async () => {
+    const { db, conv: c } = await measured();
+    expect(inputUsd(db, { conv: c, turnKind: "sync" })).toBeCloseTo(COLD, 12);
+    const turn = seedTurn(db);
+    spend(db, turn, 0.999);
+    expect(reserve(base(db, { conv: c, turnKind: "sync", turnId: turn.turnId })).ok).toBe(true);
+  });
+
+  test("exactOutput refuses when only half the output is affordable, instead of lowering it", async () => {
+    const { db } = await agentDb();
+    // Room for the cold input (0.045) and 8,000 of the 16,000 output tokens (0.12).
+    adjust(db, "anthropic", 95 - 0.165, undefined, NOW);
+    const lowered = reserve(base(db, { conv: undefined }));
+    expect(lowered.ok && lowered.capped).toBe(true);
+    expect(reserve(base(db, { conv: undefined, exactOutput: true }))).toEqual({
+      ok: false,
+      reason: "budget_stopped",
+    });
+  });
+
+  test("leaving the three new fields out gives the same result as their neutral values", async () => {
+    const { db, conv: c } = await measured();
+    const plain = base(db, { conv: c });
+    expect(
+      reserve({ ...plain, other: { period: 0, today: 0 }, extraCaps: [], exactOutput: false }),
+    ).toEqual(reserve(plain));
+  });
+
   test("past the context stop line: conv_too_long", async () => {
     const { db } = await agentDb();
     const window = Math.min(MODEL.contextWindow, DEFAULT_LIMITS.max_input_tokens);

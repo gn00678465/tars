@@ -5,10 +5,11 @@ import { inSession, resolvePaths, type TarsPaths } from "../../core/paths.ts";
 import type { Provider } from "../../core/secrets.ts";
 import type { Terminal } from "../../core/terminal.ts";
 import { SLUG } from "../script/metadata.ts";
+import { wikiSpend } from "../wiki/db.ts";
 import { activeModels, defaultModel, findModel, loadCatalog, resolve } from "./catalog.ts";
 import { parseModelRef, type AgentCommandContext, type ModelRef } from "./cli.ts";
 import { loadConfig, type TarsConfig } from "./config.ts";
-import { budgetStatuses, statusLine, withReadDb } from "./cost-command.ts";
+import { budgetStatuses, statusLine, wikiLine, withReadDb } from "./cost-command.ts";
 import { acquireLock, openDb } from "./db.ts";
 import { assertSelectable, EFFORTS, parseEffort } from "./effort.ts";
 import { createEngine, sleepAbortable, type Engine, type TurnOutcome } from "./engine.ts";
@@ -303,6 +304,7 @@ class ChatSession {
       sleep: sleepAbortable,
       log: createLog(paths.agentLog, () => ctx.now()),
       warn: (w) => ctx.io.err(`warning: ${w}`),
+      otherSpend: (provider, cfg, now) => wikiSpend(paths, db, provider, cfg, now),
     });
     // The prompt and the approval card share one terminal once interactive mode opened it.
     this.frontend = new TtyFrontend(
@@ -419,7 +421,15 @@ class ChatSession {
         return undefined;
       case "cost": {
         const { config } = await loadConfig(this.paths);
-        for (const s of budgetStatuses(config, this.db, this.ctx.now())) io.err(statusLine(s));
+        try {
+          for (const s of budgetStatuses(config, this.db, this.ctx.now(), this.paths)) {
+            io.err(statusLine(s));
+            if (s.wiki !== null) io.err(wikiLine(s.wiki, config.wiki));
+          }
+        } catch (err) {
+          if (!(err instanceof TarsError)) throw err;
+          io.err(err.message);
+        }
         return undefined;
       }
       case "help":

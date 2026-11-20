@@ -1,6 +1,10 @@
 import type { Database } from "bun:sqlite";
 import type { TarsPaths } from "../../core/paths.ts";
+import type { Provider } from "../../core/secrets.ts";
+import { utcDay } from "../agent/catalog.ts";
+import type { ProviderConfig } from "../agent/config.ts";
 import { openSqlite, type LockSpec } from "../agent/db.ts";
+import { latestAdjustment } from "../agent/ledger.ts";
 
 /**
  * wiki.db: sync's progress, its own usage, and both search indexes. `turns` and `usage` keep
@@ -157,3 +161,69 @@ export const wikiLockSpec = (paths: TarsPaths): LockSpec => ({
   busy: "另一個 tars wiki sync 正在執行",
   command: "wiki sync",
 });
+
+export interface WikiSpend {
+  /** Counted against the provider's caps: what the last cost adjust does not cover yet. */
+  readonly period: number;
+  readonly today: number;
+  /** Sync's own caps: plain sums, adjustments aside. */
+  readonly rawToday: number;
+  readonly rawMonth: number;
+}
+
+const NONE: WikiSpend = { period: 0, today: 0, rawToday: 0, rawMonth: 0 };
+
+/**
+ * Sync's spend, read fresh each time in one read transaction. An adjustment is the provider's
+ * bill up to its time, sync's requests included, so only later rows (or rows still reserved,
+ * not on the bill yet) count on top of it: by time, since the two databases share no row ids.
+ * Never throws: undefined means wiki.db could not be read, and the caller refuses to send.
+ */
+export function wikiSpend(
+  paths: TarsPaths,
+  agentDb: Database | undefined,
+  provider: Provider,
+  cfg: ProviderConfig,
+  now: Date,
+): WikiSpend | undefined {
+  let db: Database | undefined | "newer";
+  try {
+    db = openWikiDb(paths, { readonly: true });
+  } catch {
+    return undefined;
+  }
+  if (db === "newer") return undefined;
+  if (db === undefined) return NONE;
+  const wiki = db;
+  try {
+    const adj = agentDb === undefined ? null : latestAdjustment(agentDb, provider, cfg, now);
+    const day = utcDay(now);
+    const month = day.slice(0, 7);
+    const sum = (where: string, ...params: (string | number)[]) =>
+      (
+        wiki
+          .query(`SELECT COALESCE(SUM(cost_usd), 0) AS s FROM usage WHERE ${where}`)
+          .get(...params) as { s: number }
+      ).s;
+    return wiki
+      .transaction(() => {
+        const monthly = cfg.period === "utc-month";
+        const scope = monthly ? "provider = ? AND month = ?" : "provider = ?";
+        const scoped = monthly ? [provider, month] : [provider];
+        return {
+          period:
+            adj === null
+              ? sum(scope, ...scoped)
+              : sum(`${scope} AND (at > ? OR state = 'reserved')`, ...scoped, adj.at),
+          today: sum("provider = ? AND day = ?", provider, day),
+          rawToday: sum("day = ?", day),
+          rawMonth: sum("month = ?", month),
+        };
+      })
+      .deferred();
+  } catch {
+    return undefined;
+  } finally {
+    wiki.close();
+  }
+}

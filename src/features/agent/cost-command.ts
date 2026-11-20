@@ -1,12 +1,15 @@
 import { InvalidArgumentError, type Command } from "commander";
 import type { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
 import { TarsError } from "../../core/exit.ts";
 import { resolvePaths, type TarsPaths } from "../../core/paths.ts";
 import type { Provider } from "../../core/secrets.ts";
 import { confirmOnTty, parseProvider, refuseInSession, type AgentCommandContext } from "./cli.ts";
-import { loadConfig, type TarsConfig } from "./config.ts";
+import { wikiSpend, type WikiSpend } from "../wiki/db.ts";
+import { loadConfig, type TarsConfig, type WikiConfig } from "./config.ts";
 import { openDb } from "./db.ts";
 import { adjust, recentRequests, status, type BudgetStatus, type RecentRequest } from "./ledger.ts";
+import { REASON_TEXT } from "./request.ts";
 
 const RECENT = 20;
 
@@ -16,15 +19,32 @@ export function statusLine(s: BudgetStatus): string {
   return `${s.provider}: 本期已用 ${usd(s.spentUsd)} / 額度 ${usd(s.quotaUsd)} USD（提醒 ${usd(s.warnUsd)}，停用 ${usd(s.stopUsd)}）；今日 ${usd(s.todayUsd)} / ${usd(s.dailyCapUsd)}；${s.state}`;
 }
 
-/** Every configured provider's budget; with no database yet, all zero. */
+export function wikiLine(w: WikiSpend, caps: WikiConfig): string {
+  return `  其中 wiki 同步：本期 ${usd(w.period)}；今日 ${usd(w.rawToday)} / ${usd(caps.daily_cap_usd)}；本月 ${usd(w.rawMonth)} / ${usd(caps.monthly_cap_usd)}`;
+}
+
+export interface ProviderBudget extends BudgetStatus {
+  /** Sync's share, already in the sums above; null without a wiki.db. */
+  readonly wiki: WikiSpend | null;
+}
+
+/**
+ * Every configured provider's budget, wiki sync's spend included; with no database yet, all
+ * zero. Throws when wiki.db cannot be read, since the totals would then be short.
+ */
 export function budgetStatuses(
   config: TarsConfig,
   db: Parameters<typeof status>[0],
   now: Date,
-): BudgetStatus[] {
-  return Object.entries(config.providers).map(([provider, cfg]) =>
-    status(db, provider as Provider, cfg, now),
-  );
+  paths: TarsPaths,
+): ProviderBudget[] {
+  const hasWiki = existsSync(paths.wikiDb);
+  return Object.entries(config.providers).map(([name, cfg]) => {
+    const provider = name as Provider;
+    const wiki = wikiSpend(paths, db, provider, cfg, now);
+    if (wiki === undefined) throw new TarsError(REASON_TEXT.budget_unreadable);
+    return { ...status(db, provider, cfg, now, wiki), wiki: hasWiki ? wiki : null };
+  });
 }
 
 function recentLine(r: RecentRequest): string {
@@ -53,7 +73,7 @@ export function registerCostCommands(program: Command, ctx: AgentCommandContext)
 Read-only; works while tars chat runs. state: ok, warn (past warn_ratio), stopped (past
 stop_ratio: tars chat sends nothing more this period).
 
-Exit codes: 0 done, 1 no config.toml.
+Exit codes: 0 done, 1 no config.toml, or a wiki.db this tars cannot read.
 
 Examples:
   tars cost
@@ -63,10 +83,13 @@ Examples:
       const paths = resolvePaths(ctx.env);
       const { config } = await loadConfig(paths);
       withReadDb(paths, (db) => {
-        const providers = budgetStatuses(config, db, ctx.now());
+        const providers = budgetStatuses(config, db, ctx.now(), paths);
         const recent = recentRequests(db, RECENT);
         if (opts.json) return ctx.io.out(JSON.stringify({ providers, recent }));
-        for (const s of providers) ctx.io.out(statusLine(s));
+        for (const s of providers) {
+          ctx.io.out(statusLine(s));
+          if (s.wiki !== null) ctx.io.out(wikiLine(s.wiki, config.wiki));
+        }
         if (recent.length > 0) ctx.io.out("\n最近的模型請求：");
         for (const r of recent) ctx.io.out(recentLine(r));
       });
@@ -95,7 +118,11 @@ Examples:
       const { config } = await loadConfig(paths);
       const cfg = config.providers[provider];
       if (cfg === undefined) throw new TarsError(`config.toml 沒有 [providers.${provider}]`);
-      const current = withReadDb(paths, (db) => status(db, provider, cfg, ctx.now()).spentUsd);
+      const current = withReadDb(paths, (db) => {
+        const wiki = wikiSpend(paths, db, provider, cfg, ctx.now());
+        if (wiki === undefined) throw new TarsError(REASON_TEXT.budget_unreadable);
+        return status(db, provider, cfg, ctx.now(), wiki).spentUsd;
+      });
       const lines = [
         `${provider} 本機帳的本期已用：${usd(current)} USD`,
         `改成：${usd(opts.spent)} USD`,

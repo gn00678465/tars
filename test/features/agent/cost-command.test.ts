@@ -6,8 +6,10 @@ import { CONFIG_TEMPLATE } from "../../../src/features/agent/config.ts";
 import { openDb } from "../../../src/features/agent/db.ts";
 import { insertReserved, recordFailure } from "../../../src/features/agent/ledger.ts";
 import { run } from "../../../src/main.ts";
-import { scriptedTerminal, tempHome, testDeps } from "../../helpers.ts";
+import { scriptedTerminal, tempHome, TEST_NOW, testDeps } from "../../helpers.ts";
+import { syncUsage } from "../wiki/wiki-fixture.ts";
 import { MODEL, NOW, seedTurn } from "./db-fixture.ts";
+import { openWikiDb } from "../../../src/features/wiki/db.ts";
 
 function setup({
   config = true,
@@ -47,6 +49,7 @@ describe("tars cost", () => {
           todayUsd: 0,
           dailyCapUsd: 10,
           state: "ok",
+          wiki: null,
         },
       ],
       recent: [],
@@ -95,6 +98,35 @@ describe("tars cost", () => {
     expect(await run(["cost"], deps)).toBe(0);
     expect(deps.io.stdout).toHaveLength(1);
     expect(deps.io.stdout[0]).toStartWith("anthropic: ");
+  });
+
+  test("with a wiki.db: sync's spend is in the totals, with a line and a JSON field of its own", async () => {
+    const { env, paths } = setup();
+    await syncUsage(paths, 0.42, new Date(TEST_NOW));
+    const text = testDeps({ env });
+    expect(await run(["cost"], text)).toBe(0);
+    expect(text.io.stdout).toHaveLength(2);
+    expect(text.io.stdout[0]).toContain("本期已用 0.42");
+    expect(text.io.stdout[1]).toBe(
+      "  其中 wiki 同步：本期 0.42；今日 0.42 / 1.00；本月 0.42 / 10.00",
+    );
+    const deps = testDeps({ env });
+    expect(await run(["cost", "--json"], deps)).toBe(0);
+    expect(json(deps.io.stdout).providers[0]).toMatchObject({
+      spentUsd: 0.42,
+      todayUsd: 0.42,
+      wiki: { period: 0.42, today: 0.42, rawToday: 0.42, rawMonth: 0.42 },
+    });
+  });
+
+  test("a wiki.db from a newer tars: the message, and exit 1", async () => {
+    const { env, paths } = setup();
+    const db = await openWikiDb(paths);
+    db.run("UPDATE meta SET value = '99' WHERE key = 'schema_version'");
+    db.close();
+    const deps = testDeps({ env });
+    expect(await run(["cost"], deps)).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("讀不到 wiki.db 的用量帳");
   });
 
   test("without config.toml it fails with exit 1", async () => {
@@ -158,6 +190,15 @@ describe("tars cost adjust", () => {
     const after = testDeps({ env });
     expect(await run(["cost", "--json"], after)).toBe(0);
     expect(json(after.io.stdout).providers[0].spentUsd).toBe(14);
+  });
+
+  test("the figure shown before confirming includes sync's spend", async () => {
+    const { env, paths } = setup();
+    await syncUsage(paths, 1.5, new Date(TEST_NOW));
+    const terminal = scriptedTerminal(["no"]);
+    const deps = testDeps({ env, openTerminal: () => terminal });
+    expect(await run(["cost", "adjust", "anthropic", "--spent", "3"], deps)).toBe(1);
+    expect(terminal.transcript.join("")).toContain("本機帳的本期已用：1.50 USD");
   });
 
   test("no leaves nothing on disk and exits 1", async () => {
