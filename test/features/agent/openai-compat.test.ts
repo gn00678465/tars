@@ -349,11 +349,12 @@ describe("usage", () => {
 
 describe("errors", () => {
   const seen = { receivedStart: false, receivedContent: false };
+  const SECRET = "or-" + "live-0123456789";
   const signal = new AbortController().signal;
   const apiError = (status: number, message: string, headers: Record<string, string> = {}) =>
     APIError.generate(status, { error: { message } }, undefined, new Headers(headers));
   const kind = (err: unknown, provider: CompatProvider = "openrouter") =>
-    (toProviderError(err, provider, signal, seen) as ProviderError).kind;
+    (toProviderError(err, provider, signal, seen, SECRET) as ProviderError).kind;
 
   test.each([
     [402, "spend_limit"],
@@ -377,6 +378,7 @@ describe("errors", () => {
       "gemini",
       signal,
       seen,
+      SECRET,
     );
     expect(e).toMatchObject({ kind: "rate_limit", retryAfterMs: 3000 });
   });
@@ -393,6 +395,7 @@ describe("errors", () => {
       "openrouter",
       signal,
       seen,
+      SECRET,
     ) as ProviderError;
     expect(policy.kind).toBe("bad_request");
     expect(policy.detail).toContain("資料政策");
@@ -401,6 +404,7 @@ describe("errors", () => {
       "openrouter",
       signal,
       seen,
+      SECRET,
     );
     expect((other as ProviderError).detail).toBe("model vendor/x not found");
   });
@@ -411,9 +415,9 @@ describe("errors", () => {
     expect(kind(new OpenAIError("x"))).toBe("connection");
     const ac = new AbortController();
     ac.abort();
-    expect((toProviderError(new Error("x"), "gemini", ac.signal, seen) as ProviderError).kind).toBe(
-      "aborted",
-    );
+    expect(
+      (toProviderError(new Error("x"), "gemini", ac.signal, seen, SECRET) as ProviderError).kind,
+    ).toBe("aborted");
   });
 
   test("a bad request's detail is cut to 500 characters", () => {
@@ -422,8 +426,30 @@ describe("errors", () => {
       "gemini",
       signal,
       seen,
+      SECRET,
     ) as ProviderError;
     expect(e.detail).toHaveLength(500);
+  });
+
+  test("the key in use is taken out of the detail before the cut", () => {
+    const raw = APIError.generate(
+      400,
+      { error: { metadata: { raw: `authorization: Bearer ${SECRET}` } } },
+      undefined,
+      new Headers(),
+    );
+    const echoed = toProviderError(raw, "openrouter", signal, seen, SECRET) as ProviderError;
+    expect(echoed.detail).toContain("Bearer [金鑰已遮蔽]");
+    expect(echoed.detail).not.toContain(SECRET);
+    const atTheCut = toProviderError(
+      apiError(400, `${"y".repeat(495)}${SECRET}`),
+      "gemini",
+      signal,
+      seen,
+      SECRET,
+    ) as ProviderError;
+    expect(atTheCut.detail).toHaveLength(500);
+    expect(atTheCut.detail).not.toContain(SECRET.slice(0, 5));
   });
 });
 
@@ -818,6 +844,22 @@ describe("the adapter", () => {
       body: [{ error: { code: 400, message: "API key not valid. Please pass a valid API key." } }],
     });
     expect(err).toMatchObject({ kind: "auth", status: 400 });
+  });
+
+  test("an upstream echoing the key: the detail has it taken out, both body shapes", async () => {
+    const raw = await failure("openrouter", {
+      kind: "http_error",
+      status: 400,
+      body: { error: { metadata: { raw: "authorization: Bearer test-key" } } },
+    });
+    expect(raw.detail).toContain("[金鑰已遮蔽]");
+    expect(raw.detail).not.toContain("test-key");
+    const array = await failure("gemini", {
+      kind: "http_error",
+      status: 400,
+      body: [{ error: { code: 400, message: "bad field; request had key=test-key" } }],
+    });
+    expect(array.detail).toBe("bad field; request had key=[金鑰已遮蔽]");
   });
 
   test("402 is spend_limit; 429 carries retry-after", async () => {

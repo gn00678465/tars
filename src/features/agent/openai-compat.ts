@@ -50,19 +50,22 @@ export function createCompatAdapter(opts: CompatAdapterOptions): ProviderAdapter
     logLevel: "off",
     fetch: unwrapArrayErrors,
   });
-  const { provider } = opts;
+  const { provider, apiKey } = opts;
   return {
     provider,
-    stream: (req, signal) => streamChat(client, provider, req, signal),
+    stream: (req, signal) => streamChat(client, provider, apiKey, req, signal),
     listModels: async (signal) => {
       const raw: unknown[] = [];
       try {
         for await (const m of client.models.list({ signal })) raw.push(m);
       } catch (err) {
-        throw toProviderError(err, provider, signal, {
-          receivedStart: false,
-          receivedContent: false,
-        });
+        throw toProviderError(
+          err,
+          provider,
+          signal,
+          { receivedStart: false, receivedContent: false },
+          apiKey,
+        );
       }
       return provider === "openrouter" ? listOpenRouter(raw, new Date()) : listGemini(raw);
     },
@@ -251,6 +254,7 @@ interface PartialCall {
 async function* streamChat(
   client: OpenAI,
   provider: CompatProvider,
+  apiKey: string,
   req: ModelRequest,
   signal: AbortSignal,
 ): AsyncGenerator<ProviderEvent> {
@@ -345,7 +349,7 @@ async function* streamChat(
       native,
     };
   } catch (err) {
-    throw toProviderError(err, provider, signal, seen);
+    throw toProviderError(err, provider, signal, seen, apiKey);
   }
 }
 
@@ -413,6 +417,7 @@ export function toProviderError(
   provider: CompatProvider,
   signal: AbortSignal,
   seen: { receivedStart: boolean; receivedContent: boolean },
+  apiKey: string,
 ): unknown {
   const status = err instanceof APIError ? err.status : undefined;
   const make = (kind: ProviderErrorKind, extra: { retryAfterMs?: number; detail?: string } = {}) =>
@@ -437,11 +442,19 @@ export function toProviderError(
     if (status !== undefined && status >= 500) return make("server");
     if (err instanceof APIConnectionError) return make("connection");
     if (status !== undefined)
-      return make("bad_request", { detail: message.slice(0, DETAIL_LIMIT) });
+      return make("bad_request", { detail: redact(message, apiKey).slice(0, DETAIL_LIMIT) });
   }
   if (err instanceof OpenAIError) return make("connection");
   return err;
 }
+
+/**
+ * The detail is stored in the error item and shown on the terminal, and an upstream may echo the
+ * request back (OpenRouter's metadata.raw, Gemini's message). The key is taken out before the
+ * cut, so a cut cannot leave part of it.
+ */
+const redact = (message: string, apiKey: string) =>
+  apiKey === "" ? message : message.replaceAll(apiKey, "[金鑰已遮蔽]");
 
 /** The provider's own words: error.message of the body, without the SDK's status prefix. */
 function messageOf(err: APIError): string {
