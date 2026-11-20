@@ -458,16 +458,39 @@ describe("errors", () => {
     expect(e.detail).toHaveLength(500);
   });
 
-  test("the key in use is taken out of the detail before the cut", () => {
+  test("only error.message is kept: metadata.raw and a body that is not JSON are dropped", () => {
     const raw = APIError.generate(
       400,
       { error: { metadata: { raw: `authorization: Bearer ${SECRET}` } } },
       undefined,
       new Headers(),
     );
-    const echoed = toProviderError(raw, "openrouter", signal, seen, SECRET) as ProviderError;
-    expect(echoed.detail).toContain("Bearer [金鑰已遮蔽]");
-    expect(echoed.detail).not.toContain(SECRET);
+    const notJson = APIError.generate(400, undefined, `echo: ${SECRET}`, new Headers());
+    for (const err of [raw, notJson]) {
+      const e = toProviderError(err, "openrouter", signal, seen, SECRET) as ProviderError;
+      expect(e.kind).toBe("bad_request");
+      expect(e.detail).toBeUndefined();
+    }
+  });
+
+  test("the key as sent, URL-encoded or in Base64 is taken out; a cut-short echo outside the message is dropped", () => {
+    const key = "a+b/" + "secret";
+    const detail = (body: object) =>
+      (
+        toProviderError(
+          APIError.generate(400, body, undefined, new Headers()),
+          "openrouter",
+          signal,
+          seen,
+          key,
+        ) as ProviderError
+      ).detail;
+    for (const form of [key, "a%2Bb%2Fsecret", "YStiL3NlY3JldA==", "YStiL3NlY3JldA"])
+      expect(detail({ error: { message: `sent with ${form}.` } })).toBe("sent with [金鑰已遮蔽].");
+    expect(detail({ error: { message: "bad", metadata: { raw: "key=a+b/" } } })).toBe("bad");
+  });
+
+  test("the key is taken out before the cut", () => {
     const atTheCut = toProviderError(
       apiError(400, `${"y".repeat(495)}${SECRET}`),
       "gemini",
@@ -882,14 +905,14 @@ describe("the adapter", () => {
     expect(err).toMatchObject({ kind: "auth", status: 400 });
   });
 
-  test("an upstream echoing the key: the detail has it taken out, both body shapes", async () => {
+  test("an upstream echoing the key: metadata.raw is dropped, the message has it taken out", async () => {
     const raw = await failure("openrouter", {
       kind: "http_error",
       status: 400,
       body: { error: { metadata: { raw: "authorization: Bearer test-key" } } },
     });
-    expect(raw.detail).toContain("[金鑰已遮蔽]");
-    expect(raw.detail).not.toContain("test-key");
+    expect(raw.kind).toBe("bad_request");
+    expect(raw.detail).toBeUndefined();
     const array = await failure("gemini", {
       kind: "http_error",
       status: 400,

@@ -449,7 +449,7 @@ export function toProviderError(
   if (err instanceof APIUserAbortError || signal.aborted) return make("aborted", unseen);
   if (err instanceof ProviderError) return err;
   if (err instanceof APIError) {
-    const message = messageOf(err);
+    const message = messageOf(err) ?? "";
     const says = (words: string) => message.toLowerCase().includes(words);
     if (status === 402) return make("spend_limit");
     if (status === 401 || status === 403) return make("auth");
@@ -465,8 +465,10 @@ export function toProviderError(
     if (status !== undefined && status >= 500) return make("server");
     if (err instanceof APIConnectionError)
       return make("connection", seen.responded === true ? unseen : {});
-    if (status !== undefined)
-      return make("bad_request", { detail: redact(message, apiKey).slice(0, DETAIL_LIMIT) });
+    if (status !== undefined) {
+      const detail = detailOf(err, apiKey);
+      return make("bad_request", detail === undefined ? {} : { detail });
+    }
   }
   if (err instanceof OpenAIError) return make("connection", seen.responded === true ? unseen : {});
   return err;
@@ -474,16 +476,31 @@ export function toProviderError(
 
 /**
  * The detail is stored in the error item and shown on the terminal, and an upstream may echo the
- * request back (OpenRouter's metadata.raw, Gemini's message). The key is taken out before the
- * cut, so a cut cannot leave part of it.
+ * request back. Only the body's error.message is kept: never metadata.raw, the rest of the body,
+ * or a body that is not JSON. The key is taken out of it as sent and in the two encodings an echo
+ * may carry, before the cut, so the cut cannot leave part of it. A key the upstream itself cut
+ * short inside error.message is not found.
  */
-const redact = (message: string, apiKey: string) =>
-  apiKey === "" ? message : message.replaceAll(apiKey, "[金鑰已遮蔽]");
+function detailOf(err: APIError, apiKey: string): string | undefined {
+  const message = messageOf(err);
+  if (message === undefined) return undefined;
+  const base64 = Buffer.from(apiKey).toString("base64");
+  const forms = [
+    apiKey,
+    encodeURIComponent(apiKey),
+    base64,
+    base64.replace(/=+$/, ""),
+    Buffer.from(apiKey).toString("base64url"),
+  ];
+  let out = message;
+  if (apiKey !== "") for (const form of forms) out = out.replaceAll(form, "[金鑰已遮蔽]");
+  return out.slice(0, DETAIL_LIMIT);
+}
 
-/** The provider's own words: error.message of the body, without the SDK's status prefix. */
-function messageOf(err: APIError): string {
+/** The provider's own words: error.message of the body, when it is a string. */
+function messageOf(err: APIError): string | undefined {
   const inner = (err.error as { message?: unknown } | undefined)?.message;
-  return typeof inner === "string" ? inner : err.message;
+  return typeof inner === "string" ? inner : undefined;
 }
 
 function retryAfter(headers: Headers | undefined): number | undefined {
