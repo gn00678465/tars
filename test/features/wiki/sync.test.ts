@@ -853,6 +853,41 @@ describe("recovery", () => {
     expect(one(w, "SELECT COUNT(*) AS n FROM page_commits")).toEqual({ n: 0 });
   });
 
+  test("a symlinked category at reconciliation stops the sync; restored, it settles first", async () => {
+    const h = await harness();
+    await onePage(h);
+    const t2 = h.turn({ owner: "王小明其實沒有搬到台中西屯" });
+    h.fake.reply(
+      extracted({ source: t2.ref, quote: "沒有搬到台中西屯", text: "沒有搬到台中。" }),
+      json({
+        summary: { keep: true },
+        facts: [{ op: "retract", id: "i1", reason: "擁有者更正", from: ["c2"] }],
+        open: [],
+      }),
+    );
+    const w = await failAfterWrite(h);
+    await expect(h.sync()).rejects.toThrow("fault");
+    w.run("DROP TRIGGER fault");
+    const people = join(h.paths.wiki, "people");
+    const moved = join(h.paths.data, "people-moved");
+    renameSync(people, moved);
+    symlinkSync(moved, people);
+    const requests = h.fake.messages().length;
+    await expect(h.sync()).rejects.toThrow("people/ 不是真的目錄（symlink）");
+    expect(h.fake.messages()).toHaveLength(requests);
+    expect(one(w, "SELECT COUNT(*) AS n FROM page_commits")).toEqual({ n: 1 });
+    expect(one(w, "SELECT state FROM candidates WHERE id = 2")).toEqual({ state: "pending" });
+    rmSync(people);
+    renameSync(moved, people);
+    expect(await h.sync()).toEqual({ state: "completed" });
+    expect(h.fake.messages()).toHaveLength(requests);
+    expect(one(w, "SELECT state, attempts FROM candidates WHERE id = 2")).toEqual({
+      state: "applied",
+      attempts: 0,
+    });
+    expect(one(w, "SELECT COUNT(*) AS n FROM page_commits")).toEqual({ n: 0 });
+  });
+
   test("a journal whose file was never written: the candidates are done again", async () => {
     const h = await harness();
     await onePage(h);

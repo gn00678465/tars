@@ -551,15 +551,18 @@ async function settleCommits(wiki: Database, paths: TarsPaths): Promise<void> {
   }[];
   for (const r of rows) {
     const { category, file } = pagePlace(r.page);
-    // Only a missing file says the write never happened; any other error says nothing, so the
-    // journal stays and the sync stops until the file can be read.
+    // Only a missing file says the write never happened. Anything else, an unreadable file or a
+    // symlinked directory, says nothing: the journal stays and the sync stops, since going on
+    // would send the written candidates to the model again.
+    const unsettled = (why: string) =>
+      new TarsError(`讀不到 ${r.page}.md（${why}）；上次寫入的對帳留到下次同步`);
     const read = await withWikiDir(paths, category, false, (dir) => readIn(dir, file)).catch(
       (err: unknown) => {
-        throw new TarsError(`讀不到 ${r.page}.md（${errorText(err)}）；上次寫入的對帳留到下次同步`);
+        throw unsettled(errorText(err));
       },
     );
-    // A symlinked directory cannot be checked: the journal waits for it to be fixed.
-    if ("dir" in read && read.dir === "unsafe") continue;
+    if ("dir" in read && read.dir === "unsafe")
+      throw unsettled(`${category}/ 不是真的目錄（symlink）`);
     const text = "value" in read ? read.value : undefined;
     const parsed =
       text !== undefined && sha256(text) === r.hash
