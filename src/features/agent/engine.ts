@@ -23,6 +23,7 @@ import {
 } from "../wiki/index-file.ts";
 import type { Limits, ProviderConfig } from "./config.ts";
 import { effectiveEffort } from "./effort.ts";
+import { carryoverMaxBytes, renderCarryover } from "./carryover.ts";
 import type { Frontend } from "./frontend.ts";
 import {
   effectiveWindow,
@@ -107,7 +108,19 @@ export interface TurnInput {
   /** The conversation's level; what is sent may be lower (effectiveEffort). */
   readonly effort: Effort;
   readonly text: string;
+  /** Continue: this turn opens a new conversation that starts with that one's text. Only without convId. */
+  readonly continueFrom?: string;
+  /** With continueFrom: carry only the last N turns, and no summary. */
+  readonly keepLast?: number;
 }
+
+/** conv_too_long when continuing: none of them sends the owner back to /compact (S2-13). */
+export const CARRY_TEXT = {
+  summary_too_long: "前一個對話的摘要太長，帶不進這個模型。用 --keep-last <N> 只帶最後幾個回合",
+  turn_too_long:
+    "最近一個回合就超過這個模型能帶入的長度，--keep-last 也帶不進去。換視窗較大的模型，或開新對話",
+  over_stop: "這則訊息加上帶入的內容太長。縮短訊息，或用 --keep-last <N> 少帶幾個回合",
+} as const;
 
 type EndState = Exclude<TurnState, "running" | "interrupted">;
 
@@ -303,21 +316,43 @@ export function createEngine(deps: EngineDeps) {
       kind: "user",
       body: { text: input.text },
     };
+    let carry: UserItem | undefined;
+    if (input.convId === undefined && input.continueFrom !== undefined) {
+      const rendered = renderCarryover(store.readItems(db, input.continueFrom), {
+        maxBytes: carryoverMaxBytes(s.model, s.limits),
+        ...(input.keepLast === undefined ? {} : { keepLast: input.keepLast }),
+      });
+      if (typeof rendered === "string") return rejected("conv_too_long", CARRY_TEXT[rendered]);
+      carry = {
+        ...pending,
+        body: { text: rendered.text, carriedFrom: input.continueFrom },
+      };
+    }
     // index.md is read at most once a turn, and only when this generation has no index yet: a
     // stored one stays put, so the prefix the cache and the thinking signatures hold is unchanged.
     let loaded: { body: WikiIndexBody | undefined } | undefined;
     const read = async (convId: string | undefined) => {
       const conv = convId === undefined ? undefined : store.getConversation(db, convId);
       const items = conv === undefined ? [] : store.readActiveItems(db, conv.id);
+      const carried = conv === undefined && carry !== undefined ? { carry } : {};
       if (activeWikiIndex(items) !== undefined)
-        return { conv, items, fresh: undefined, history: requestHistory(items, { pending }) };
+        return {
+          conv,
+          items,
+          fresh: undefined,
+          history: requestHistory(items, { pending, ...carried }),
+        };
       loaded ??= { body: await loadWikiIndexBlock(deps.paths, deps.warn) };
       const fresh = loaded.body;
       return {
         conv,
         items,
         fresh,
-        history: requestHistory(items, { pending, ...(fresh === undefined ? {} : { fresh }) }),
+        history: requestHistory(items, {
+          pending,
+          ...carried,
+          ...(fresh === undefined ? {} : { fresh }),
+        }),
       };
     };
     let current = await read(input.convId);
@@ -334,13 +369,16 @@ export function createEngine(deps: EngineDeps) {
     }
     const { conv, items, history, fresh } = current;
     const first = reserveChat({ s, system, prefix }, conv, history, undefined);
-    if (!first.ok) return rejected(first.reason);
+    if (!first.ok)
+      return first.reason === "conv_too_long" && carry !== undefined
+        ? rejected("conv_too_long", CARRY_TEXT.over_stop)
+        : rejected(first.reason);
 
     const convId = conv?.id ?? store.newId();
     const turnId = store.newId();
     const now = deps.now().getTime();
     let usageId = 0;
-    let indexItem: Item | undefined;
+    let opening: Item[] = [];
     db.transaction(() => {
       if (conv === undefined)
         store.createConversation(db, {
@@ -350,15 +388,20 @@ export function createEngine(deps: EngineDeps) {
           model: input.model,
           effort: input.effort,
           now,
+          ...(carry === undefined ? {} : { parentId: input.continueFrom }),
         });
       store.beginTurn(db, { id: turnId, convId, kind: "chat", effort: choice.effort ?? null, now });
-      indexItem = append(convId, turnId, [
+      // The order requestHistory sent them in: carried text, index, message.
+      opening = append(convId, turnId, [
+        ...(conv === undefined && carry !== undefined
+          ? [{ kind: "user" as const, step: 0, body: carry.body }]
+          : []),
         ...(fresh === undefined ? [] : [{ kind: "wiki_index" as const, step: 0, body: fresh }]),
         { kind: "user", step: 0, body: { text: input.text } },
-      ]).find((i) => i.kind === "wiki_index");
+      ]).slice(0, -1);
       usageId = insertRequest(s, { turnId, convId, step: 1, attempt: 1 }, first);
     })();
-    if (indexItem !== undefined) frontend.emit({ type: "item", item: indexItem });
+    for (const item of opening) frontend.emit({ type: "item", item });
     deps.log.log("turn_start", { turn: turnId, conv: convId, turnKind: "chat" });
 
     if (s.pricesWarn)

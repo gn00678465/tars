@@ -26,6 +26,8 @@ export interface Conversation {
   readonly lastTotalInputTokens: number;
   readonly lastRequestAt: number | null;
   readonly lastPrefixKey: string | null;
+  /** The conversation this one continues; absent for one started fresh. */
+  readonly parentId?: string;
 }
 
 export interface ToolCallRow {
@@ -59,6 +61,7 @@ interface ConversationRow {
   last_total_input_tokens: number;
   last_request_at: number | null;
   last_prefix_key: string | null;
+  parent_id: string | null;
 }
 
 const toConversation = (r: ConversationRow): Conversation => ({
@@ -72,6 +75,7 @@ const toConversation = (r: ConversationRow): Conversation => ({
   lastTotalInputTokens: r.last_total_input_tokens,
   lastRequestAt: r.last_request_at,
   lastPrefixKey: r.last_prefix_key,
+  ...(r.parent_id === null ? {} : { parentId: r.parent_id }),
 });
 
 export function getConversation(db: Database, id: string): Conversation {
@@ -129,11 +133,22 @@ export function findTurn(db: Database, convId: string, idOrSuffix: string): Turn
 
 export function createConversation(
   db: Database,
-  c: { id: string; text: string; provider: Provider; model: string; effort: Effort; now: number },
+  c: {
+    id: string;
+    text: string;
+    provider: Provider;
+    model: string;
+    effort: Effort;
+    now: number;
+    parentId?: string;
+  },
 ): void {
+  // parent_id is named only for a continuation: test fixtures that build an older schema
+  // (versions 1–3) have no such column and still create conversations through here.
+  const parent = c.parentId === undefined ? [] : [c.parentId];
   db.run(
-    `INSERT INTO conversations (id, title, provider, model, effort, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO conversations (id, title, provider, model, effort, created_at, updated_at${parent.length > 0 ? ", parent_id" : ""})
+     VALUES (?, ?, ?, ?, ?, ?, ?${parent.length > 0 ? ", ?" : ""})`,
     [
       c.id,
       [...c.text.trim()].slice(0, TITLE_CHARS).join(""),
@@ -142,6 +157,7 @@ export function createConversation(
       c.effort,
       c.now,
       c.now,
+      ...parent,
     ],
   );
 }

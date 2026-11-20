@@ -126,6 +126,7 @@ UPDATE adjustments SET
   // An older tars would skip a wiki_index item and send a history its thinking signatures no
   // longer match, so the version alone keeps it out.
   `-- 3: items.kind gains 'wiki_index'. No table changes; the version keeps older binaries out.`,
+  `ALTER TABLE conversations ADD COLUMN parent_id TEXT REFERENCES conversations(id);`,
 ];
 
 export interface LockInfo {

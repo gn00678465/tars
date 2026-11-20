@@ -131,13 +131,23 @@ const asUser = (seq: number, turnId: string, text: string): UserItem => ({
  * generation's index just before its turn's user message. The adapter merges neighbouring user
  * items into one message, so the index and the message are two text blocks of it. `fresh` is
  * an index read this turn and not stored yet; it must not be given when items already hold one.
+ * `carry` is a continuation's carried text, first of a new conversation: [carry, index,
+ * message], the order the creating transaction stores them in, so later requests rebuild the
+ * same bytes.
  */
 export function requestHistory(
   items: readonly Item[],
-  extra: { readonly pending?: UserItem; readonly fresh?: WikiIndexBody } = {},
+  extra: {
+    readonly pending?: UserItem;
+    readonly fresh?: WikiIndexBody;
+    readonly carry?: UserItem;
+  } = {},
 ): ContextItem[] {
+  if (extra.carry !== undefined && items.length > 0)
+    throw new Error("carried text only opens a new conversation");
   const history: ContextItem[] = [
     ...buildActiveHistory(items),
+    ...(extra.carry === undefined ? [] : [{ ...extra.carry, seq: PENDING_SEQ - 2 }]),
     ...(extra.pending === undefined ? [] : [extra.pending]),
   ];
   const stored = activeWikiIndex(items);

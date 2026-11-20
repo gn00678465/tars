@@ -234,4 +234,16 @@ describe("requestHistory", () => {
   test("a fresh index next to a stored one is a programming error", () => {
     expect(() => requestHistory([index(1), user(2, "a")], { fresh: BODY })).toThrow();
   });
+
+  const carry: UserItem = { ...pending, body: { text: "earlier", carriedFrom: "conv-old" } };
+
+  test("carried text, then the fresh index, then the message", () => {
+    const h = requestHistory([], { pending, fresh: BODY, carry });
+    expect(h.map((i) => i.seq)).toEqual([PENDING_SEQ - 2, PENDING_SEQ - 1, PENDING_SEQ]);
+    expect(h.map((i) => i.kind === "user" && i.body.text)).toEqual(["earlier", BODY.text, "now"]);
+  });
+
+  test("carried text into a conversation that has items is a programming error", () => {
+    expect(() => requestHistory([user(1, "a")], { pending, carry })).toThrow();
+  });
 });

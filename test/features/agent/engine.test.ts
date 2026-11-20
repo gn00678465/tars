@@ -6,7 +6,13 @@ import type { Engine, TurnOutcome } from "../../../src/features/agent/engine.ts"
 import { adjust } from "../../../src/features/agent/ledger.ts";
 import { REFUSAL_TEXT } from "../../../src/features/agent/tars-tool.ts";
 import { reconcile } from "../../../src/features/agent/reconcile.ts";
-import { readItems } from "../../../src/features/agent/store.ts";
+import {
+  appendItems,
+  beginTurn,
+  createConversation,
+  newId,
+  readItems,
+} from "../../../src/features/agent/store.ts";
 import type { Effort, Item } from "../../../src/features/agent/types.ts";
 import { tarsCall, text, toolUse, type FakeBlock, type FakeReply } from "../../fakes/anthropic.ts";
 import { compatText, type FakeCompatReply } from "../../fakes/openai-compat.ts";
@@ -1052,5 +1058,171 @@ describe("compatible providers", () => {
     h.gemini.reply(compatText("fine"));
     expect(ended(await send(h, GEMINI, "hi")).state).toBe("completed");
     expect(h.fake.messages()).toHaveLength(0);
+  });
+});
+
+describe("continuing with another model", () => {
+  // maxBytes for the carried text is 10,000 × 0.4 × 2 = 8,000; the stop line is 8,500 tokens.
+  const SMALL = configWith({ max_input_tokens: 10000 });
+
+  /** An earlier conversation of `turns` turns, through the engine. */
+  async function earlier(h: EngineHarness, turns: readonly [string, string][]) {
+    let convId: string | undefined;
+    for (const [said, replied] of turns) {
+      h.fake.reply(text(replied));
+      convId = ended(await runTurn(h, said, convId === undefined ? {} : { convId })).convId;
+    }
+    return convId as string;
+  }
+  const carryOn = (h: EngineHarness, from: string, message: string, keepLast?: number) =>
+    h.engine.runTurn(
+      {
+        provider: "anthropic",
+        model: MODEL_ID,
+        effort: "medium",
+        text: message,
+        continueFrom: from,
+        ...(keepLast === undefined ? {} : { keepLast }),
+      },
+      h.frontend,
+      new AbortController().signal,
+    );
+  const withoutCacheControl = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(withoutCacheControl)
+      : typeof v === "object" && v !== null
+        ? Object.fromEntries(
+            Object.entries(v)
+              .filter(([k]) => k !== "cache_control")
+              .map(([k, x]) => [k, withoutCacheControl(x)]),
+          )
+        : v;
+
+  test("the new conversation has parent_id; stored: carried text, index, message", async () => {
+    const h = await harness();
+    writeWikiIndex(h.paths, ["王小明"]);
+    const old = await earlier(h, [["第一個問題", "第一個回答"]]);
+    const before = readItems(h.db, old);
+    h.fake.reply(text("好"));
+    const out = ended(await carryOn(h, old, "繼續剛才的整理"));
+    expect(out.convId).not.toBe(old);
+    expect(rows(h.db, "SELECT parent_id FROM conversations WHERE id = ?", out.convId)).toEqual([
+      { parent_id: old },
+    ]);
+    const items = readItems(h.db, out.convId);
+    expect(items.slice(0, 3).map((i) => i.kind)).toEqual(["user", "wiki_index", "user"]);
+    const [carried, , message] = items;
+    expect(carried?.kind === "user" && carried.body.carriedFrom).toBe(old);
+    expect(carried?.kind === "user" && carried.body.text).toContain("│ 第一個回答");
+    expect(message?.kind === "user" && message.body).toEqual({ text: "繼續剛才的整理" });
+    expect(readItems(h.db, old)).toEqual(before);
+  });
+
+  test.each([
+    ["with", true],
+    ["without", false],
+  ])(
+    "%s an index, the first request's opening message is byte for byte the second's",
+    async (_, index) => {
+      const h = await harness();
+      if (index) writeWikiIndex(h.paths, ["王小明"]);
+      const old = await earlier(h, [["一", "二"]]);
+      h.fake.reply(text("好"));
+      const convId = ended(await carryOn(h, old, "繼續")).convId;
+      h.fake.reply(text("再好"));
+      ended(await runTurn(h, "下一則", { convId }));
+      const [first, second] = h.fake.messages().slice(-2);
+      const opening = (r: { body: Record<string, unknown> } | undefined) =>
+        JSON.stringify(withoutCacheControl((r?.body.messages as unknown[] | undefined)?.[0]));
+      expect(opening(second)).toBe(opening(first));
+      expect(opening(first)).toContain("previous-conversation");
+      expect(opening(first).includes("wiki-index")).toBe(index);
+    },
+  );
+
+  /** A conversation stored by hand, for sizes the engine would compact first. */
+  function stored(h: EngineHarness, items: Parameters<typeof appendItems>[3]) {
+    const convId = newId();
+    const turnId = newId();
+    const now = h.clock.now().getTime();
+    createConversation(h.db, {
+      id: convId,
+      text: "old",
+      provider: "anthropic",
+      model: MODEL_ID,
+      effort: "medium",
+      now,
+    });
+    beginTurn(h.db, { id: turnId, convId, kind: "chat", effort: "medium", now });
+    appendItems(h.db, convId, turnId, items, now);
+    return convId;
+  }
+  const said = (t: string) => ({ kind: "user" as const, step: 0, body: { text: t } });
+  const replied = (t: string) => ({
+    kind: "assistant" as const,
+    step: 1,
+    body: { text: t, state: "complete" as const, native: null },
+  });
+
+  test.each([
+    [
+      "a summary too long",
+      () => [
+        {
+          kind: "compaction" as const,
+          step: 1,
+          body: {
+            firstKeptSeq: 2,
+            summary: "s".repeat(9000),
+            tokensBefore: 1,
+            replacedCount: 1,
+            trigger: "manual" as const,
+            usageId: 1,
+          },
+        },
+        said("hi"),
+      ],
+      "x",
+      "前一個對話的摘要太長，帶不進這個模型。用 --keep-last <N> 只帶最後幾個回合",
+    ],
+    [
+      "the latest turn too long",
+      () => [said("t".repeat(9000)), replied("ok")],
+      "x",
+      "最近一個回合就超過這個模型能帶入的長度，--keep-last 也帶不進去。換視窗較大的模型，或開新對話",
+    ],
+    [
+      "the message with it over the stop line",
+      () => [said("t".repeat(6000)), replied("ok")],
+      "m".repeat(14000),
+      "這則訊息加上帶入的內容太長。縮短訊息，或用 --keep-last <N> 少帶幾個回合",
+    ],
+  ])("conv_too_long when %s; nothing is created", async (_, items, message, expected) => {
+    const h = await harness({ config: SMALL });
+    const old = stored(h, items());
+    const before = counts(h.db);
+    expect(await carryOn(h, old, message)).toEqual({
+      kind: "rejected",
+      reason: "conv_too_long",
+      message: expected,
+    });
+    expect(counts(h.db)).toEqual(before);
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("keepLast carries only the last turns", async () => {
+    const h = await harness();
+    const old = await earlier(h, [
+      ["first question", "first answer"],
+      ["second question", "second answer"],
+      ["third question", "third answer"],
+    ]);
+    h.fake.reply(text("好"));
+    const convId = ended(await carryOn(h, old, "go", 1)).convId;
+    const carried = readItems(h.db, convId)[0];
+    const body = carried?.kind === "user" ? carried.body.text : "";
+    expect(body).toContain("│ third answer");
+    expect(body).not.toContain("second question");
+    expect(body).toContain("（這裡有 2 個回合沒有帶入）");
   });
 });

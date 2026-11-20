@@ -137,11 +137,12 @@ describe("options", () => {
       expect(await run(["chat", "--list"], deps)).toBe(0);
       const [line] = deps.io.stdout;
       const cols = line?.split("\t") ?? [];
-      expect(cols).toHaveLength(5);
+      expect(cols).toHaveLength(6);
       expect(cols[1]).toBe("first message");
       expect(cols[2]).toBe(`anthropic/${MODEL_ID}`);
       expect(cols[3]).toBe("medium");
       expect(cols[4]).toBe(new Date(TEST_NOW).toISOString());
+      expect(cols[5]).toBe("");
     } finally {
       lock.release();
     }
@@ -460,7 +461,7 @@ describe("interactive", () => {
     expect(await run(["chat"], deps)).toBe(0);
     expect(err(deps)).toContain(`目前的模型：anthropic/${MODEL_ID}`);
     expect(err(deps)).toContain(`anthropic/${MODEL_ID}  Model A`);
-    expect(err(deps)).toContain("tars chat --model <provider>/<id>");
+    expect(err(deps)).toContain("換模型：/model <provider>/<id>");
     expect(err(deps)).toContain("anthropic: 本期已用");
     expect(h.fake.messages()).toHaveLength(1);
     expect(counts(h)).toEqual(before);
@@ -683,3 +684,281 @@ describe("OpenRouter's key limit after a turn", () => {
     expect(query(h, "SELECT * FROM adjustments")).toEqual([]);
   }, 10000);
 });
+
+describe("continuing with another model", () => {
+  const { default: _isDefault, ...notDefault } = MODEL_ENTRY;
+  const MODEL_B = { ...notDefault, id: "model-b", label: "Model B" };
+  const B = `anthropic/${MODEL_B.id}`;
+  const withB = (opts: HarnessOptions = {}) => setup({ extraModels: [MODEL_B], ...opts });
+  const convs = (h: EngineHarness) =>
+    query<{ id: string; model: string; parent_id: string | null }>(
+      h,
+      "SELECT id, model, parent_id FROM conversations ORDER BY rowid",
+    );
+  async function first(h: EngineHarness) {
+    h.fake.reply(text("first answer"));
+    expect(await run(["chat", "--message", "first question"], chatDeps(h).deps)).toBe(0);
+    return convs(h)[0]?.id as string;
+  }
+  const lastModel = (h: EngineHarness) => h.fake.messages().at(-1)?.body.model;
+
+  test("/model <ref> with messages: a preview with bytes and dropped turns, then a new conversation", async () => {
+    const h = await withB();
+    const old = await first(h);
+    h.fake.reply(text("again"), text("third"));
+    const { deps } = chatDeps(h, {
+      answers: [`/model ${B} --keep-last 1`, "繼續", "再一則", undefined],
+    });
+    expect(await run(["chat", "--resume", old], deps)).toBe(0);
+    expect(err(deps)).toMatch(
+      new RegExp(`下一則訊息會開新對話，用 ${B}，帶入對話 ${old.slice(-8)} 的文字 \\d+ 位元組`),
+    );
+    const all = convs(h);
+    expect(all).toHaveLength(2);
+    expect(all[1]).toMatchObject({ model: "model-b", parent_id: old });
+    expect(lastModel(h)).toBe("model-b");
+    // The message after the first one stays in the new conversation.
+    expect(
+      query<{ n: number }>(
+        h,
+        "SELECT COUNT(*) AS n FROM turns WHERE conv_id = ?",
+        all[1]?.id as string,
+      )[0]?.n,
+    ).toBe(2);
+  });
+
+  test("the preview counts the turns left out", async () => {
+    const h = await withB();
+    h.fake.reply(text("a1"), text("a2"));
+    const { deps: d1 } = chatDeps(h, { answers: ["q1", "q2", undefined] });
+    expect(await run(["chat"], d1)).toBe(0);
+    const old = convs(h)[0]?.id as string;
+    const { deps } = chatDeps(h, { answers: [`/model ${B} --keep-last 1`, undefined] });
+    expect(await run(["chat", "--resume", old], deps)).toBe(0);
+    expect(err(deps)).toContain("，丟掉 1 個較早的回合");
+  });
+
+  test("text that cannot be carried: no pending continuation, the next message stays put", async () => {
+    const h = await withB({ config: configWith({ max_input_tokens: 10000 }) });
+    h.fake.reply(text("ok"));
+    expect(await run(["chat", "--message", "x".repeat(9000)], chatDeps(h).deps)).toBe(0);
+    const old = convs(h)[0]?.id as string;
+    h.fake.reply(text("same"));
+    const { deps } = chatDeps(h, { answers: [`/model ${B}`, "next", undefined] });
+    expect(await run(["chat", "--resume", old], deps)).toBe(0);
+    expect(err(deps)).toContain("沒有換模型：最近一個回合就超過");
+    expect(convs(h)).toHaveLength(1);
+    expect(lastModel(h)).toBe(MODEL_ID);
+  });
+
+  test("/model <ref> without messages switches; the next message opens a plain conversation", async () => {
+    const h = await withB();
+    h.fake.reply(text("hi"));
+    const { deps } = chatDeps(h, { answers: [`/model ${B}`, "hello", undefined] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).toContain(`下一則訊息用 ${B} 開新對話`);
+    expect(convs(h)).toEqual([expect.objectContaining({ model: "model-b", parent_id: null })]);
+  });
+
+  test("a check that fails changes nothing", async () => {
+    const h = await withB();
+    const old = await first(h);
+    h.fake.reply(text("same"));
+    const { deps } = chatDeps(h, {
+      answers: ["/model anthropic/nope", "/model gemini/x", "next", undefined],
+    });
+    expect(await run(["chat", "--resume", old], deps)).toBe(0);
+    expect(err(deps)).toContain("沒有換模型：");
+    expect(err(deps)).toContain("gemini 沒有啟用");
+    expect(convs(h)).toHaveLength(1);
+    expect(lastModel(h)).toBe(MODEL_ID);
+  });
+
+  test("a rejected message keeps the continuation pending; the next one continues", async () => {
+    const h = await withB();
+    const old = await first(h);
+    h.fake.reply(text("continued"));
+    const { deps } = chatDeps(h, {
+      answers: [
+        `/model ${B}`,
+        "/compact",
+        async () => {
+          adjust95(h);
+          return "rejected";
+        },
+        async () => {
+          clearAdjust(h);
+          return "accepted";
+        },
+        undefined,
+      ],
+    });
+    expect(await run(["chat", "--resume", old], deps)).toBe(0);
+    expect(err(deps)).toContain("還沒有訊息");
+    expect(err(deps)).toContain("沒有送出：");
+    expect(convs(h).at(-1)).toMatchObject({ model: "model-b", parent_id: old });
+    expect(convs(h)).toHaveLength(2);
+  });
+
+  test("/new drops the pending continuation", async () => {
+    const h = await withB();
+    const old = await first(h);
+    h.fake.reply(text("fresh"));
+    const { deps } = chatDeps(h, { answers: [`/model ${B}`, "/new", "hello", undefined] });
+    expect(await run(["chat", "--resume", old], deps)).toBe(0);
+    expect(convs(h).at(-1)).toMatchObject({ model: "model-b", parent_id: null });
+  });
+
+  test("/effort while pending sets the level the new conversation starts with", async () => {
+    const h = await withB();
+    const old = await first(h);
+    h.fake.reply(text("ok"));
+    const { deps } = chatDeps(h, { answers: [`/model ${B}`, "/effort high", "go", undefined] });
+    expect(await run(["chat", "--resume", old], deps)).toBe(0);
+    expect(
+      query<{ effort: string }>(h, "SELECT effort FROM conversations ORDER BY rowid DESC LIMIT 1"),
+    ).toEqual([{ effort: "high" }]);
+  });
+
+  test("--continue: a new conversation on --model, carrying the old one; the old one unchanged", async () => {
+    const h = await withB();
+    const old = await first(h);
+    const before = query(h, "SELECT * FROM items WHERE conv_id = ?", old);
+    h.fake.reply(text("continued"));
+    const { deps } = chatDeps(h);
+    expect(
+      await run(["chat", "--continue", old.slice(-8), "--model", B, "--message", "go on"], deps),
+    ).toBe(0);
+    expect(err(deps)).toContain("下一則訊息會開新對話");
+    expect(convs(h).at(-1)).toMatchObject({ model: "model-b", parent_id: old });
+    expect(query(h, "SELECT * FROM items WHERE conv_id = ?", old)).toEqual(before);
+    const sent = h.fake.messages().at(-1)?.body.messages as {
+      content: { type: string; text?: string }[];
+    }[];
+    const blocks = sent[0]?.content.filter((b) => b.type === "text").map((b) => b.text) ?? [];
+    expect(blocks[0]).toStartWith("<previous-conversation>");
+    expect(blocks.at(-1)).toBe("go on");
+  });
+
+  test.each([
+    [["--continue", "abcd1234"]],
+    [["--continue", "abcd1234", "--resume", "abcd1234", "--model", `anthropic/${MODEL_ID}`]],
+    [["--list", "--continue", "abcd1234"]],
+    [["--keep-last", "2"]],
+    [["--continue", "abcd1234", "--model", `anthropic/${MODEL_ID}`, "--keep-last", "0"]],
+  ])("chat %p is a usage error", async (args) => {
+    const h = await setup();
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", ...args], deps)).toBe(2);
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("[chat] provider on a provider not enabled: an error naming the enabled ones", async () => {
+    const h = await setup({ config: configWith({ provider: "gemini" }) });
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--message", "hi"], deps)).toBe(1);
+    expect(err(deps)).toContain("gemini 沒有啟用");
+    expect(err(deps)).toContain("啟用的：anthropic");
+  });
+
+  describe("the continuation hint on a rejection", () => {
+    const HINT = "用 /model <provider>/<id> 以另一個模型接續";
+
+    test.each([
+      ["budget_stopped", (h: EngineHarness) => adjust95(h)],
+      ["unknown_model", (h: EngineHarness) => writeCatalog(h.paths, [])],
+      [
+        "conv_too_long",
+        (h: EngineHarness) =>
+          writeFileSync(h.paths.configFile, configWith({ max_input_tokens: 10000 })),
+      ],
+    ])("%s: the hint", async (_, change) => {
+      const h = await setup();
+      const { deps } = chatDeps(h, {
+        answers: [
+          async () => {
+            change(h);
+            return "x".repeat(20000);
+          },
+          undefined,
+        ],
+      });
+      expect(await run(["chat"], deps)).toBe(0);
+      expect(err(deps)).toContain("沒有送出：");
+      expect(err(deps)).toContain(HINT);
+    });
+
+    test("another reason: no hint", async () => {
+      const h = await setup();
+      const { deps } = chatDeps(h, {
+        answers: [
+          async () => {
+            writeFileSync(h.paths.configFile, configWith({ enabled: false }));
+            return "hi";
+          },
+          undefined,
+        ],
+      });
+      expect(await run(["chat"], deps)).toBe(0);
+      expect(err(deps)).toContain("沒有送出：");
+      expect(err(deps)).not.toContain("以另一個模型接續");
+    });
+
+    test("--message on a conversation: the hint names --continue", async () => {
+      const h = await setup();
+      const old = await first(h);
+      adjust95(h);
+      const { deps } = chatDeps(h);
+      expect(await run(["chat", "--resume", old, "--message", "more"], deps)).toBe(1);
+      expect(err(deps)).toContain(
+        `用 tars chat --continue ${old.slice(-8)} --model <provider>/<id> 以另一個模型接續`,
+      );
+    });
+  });
+
+  test("--resume of a continued conversation shows where its text came from", async () => {
+    const h = await withB();
+    const old = await first(h);
+    h.fake.reply(text("continued"));
+    expect(
+      await run(["chat", "--continue", old, "--model", B, "--message", "go"], chatDeps(h).deps),
+    ).toBe(0);
+    const child = convs(h).at(-1)?.id as string;
+    const { deps } = chatDeps(h, { answers: [undefined] });
+    expect(await run(["chat", "--resume", child], deps)).toBe(0);
+    expect(err(deps)).toContain(`（帶入自對話 ${old.slice(-8)}）`);
+    expect(err(deps)).not.toContain("previous-conversation");
+  });
+
+  test("--list shows the parent's short id in column 6", async () => {
+    const h = await withB();
+    const old = await first(h);
+    h.fake.reply(text("continued"));
+    await run(["chat", "--continue", old, "--model", B, "--message", "go"], chatDeps(h).deps);
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--list"], deps)).toBe(0);
+    const cols = deps.io.stdout.map((l) => l.split("\t")[5]);
+    expect(cols.sort()).toEqual(["", old.slice(-8)]);
+  });
+});
+
+/** Puts Anthropic at its stop line, in its own connection. */
+function adjust95(h: EngineHarness) {
+  const db = new Database(h.paths.agentDb);
+  try {
+    db.run(
+      "INSERT INTO adjustments (provider, at, month, spent_usd, note, usage_upto, usage_pending) VALUES ('anthropic', ?, '2026-11', 95, 'test', (SELECT COALESCE(MAX(id), 0) FROM usage), '[]')",
+      [TEST_NOW],
+    );
+  } finally {
+    db.close();
+  }
+}
+function clearAdjust(h: EngineHarness) {
+  const db = new Database(h.paths.agentDb);
+  try {
+    db.run("DELETE FROM adjustments");
+  } finally {
+    db.close();
+  }
+}

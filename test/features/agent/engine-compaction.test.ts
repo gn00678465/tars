@@ -759,3 +759,33 @@ test("a summary whose end reports no usage: compacted, its row estimated, usage_
   expect(row).toEqual({ state: "estimated", cost_source: "estimate" });
   expect(h.frontend.notices()).toContain("usage_missing");
 });
+
+test("a continued conversation: compaction folds the carried text into the summary", async () => {
+  const h = await setup();
+  h.fake.reply(answer());
+  const old = ended(await run(h, "OLDMARK first question")).convId;
+  h.fake.reply(answer());
+  const convId = ended(
+    await h.engine.runTurn(
+      {
+        provider: "anthropic",
+        model: MODEL_ID,
+        effort: "medium",
+        text: U,
+        continueFrom: old,
+      },
+      h.frontend,
+      new AbortController().signal,
+    ),
+  ).convId;
+  for (let i = 0; i < 2; i++) {
+    h.fake.reply(answer());
+    ended(await run(h, U + i, convId));
+  }
+  h.fake.reply(summaryReply("folded"));
+  expect((await compact(h, convId)).kind).toBe("compacted");
+  const request = h.fake.messages().filter(isSummary).at(-1) as RecordedRequest;
+  expect(promptOf(request)).toContain("OLDMARK first question");
+  const active = readActiveItems(h.db, convId);
+  expect(active.some((i) => i.kind === "user" && i.body.carriedFrom !== undefined)).toBe(false);
+});

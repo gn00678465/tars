@@ -1,3 +1,4 @@
+import { getConversation } from "../../../src/features/agent/store.ts";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -102,11 +103,11 @@ describe("openSqlite", () => {
 });
 
 describe("openDb", () => {
-  test("an empty database migrates to version 3 with every table", async () => {
+  test("an empty database migrates to version 4 with every table", async () => {
     const { db } = await agentDb();
-    expect(MIGRATIONS.length).toBe(3);
+    expect(MIGRATIONS.length).toBe(4);
     expect(db.query("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
-      value: "3",
+      value: "4",
     });
     const tables = (
       db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as {
@@ -194,24 +195,54 @@ describe("openDb", () => {
     },
   );
 
-  test("version 2 to 3 changes only the version", async () => {
+  test("version 2 to 4 changes only the version and adds parent_id", async () => {
     const paths = isolatedPaths();
     mkdirSync(paths.agent, { recursive: true });
     const v2 = new Database(paths.agentDb, { create: true });
     for (const sql of MIGRATIONS.slice(0, 2)) v2.exec(sql);
     v2.run("INSERT INTO meta (key, value) VALUES ('schema_version', '2')");
     seedTurn(v2);
+    type Master = { type: string; name: string; sql: string | null };
+    const master = (db: Database) =>
+      db.query("SELECT type, name, sql FROM sqlite_master ORDER BY 1, 2").all() as Master[];
     const dump = (db: Database) =>
-      ["sqlite_master", "conversations", "turns"].map((t) =>
-        db.query(`SELECT * FROM ${t} ORDER BY 1, 2`).all(),
-      );
-    const before = dump(v2);
+      ["conversations", "turns"].map((t) => db.query(`SELECT * FROM ${t} ORDER BY 1, 2`).all());
+    const isConversations = (m: Master) => m.type === "table" && m.name === "conversations";
+    const before = { master: master(v2), rows: dump(v2) };
     v2.close();
     const db = await openDb(paths);
-    expect(dump(db)).toEqual(before);
+    const after = master(db);
+    expect(after.filter((m) => !isConversations(m))).toEqual(
+      before.master.filter((m) => !isConversations(m)),
+    );
+    const was = before.master.find(isConversations)?.sql as string;
+    expect(after.find(isConversations)?.sql).toBe(
+      `${was.slice(0, was.lastIndexOf(")"))}, parent_id TEXT REFERENCES conversations(id))`,
+    );
+    expect(dump(db)).toEqual(
+      before.rows.map((rows, i) =>
+        i === 0 ? rows.map((r) => ({ ...(r as object), parent_id: null })) : rows,
+      ),
+    );
     expect(db.query("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
-      value: "3",
+      value: "4",
     });
+    db.close();
+  });
+
+  test("version 3 to 4: an earlier conversation has no parentId", async () => {
+    const paths = isolatedPaths();
+    mkdirSync(paths.agent, { recursive: true });
+    const v3 = new Database(paths.agentDb, { create: true });
+    // Migration 3 is a comment only; the version alone makes the file version 3.
+    for (const sql of MIGRATIONS.slice(0, 2)) v3.exec(sql);
+    v3.run("INSERT INTO meta (key, value) VALUES ('schema_version', '3')");
+    const { convId } = seedTurn(v3);
+    v3.close();
+    const db = await openDb(paths);
+    const conv = getConversation(db, convId);
+    expect(conv.parentId).toBeUndefined();
+    expect("parentId" in conv).toBe(false);
     db.close();
   });
 
