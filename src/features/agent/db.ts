@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 import { writeFileAtomic } from "../../core/fs.ts";
 import type { TarsPaths } from "../../core/paths.ts";
@@ -134,19 +135,36 @@ export interface LockHandle {
   release(): void;
 }
 
+export interface LockSpec {
+  readonly file: string;
+  readonly infoFile: string;
+  /** The refusal's opening words, such as 另一個 tars chat 正在執行. */
+  readonly busy: string;
+  readonly command: string;
+}
+
 /**
  * The single-writer lock for tars chat: an exclusive lock on lock.db, held by a connection that
- * stays open. The OS drops it when the process ends, kill -9 included. Who holds it goes in
- * lock.json beside it, since an exclusively locked database cannot be read by anyone else;
- * lock.json may be a dead holder's, so it only feeds the message.
+ * stays open. The OS drops it when the process ends, kill -9 included.
  */
-export async function acquireLock(
-  paths: TarsPaths,
-  now: Date,
-  command = "chat",
-): Promise<LockHandle> {
-  await mkdir(paths.agent, { recursive: true });
-  const db = new Database(paths.agentLock, { create: true });
+export const acquireLock = (paths: TarsPaths, now: Date, command = "chat"): Promise<LockHandle> =>
+  acquireLockAt(
+    {
+      file: paths.agentLock,
+      infoFile: paths.agentLockInfo,
+      busy: "另一個 tars chat 正在執行",
+      command,
+    },
+    now,
+  );
+
+/**
+ * Who holds a lock goes in the info file beside it, since an exclusively locked database cannot
+ * be read by anyone else; the info file may be a dead holder's, so it only feeds the message.
+ */
+export async function acquireLockAt(spec: LockSpec, now: Date): Promise<LockHandle> {
+  await mkdir(dirname(spec.file), { recursive: true });
+  const db = new Database(spec.file, { create: true });
   try {
     db.exec("PRAGMA busy_timeout=0");
     db.exec("PRAGMA journal_mode=DELETE");
@@ -155,16 +173,16 @@ export async function acquireLock(
   } catch (err) {
     db.close();
     if (!isBusy(err)) throw err;
-    const info = await readLockInfo(paths);
+    const info = await readLockInfoAt(spec.infoFile);
     throw new TarsError(
       info === undefined
-        ? "另一個 tars chat 正在執行"
-        : `另一個 tars chat 正在執行（pid ${info.pid}，${new Date(info.startedAt).toISOString()} 開始）`,
+        ? spec.busy
+        : `${spec.busy}（pid ${info.pid}，${new Date(info.startedAt).toISOString()} 開始）`,
     );
   }
   await writeFileAtomic(
-    paths.agentLockInfo,
-    `${JSON.stringify({ pid: process.pid, startedAt: now.getTime(), command })}\n`,
+    spec.infoFile,
+    `${JSON.stringify({ pid: process.pid, startedAt: now.getTime(), command: spec.command })}\n`,
   );
   return { release: () => db.close() };
 }
@@ -173,9 +191,11 @@ export const isBusy = (err: unknown) =>
   (err as { code?: string }).code?.startsWith("SQLITE_BUSY") === true ||
   /database is locked/.test((err as Error).message);
 
-export async function readLockInfo(paths: TarsPaths): Promise<LockInfo | undefined> {
+export const readLockInfo = (paths: TarsPaths) => readLockInfoAt(paths.agentLockInfo);
+
+async function readLockInfoAt(file: string): Promise<LockInfo | undefined> {
   try {
-    const info = JSON.parse(await readFile(paths.agentLockInfo, "utf8")) as LockInfo;
+    const info = JSON.parse(await readFile(file, "utf8")) as LockInfo;
     return typeof info.pid === "number" && typeof info.startedAt === "number" ? info : undefined;
   } catch {
     return undefined;
@@ -192,37 +212,63 @@ export function openDb(
   paths: TarsPaths,
   opts: { readonly?: boolean } = {},
 ): Database | undefined | Promise<Database> {
-  if (opts.readonly) {
-    if (!existsSync(paths.agentDb)) return undefined;
-    const db = new Database(paths.agentDb, { readonly: true });
-    db.exec("PRAGMA busy_timeout=5000");
-    const version = schemaVersion(db);
-    if (version === 0) {
-      db.close();
-      return undefined;
-    }
-    checkKnown(db, version);
-    // An older version stays as it is until a writer migrates it; readers of the tables that
-    // changed check which version they see.
-    db.exec("PRAGMA query_only=ON");
-    return db;
-  }
-  return openWritable(paths);
+  if (!opts.readonly) return openSqlite(paths.agentDb, MIGRATIONS);
+  const db = openSqlite(paths.agentDb, MIGRATIONS, { readonly: true });
+  if (db === "newer") throw new TarsError(NEWER);
+  return db;
 }
 
-async function openWritable(paths: TarsPaths): Promise<Database> {
-  await mkdir(paths.agent, { recursive: true });
-  const db = new Database(paths.agentDb, { create: true });
+const NEWER = "這個資料庫由較新的 tars 建立，請更新 tars";
+
+/**
+ * One SQLite file with its own migrations. A reader gets undefined when there is nothing to read
+ * and "newer" when a later tars made it; an older version stays as it is until a writer migrates
+ * it, so readers of the tables that changed check which version they see.
+ */
+export function openSqlite(
+  file: string,
+  migrations: readonly string[],
+  opts: { readonly: true },
+): Database | undefined | "newer";
+export function openSqlite(
+  file: string,
+  migrations: readonly string[],
+  opts?: { readonly?: false },
+): Promise<Database>;
+export function openSqlite(
+  file: string,
+  migrations: readonly string[],
+  opts: { readonly?: boolean } = {},
+): Database | undefined | "newer" | Promise<Database> {
+  if (!opts.readonly) return openWritable(file, migrations);
+  if (!existsSync(file)) return undefined;
+  const db = new Database(file, { readonly: true });
+  db.exec("PRAGMA busy_timeout=5000");
+  const version = schemaVersion(db);
+  if (version === 0 || version > migrations.length) {
+    db.close();
+    return version === 0 ? undefined : "newer";
+  }
+  db.exec("PRAGMA query_only=ON");
+  return db;
+}
+
+async function openWritable(file: string, migrations: readonly string[]): Promise<Database> {
+  await mkdir(dirname(file), { recursive: true });
+  const db = new Database(file, { create: true });
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA foreign_keys=ON");
   db.exec("PRAGMA busy_timeout=5000");
   // Checked outside the transaction: closing inside it would leave nothing to roll back.
-  checkKnown(db, schemaVersion(db));
+  if (schemaVersion(db) > migrations.length) {
+    db.close();
+    throw new TarsError(NEWER);
+  }
   db.transaction(() => {
     const version = schemaVersion(db);
-    for (const sql of MIGRATIONS.slice(version)) db.exec(sql);
+    for (const sql of migrations.slice(version)) db.exec(sql);
     db.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", [
-      String(MIGRATIONS.length),
+      String(migrations.length),
     ]);
   }).immediate();
   return db;
@@ -235,10 +281,4 @@ function schemaVersion(db: Database): number {
     value: string;
   } | null;
   return row === null ? 0 : Number(row.value);
-}
-
-function checkKnown(db: Database, version: number): void {
-  if (version <= MIGRATIONS.length) return;
-  db.close();
-  throw new TarsError("這個資料庫由較新的 tars 建立，請更新 tars");
 }

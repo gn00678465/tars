@@ -1,8 +1,16 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { TarsError } from "../../../src/core/exit.ts";
-import { acquireLock, MIGRATIONS, openDb, readLockInfo } from "../../../src/features/agent/db.ts";
+import {
+  acquireLock,
+  acquireLockAt,
+  MIGRATIONS,
+  openDb,
+  openSqlite,
+  readLockInfo,
+} from "../../../src/features/agent/db.ts";
 import { spent } from "../../../src/features/agent/ledger.ts";
 import { agentDb, isolatedPaths, NOW, PROVIDER, seedTurn } from "./db-fixture.ts";
 
@@ -52,6 +60,44 @@ describe("acquireLock", () => {
     (await acquireLock(paths, NOW)).release();
     const again = await acquireLock(paths, NOW);
     again.release();
+  });
+});
+
+describe("acquireLockAt", () => {
+  test("two different locks do not block each other; each refuses its own second holder", async () => {
+    const paths = isolatedPaths();
+    const other = {
+      file: join(paths.agent, "other-lock.db"),
+      infoFile: join(paths.agent, "other-lock.json"),
+      busy: "另一個 other 正在執行",
+      command: "other",
+    };
+    const chat = await acquireLock(paths, NOW);
+    const held = await acquireLockAt(other, NOW);
+    try {
+      expect((await refusal(acquireLockAt(other, NOW))).message).toStartWith(
+        "另一個 other 正在執行（pid",
+      );
+      expect((await refusal(acquireLock(paths, NOW))).message).toStartWith(
+        "另一個 tars chat 正在執行",
+      );
+      expect(await readLockInfo(paths)).toMatchObject({ command: "chat" });
+    } finally {
+      held.release();
+      chat.release();
+    }
+  });
+});
+
+describe("openSqlite", () => {
+  test('read-only, a database from a newer tars gives "newer" instead of throwing', async () => {
+    const { paths, db } = await agentDb();
+    db.run("UPDATE meta SET value = '99' WHERE key = 'schema_version'");
+    db.close();
+    expect(openSqlite(paths.agentDb, MIGRATIONS, { readonly: true })).toBe("newer");
+    const known = openSqlite(paths.agentDb, Array<string>(99).fill(""), { readonly: true });
+    expect(known).toBeInstanceOf(Database);
+    (known as Database).close();
   });
 });
 

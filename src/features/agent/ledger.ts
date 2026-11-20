@@ -44,11 +44,28 @@ const sum = (db: Database, sql: string, ...params: (string | number)[]) =>
 export const spent = (db: Database, provider: Provider, cfg: ProviderConfig, now: Date): number =>
   db.transaction(() => readSpent(db, provider, cfg, now)).deferred();
 
-function readSpent(db: Database, provider: Provider, cfg: ProviderConfig, now: Date): number {
-  const monthly = cfg.period === "utc-month";
-  const scope = monthly ? "provider = ?1 AND month = ?2" : "provider = ?1";
-  const params = monthly ? [provider, month(now)] : [provider];
-  // A reader never migrates, so it may see version 1, whose adjustment covers usage by time.
+export interface Adjustment {
+  readonly spentUsd: number;
+  readonly at: number;
+  /** null on a version 1 database, whose adjustment covers usage by time. */
+  readonly usageUpto: number | null;
+  readonly usagePending: readonly number[];
+}
+
+const scopeOf = (provider: Provider, cfg: ProviderConfig, now: Date) =>
+  cfg.period === "utc-month"
+    ? { scope: "provider = ?1 AND month = ?2", params: [provider, month(now)] }
+    : { scope: "provider = ?1", params: [provider] };
+
+/** The period's last `tars cost adjust`, or null. */
+export function latestAdjustment(
+  db: Database,
+  provider: Provider,
+  cfg: ProviderConfig,
+  now: Date,
+): Adjustment | null {
+  const { scope, params } = scopeOf(provider, cfg, now);
+  // A reader never migrates, so it may see version 1.
   const v1 =
     db.query("SELECT 1 FROM pragma_table_info('adjustments') WHERE name = 'usage_upto'").get() ===
     null;
@@ -60,20 +77,33 @@ function readSpent(db: Database, provider: Provider, cfg: ProviderConfig, now: D
     .get(...params) as {
     spent_usd: number;
     at: number;
-    usage_upto: number;
-    usage_pending: string;
+    usage_upto?: number;
+    usage_pending?: string;
   } | null;
-  if (adj === null) return sum(db, scope, ...params) + (monthly ? 0 : cfg.prior_spend_usd);
+  if (adj === null) return null;
+  return {
+    spentUsd: adj.spent_usd,
+    at: adj.at,
+    usageUpto: adj.usage_upto ?? null,
+    usagePending: JSON.parse(adj.usage_pending ?? "[]") as number[],
+  };
+}
+
+function readSpent(db: Database, provider: Provider, cfg: ProviderConfig, now: Date): number {
+  const { scope, params } = scopeOf(provider, cfg, now);
+  const adj = latestAdjustment(db, provider, cfg, now);
+  if (adj === null)
+    return sum(db, scope, ...params) + (cfg.period === "utc-month" ? 0 : cfg.prior_spend_usd);
   const n = params.length;
-  return v1
-    ? adj.spent_usd + sum(db, `${scope} AND at > ?${n + 1}`, ...params, adj.at)
-    : adj.spent_usd +
+  return adj.usageUpto === null
+    ? adj.spentUsd + sum(db, `${scope} AND at > ?${n + 1}`, ...params, adj.at)
+    : adj.spentUsd +
         sum(
           db,
           `${scope} AND (id > ?${n + 1} OR id IN (SELECT value FROM json_each(?${n + 2})))`,
           ...params,
-          adj.usage_upto,
-          adj.usage_pending,
+          adj.usageUpto,
+          JSON.stringify(adj.usagePending),
         );
 }
 
@@ -383,6 +413,23 @@ export function settleReserved(db: Database): string[] {
   db.run("UPDATE usage SET state = 'estimated', cost_source = 'estimate' WHERE state = 'reserved'");
   for (const t of turns) syncTurnCost(db, t);
   return turns;
+}
+
+/**
+ * After a dead process: reserved usage becomes estimated, and a running turn (a chat turn, or a
+ * sync job) becomes interrupted with its total caught up to its usage rows.
+ */
+export function reconcileLedger(db: Database, now: Date): { usage: number; turns: number } {
+  const usage = settleReserved(db).length;
+  const running = db.query("SELECT id FROM turns WHERE state = 'running'").all() as {
+    id: string;
+  }[];
+  for (const t of running) syncTurnCost(db, t.id);
+  const turns = db.run(
+    "UPDATE turns SET state = 'interrupted', ended_at = ? WHERE state = 'running'",
+    [now.getTime()],
+  ).changes;
+  return { usage, turns };
 }
 
 /** Before a tool runs: the first budget line already reached, or null. */

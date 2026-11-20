@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { processStartTime } from "../../core/spawn.ts";
-import { settleReserved, syncTurnCost } from "./ledger.ts";
+import { reconcileLedger } from "./ledger.ts";
 import { finishToolCall, unfinishedToolCalls } from "./store.ts";
 import type { ToolCallEndState, ToolCallState } from "./types.ts";
 
@@ -56,16 +56,7 @@ export function reconcile(
         [status, at, c.id],
       );
     }
-    const usage = settleReserved(db).length;
-    // A dead process may have left a turn's total behind its usage rows, reserved or not.
-    const running = db.query("SELECT id FROM turns WHERE state = 'running'").all() as {
-      id: string;
-    }[];
-    for (const t of running) syncTurnCost(db, t.id);
-    const turns = db.run(
-      "UPDATE turns SET state = 'interrupted', ended_at = ? WHERE state = 'running'",
-      [at],
-    ).changes;
+    const { usage, turns } = reconcileLedger(db, now);
     return { killed, approvals, toolCalls: calls.length, usage, turns };
   })();
 }

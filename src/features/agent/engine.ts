@@ -5,7 +5,6 @@ import { isRecord } from "../script/metadata.ts";
 import { loadBoot } from "../session/boot.ts";
 import * as approvals from "./approvals.ts";
 import { estimateTokens, utf8Bytes } from "./bytes.ts";
-import { loadCatalog, resolve, type ResolvedModel } from "./catalog.ts";
 import {
   buildActiveHistory,
   buildSummaryPrompt,
@@ -15,7 +14,7 @@ import {
   SUMMARIZATION_SYSTEM,
   validateSummary,
 } from "./compaction.ts";
-import { loadConfig, type Limits, type ProviderConfig } from "./config.ts";
+import type { Limits } from "./config.ts";
 import { effectiveEffort } from "./effort.ts";
 import type { Frontend } from "./frontend.ts";
 import {
@@ -24,8 +23,6 @@ import {
   insertReserved,
   limitReached,
   recordEnd,
-  recordFailure,
-  recordStart,
   reserve,
   spent,
   turnSpent,
@@ -39,7 +36,20 @@ import {
   TOOL_SPECS,
   type SkillEntry,
 } from "./prompt.ts";
-import { ProviderError, type AdapterFor, type ProviderAdapter } from "./provider.ts";
+import type { AdapterFor } from "./provider.ts";
+import {
+  consume,
+  errorText,
+  failureOf,
+  prepareModel,
+  REASON_TEXT,
+  rejected,
+  retryWait,
+  settleFailure,
+  type Consumed,
+  type Rejected,
+  type Setup,
+} from "./request.ts";
 import * as store from "./store.ts";
 import { classify, REFUSAL_TEXT, runSelf, toolText, type Classified } from "./tars-tool.ts";
 import { runTool, type ToolOutcome } from "./tools.ts";
@@ -52,15 +62,15 @@ import {
   type Item,
   type ModelRequest,
   type NewItem,
-  type ProviderEvent,
   type ReasonCode,
-  type RejectReason,
   type SystemBlock,
   type ToolCallEndState,
   type ToolCallItem,
   type TurnState,
   type Usage,
 } from "./types.ts";
+
+export { REASON_TEXT };
 
 export interface EngineDeps {
   readonly db: Database;
@@ -91,7 +101,7 @@ export interface TurnInput {
 type EndState = Exclude<TurnState, "running" | "interrupted">;
 
 export type TurnOutcome =
-  | { readonly kind: "rejected"; readonly reason: RejectReason; readonly message: string }
+  | Rejected
   | {
       readonly kind: "ended";
       readonly convId: string;
@@ -111,35 +121,6 @@ export type CompactOutcome =
     }
   | { readonly kind: "aborted" };
 
-export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
-  aborted: "已取消",
-  config_invalid: "config.toml 有問題",
-  catalog_invalid: "models.json 有問題",
-  boot_failed: "讀不到 SOUL.md 或 MEMORY.md",
-  provider_disabled: "這家 provider 沒有啟用",
-  no_key: "沒有 API 金鑰",
-  unknown_model: "模型不在清單上，或沒有啟用",
-  price_incomplete: "模型的上限或單價不完整",
-  prices_stale: "模型的價目太久沒有確認",
-  conv_too_long: "對話太長，超過硬停線。用 /compact 壓縮，或開新對話",
-  budget_stopped: "本期花費已到停用門檻",
-  daily_cap: "今日花費已到上限",
-  turn_cap: "這個回合的花費已到上限",
-  request_limit: "這個回合的模型請求次數已到上限",
-  provider_spend_limit: "provider 端的花費上限已到",
-  auth: "provider 拒絕了 API 金鑰",
-  bad_request: "provider 拒絕了這個請求",
-  provider_error: "provider 暫時無法回應，重試用完了",
-  stream_interrupted: "回應中途斷線",
-  compact_too_large: "要壓縮的內容太大",
-  compact_truncated: "摘要超過輸出上限",
-  compact_bad_summary: "摘要的格式不對",
-};
-
-const MAX_RETRIES = 2;
-const RETRY_WAITS_MS = [2000, 8000];
-const MAX_RETRY_AFTER_MS = 60_000;
-const TRANSIENT = new Set(["rate_limit", "overloaded", "server", "connection"]);
 /** The new message's place before it has a seq: after everything stored. */
 const PENDING_SEQ = Number.MAX_SAFE_INTEGER;
 
@@ -164,56 +145,6 @@ export const sleepAbortable = (ms: number, signal: AbortSignal) =>
       { once: true },
     );
   });
-
-interface Setup {
-  readonly cfg: ProviderConfig;
-  readonly limits: Limits;
-  readonly model: ResolvedModel;
-  readonly adapter: ProviderAdapter;
-  readonly priceAgeDays: number;
-  readonly pricesWarn: boolean;
-}
-
-type Rejected = Extract<TurnOutcome, { kind: "rejected" }>;
-const rejected = (reason: RejectReason, message = REASON_TEXT[reason]): Rejected => ({
-  kind: "rejected",
-  reason,
-  message,
-});
-const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
-/** One request's stream, read to its end or to its error. */
-interface Consumed {
-  readonly text: string;
-  readonly calls: readonly Extract<ProviderEvent, { type: "tool_call" }>[];
-  readonly receivedStart: boolean;
-  readonly end?: Extract<ProviderEvent, { type: "end" }>;
-  readonly error?: ProviderError;
-}
-
-/** What a failed request leads to when it is not retried. */
-function failureOf(e: ProviderError): FailReason | "aborted" {
-  switch (e.kind) {
-    case "aborted":
-      return "aborted";
-    case "spend_limit":
-      return "provider_spend_limit";
-    case "auth":
-      return "auth";
-    case "bad_request":
-      return "bad_request";
-    default:
-      return e.receivedContent ? "stream_interrupted" : "provider_error";
-  }
-}
-
-/** How long to wait before attempt `attempt + 1`, or undefined when it is not retried. */
-function retryWait(e: ProviderError, attempt: number): number | undefined {
-  if (!TRANSIENT.has(e.kind) || e.receivedContent || attempt > MAX_RETRIES) return undefined;
-  return e.retryAfterMs === undefined
-    ? RETRY_WAITS_MS[attempt - 1]
-    : Math.min(e.retryAfterMs, MAX_RETRY_AFTER_MS);
-}
 
 const addUsage = (a: Usage, b: Usage): Usage => ({
   uncachedInputTokens: a.uncachedInputTokens + b.uncachedInputTokens,
@@ -249,42 +180,6 @@ export function createEngine(deps: EngineDeps) {
   /** effort_unsupported and compact_skipped: once per conversation per process. */
   const effortNoticed = new Set<string>();
   const skipNoticed = new Set<string>();
-
-  async function setup(provider: Provider, modelId: string): Promise<Setup | Rejected> {
-    let config;
-    try {
-      const loaded = await loadConfig(deps.paths);
-      loaded.warnings.forEach((w) => deps.warn(w));
-      config = loaded.config;
-    } catch (err) {
-      return rejected("config_invalid", errorText(err));
-    }
-    let catalog;
-    try {
-      catalog = await loadCatalog(deps.paths);
-    } catch (err) {
-      return rejected("catalog_invalid", errorText(err));
-    }
-    const cfg = config.providers[provider];
-    if (cfg === undefined || !cfg.enabled)
-      return rejected(
-        "provider_disabled",
-        `${provider} 沒有啟用：在 config.toml 的 [providers.${provider}] 設 enabled = true`,
-      );
-    const key = await deps.secrets.get(`llm:${provider}`);
-    if (key === null || key === "")
-      return rejected("no_key", `沒有 ${provider} 的 API 金鑰。設定：tars llm key set ${provider}`);
-    const r = resolve(catalog, provider, modelId, config.limits, deps.now());
-    if (!r.ok) return rejected(r.reason, r.message);
-    return {
-      cfg,
-      limits: config.limits,
-      model: r.model,
-      adapter: await deps.adapterFor(provider, key, deps.env, (w) => deps.warn(w)),
-      priceAgeDays: r.priceAgeDays,
-      pricesWarn: r.warn === "prices_warn",
-    };
-  }
 
   const activeHistory = (convId: string) => buildActiveHistory(store.readActiveItems(db, convId));
   const historyBytes = (items: readonly ContextItem[], limits: Limits) =>
@@ -353,47 +248,6 @@ export function createEngine(deps: EngineDeps) {
     return usageId;
   }
 
-  async function consume(
-    adapter: ProviderAdapter,
-    req: ModelRequest,
-    usageId: number,
-    signal: AbortSignal,
-    onEvent: (ev: { type: "delta"; text: string } | { type: "thinking" }) => void,
-  ): Promise<Consumed> {
-    let text = "";
-    const calls: Extract<ProviderEvent, { type: "tool_call" }>[] = [];
-    let receivedStart = false;
-    try {
-      for await (const ev of adapter.stream(req, signal)) {
-        if (ev.type === "start") {
-          receivedStart = true;
-          recordStart(db, usageId, ev.usage);
-        } else if (ev.type === "text") {
-          text += ev.delta;
-          onEvent({ type: "delta", text: ev.delta });
-        } else if (ev.type === "thinking") onEvent(ev);
-        else if (ev.type === "tool_call") calls.push(ev);
-        else return { text, calls, receivedStart, end: ev };
-      }
-      throw new ProviderError("connection", { receivedStart, receivedContent: text !== "" });
-    } catch (err) {
-      if (!(err instanceof ProviderError) && !signal.aborted) throw err;
-      const seen = { receivedStart, receivedContent: text !== "" || calls.length > 0 };
-      const error = signal.aborted ? new ProviderError("aborted", seen) : (err as ProviderError);
-      return { text, calls, receivedStart, error };
-    }
-  }
-
-  function settleFailure(usageId: number, got: Consumed): void {
-    const e = got.error as ProviderError;
-    recordFailure(db, {
-      usageId,
-      ...(e.kind === "aborted" || e.status === undefined ? {} : { status: e.status }),
-      receivedStart: got.receivedStart,
-      textBytes: utf8Bytes(got.text),
-    });
-  }
-
   function append(convId: string, turnId: string, items: readonly NewItem[]): Item[] {
     const seqs = store.appendItems(db, convId, turnId, items, deps.now().getTime());
     return items.map((item, i) => ({ ...item, seq: seqs[i] as number, turnId }) as Item);
@@ -406,7 +260,7 @@ export function createEngine(deps: EngineDeps) {
     frontend: Frontend,
     signal: AbortSignal,
   ): Promise<TurnOutcome> {
-    const s = await setup(input.provider, input.model);
+    const s = await prepareModel(deps, input.provider, input.model);
     if ("kind" in s) return s;
     let system: SystemBlock[];
     let skills: SkillEntry[];
@@ -559,11 +413,16 @@ export function createEngine(deps: EngineDeps) {
       next = undefined;
       if (capped) t.frontend.emit({ type: "notice", code: "output_capped", data: { maxTokens } });
       deps.log.log("request", { turn: t.turnId, step: t.step, attempt });
-      const got = await consume(t.s.adapter, chatRequest(t, maxTokens), usageId, t.signal, (ev) =>
-        t.frontend.emit(ev),
+      const got = await consume(
+        db,
+        t.s.adapter,
+        chatRequest(t, maxTokens),
+        usageId,
+        t.signal,
+        (ev) => t.frontend.emit(ev),
       );
       if (got.error !== undefined) {
-        settleFailure(usageId, got);
+        settleFailure(db, usageId, got);
         const wait = retryWait(got.error, attempt);
         if (wait !== undefined) {
           t.frontend.emit({ type: "notice", code: "retrying", data: { attempt, waitMs: wait } });
@@ -940,7 +799,7 @@ export function createEngine(deps: EngineDeps) {
     signal: AbortSignal,
   ): Promise<CompactOutcome> {
     const conv = store.getConversation(db, convId);
-    const s = await setup(conv.provider, conv.model);
+    const s = await prepareModel(deps, conv.provider, conv.model);
     if ("kind" in s) return { kind: "failed", reason: s.reason, message: s.message };
     return compactWith(s, conv, opts, frontend, signal);
   }
@@ -1022,7 +881,7 @@ export function createEngine(deps: EngineDeps) {
       capabilities: { thinkingTypes: s.model.thinkingTypes },
     };
     // The summary is not a reply to the owner, so its text is not shown.
-    const got = await consume(s.adapter, req, usageId, signal, () => {});
+    const got = await consume(db, s.adapter, req, usageId, signal, () => {});
     const close = (state: EndState, reason?: FailReason) => {
       store.endTurn(db, { id: turnId, convId: conv.id, state, reason, now: deps.now().getTime() });
       deps.log.log("turn_end", { turn: turnId, turnKind: "compaction", state, reason });
@@ -1030,7 +889,7 @@ export function createEngine(deps: EngineDeps) {
     if (got.error !== undefined) {
       const reason = failureOf(got.error);
       db.transaction(() => {
-        settleFailure(usageId, got);
+        settleFailure(db, usageId, got);
         close(
           reason === "aborted" ? "aborted" : "failed",
           reason === "aborted" ? undefined : reason,

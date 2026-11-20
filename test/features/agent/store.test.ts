@@ -4,8 +4,10 @@ import { TarsError } from "../../../src/core/exit.ts";
 import { insertReserved, recordEnd } from "../../../src/features/agent/ledger.ts";
 import {
   appendItems,
+  beginTurn,
   createConversation,
   findConversation,
+  findTurn,
   finishToolCall,
   getConversation,
   hasToolResult,
@@ -94,6 +96,39 @@ describe("findConversation", () => {
     conversationWithId(db, "0000-aaaa-12345678");
     expect(() => findConversation(db, "678")).toThrow(TarsError);
     expect(() => findConversation(db, "zzzz")).toThrow(TarsError);
+  });
+});
+
+describe("findTurn", () => {
+  test("finds a turn of the conversation by full id and by a unique tail", async () => {
+    const { db } = await agentDb();
+    const { convId, turnId } = seedTurn(db);
+    expect(findTurn(db, convId, turnId)).toEqual({
+      id: turnId,
+      convId,
+      kind: "chat",
+      state: "running",
+      startedAt: T,
+    });
+    expect(findTurn(db, convId, shortId(turnId)).id).toBe(turnId);
+  });
+
+  test("no match, or a turn of another conversation, is refused", async () => {
+    const { db } = await agentDb();
+    const { convId } = seedTurn(db);
+    const other = seedTurn(db);
+    expect(() => findTurn(db, convId, "zzzz")).toThrow(TarsError);
+    expect(() => findTurn(db, convId, other.turnId)).toThrow(TarsError);
+    expect(() => findTurn(db, convId, "abc")).toThrow("至少要 4 碼");
+  });
+
+  test("an ambiguous tail lists every match", async () => {
+    const { db } = await agentDb();
+    const { convId } = seedTurn(db);
+    for (const id of ["0000-aaaa-12345678", "0000-bbbb-12345678"])
+      beginTurn(db, { id, convId, kind: "chat", effort: "medium", now: T });
+    expect(() => findTurn(db, convId, "5678")).toThrow("0000-bbbb-12345678");
+    expect(findTurn(db, convId, "aaaa-12345678").id).toBe("0000-aaaa-12345678");
   });
 });
 

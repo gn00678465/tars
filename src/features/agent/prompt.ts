@@ -51,7 +51,7 @@ export async function loadSkillIndex(
   };
 }
 
-function frontMatter(text: string): Record<string, unknown> | undefined {
+export function frontMatter(text: string): Record<string, unknown> | undefined {
   const block = FRONT_MATTER.exec(text)?.[1];
   if (block === undefined) return undefined;
   try {

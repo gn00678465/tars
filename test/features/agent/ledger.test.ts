@@ -6,6 +6,7 @@ import {
   adjust,
   estimateInput,
   insertReserved,
+  latestAdjustment,
   limitReached,
   recentRequests,
   recordEnd,
@@ -154,6 +155,39 @@ describe("spent", () => {
     const id = inFlight(db, seedTurn(db), 3);
     recordFailure(db, { usageId: id, status: 429, receivedStart: false, textBytes: 0 });
     expect(spent(db, "anthropic", PROVIDER, NOW)).toBe(0);
+  });
+});
+
+describe("latestAdjustment", () => {
+  test("a UTC month sees only this month's last adjustment, with its watermark", async () => {
+    const { db } = await agentDb();
+    const turn = seedTurn(db);
+    adjust(db, "anthropic", 50, undefined, new Date("2026-10-20T00:00:00Z"));
+    expect(latestAdjustment(db, "anthropic", PROVIDER, NOW)).toBeNull();
+    spend(db, turn, 1);
+    const pending = inFlight(db, turn, 2);
+    adjust(db, "anthropic", 9, undefined, new Date("2026-11-10T00:00:00Z"));
+    adjust(db, "anthropic", 12, undefined, NOW);
+    expect(latestAdjustment(db, "anthropic", PROVIDER, NOW)).toEqual({
+      spentUsd: 12,
+      at: NOW.getTime(),
+      usageUpto: pending,
+      usagePending: [pending],
+    });
+  });
+
+  test('period "total" sees the last adjustment of any month', async () => {
+    const { db } = await agentDb();
+    const total = { ...PROVIDER, period: "total" as const };
+    const at = new Date("2026-09-01T00:00:00Z");
+    adjust(db, "anthropic", 30, undefined, at);
+    expect(latestAdjustment(db, "anthropic", total, NOW)).toEqual({
+      spentUsd: 30,
+      at: at.getTime(),
+      usageUpto: 0,
+      usagePending: [],
+    });
+    expect(latestAdjustment(db, "anthropic", PROVIDER, NOW)).toBeNull();
   });
 });
 

@@ -102,6 +102,31 @@ export function findConversation(db: Database, idOrSuffix: string): Conversation
   return toConversation(rows[0] as ConversationRow);
 }
 
+export interface TurnRow {
+  readonly id: string;
+  readonly convId: string;
+  readonly kind: string;
+  readonly state: string;
+  readonly startedAt: number;
+}
+
+/** A full id, or a tail of at least 4 characters that names exactly one turn of `convId`. */
+export function findTurn(db: Database, convId: string, idOrSuffix: string): TurnRow {
+  if (idOrSuffix.length < 4) throw new TarsError("回合編號至少要 4 碼");
+  const rows = db
+    .query(
+      `SELECT id, conv_id AS convId, kind, state, started_at AS startedAt FROM turns
+       WHERE conv_id = ?2 AND (id = ?1 OR substr(id, -length(?1)) = ?1)`,
+    )
+    .all(idOrSuffix, convId) as TurnRow[];
+  if (rows.length === 0) throw new TarsError(`對話 ${shortId(convId)} 沒有回合 ${idOrSuffix}`);
+  if (rows.length > 1)
+    throw new TarsError(
+      `${idOrSuffix} 對到 ${rows.length} 個回合，請給更長的編號：\n${rows.map((r) => `  ${r.id}`).join("\n")}`,
+    );
+  return rows[0] as TurnRow;
+}
+
 export function createConversation(
   db: Database,
   c: { id: string; text: string; provider: Provider; model: string; effort: Effort; now: number },

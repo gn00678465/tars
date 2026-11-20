@@ -186,7 +186,7 @@ export function planCompaction(
 }
 
 /** Head 3/4 and tail 1/4 of a text longer than `limit` bytes. */
-function clipMiddle(text: string, limit: number): string {
+export function clipMiddle(text: string, limit: number): string {
   const size = utf8Bytes(text);
   if (size <= limit) return text;
   const head = cutUtf8(text, Math.floor((limit * 3) / 4));
@@ -194,10 +194,16 @@ function clipMiddle(text: string, limit: number): string {
   return `${head}\n…（略去 ${size - utf8Bytes(head) - utf8Bytes(tail)} 位元組）…\n${tail}`;
 }
 
-// Same escape as composeBootBlock: text from a tool result must not close its block or open a
-// forged one that the summarizer would read as another speaker.
-const SUMMARY_TAG = /<(\s*\/?\s*(?:message|tool-calls|conversation|previous-summary))/gi;
-const esc = (text: string) => text.replace(SUMMARY_TAG, "&lt;$1");
+/**
+ * Same escape as composeBootBlock: text inside a block must not close it or open a forged one
+ * that the model would read as another speaker. `tags` are plain names, never patterns.
+ */
+export function escTags(tags: readonly string[]): (text: string) => string {
+  const re = new RegExp(`<(\\s*\\/?\\s*(?:${tags.join("|")}))`, "gi");
+  return (text) => text.replace(re, "&lt;$1");
+}
+
+const esc = escTags(["message", "tool-calls", "conversation", "previous-summary"]);
 /** An attribute value: a tool name the model made up must not end the tag or add attributes. */
 const attr = (value: string) => value.replace(/[^\w.-]/g, "_");
 
