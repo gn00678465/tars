@@ -1,8 +1,7 @@
 import type { Database } from "bun:sqlite";
-import { lstat, mkdir, readdir, readFile, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat } from "node:fs/promises";
+import { basename } from "node:path";
 import { TarsError } from "../../core/exit.ts";
-import { writeFileAtomic } from "../../core/fs.ts";
 import { sha256 } from "../../core/hash.ts";
 import type { Io } from "../../core/io.ts";
 import type { Env, TarsPaths } from "../../core/paths.ts";
@@ -49,7 +48,6 @@ import { renderIndexFile } from "./index-file.ts";
 import {
   applyPatch,
   CATEGORIES,
-  categoryOf,
   entryLine,
   looksSecret,
   newPage,
@@ -63,6 +61,7 @@ import {
   type Page,
   type PatchReason,
 } from "./page.ts";
+import { listDir, openWikiDir, readIn, withWikiDir, writeIn } from "./wiki-dir.ts";
 import { tokenize } from "./tokenize.ts";
 
 export const EXTRACT_SYSTEM = `You build a personal knowledge base for one person, the owner. You are given
@@ -257,20 +256,11 @@ interface PageRow {
 const pageRow = (db: Database, path: string) =>
   db.query("SELECT * FROM pages WHERE path = ?").get(path) as PageRow | null;
 
-const pageFile = (paths: TarsPaths, path: string) => join(paths.wiki, `${path}.md`);
-
-/**
- * A category directory sync may read and write: a real directory right under <data>/wiki. As a
- * symlink it would take pages outside the wiki. `create` makes a missing one first.
- */
-async function realCategory(paths: TarsPaths, category: string, create: boolean) {
-  const dir = join(paths.wiki, category);
-  if (create) await mkdir(dir, { recursive: true });
-  const info = await lstat(dir).catch(() => undefined);
-  if (info === undefined) return "missing";
-  if (info.isSymbolicLink() || !info.isDirectory()) return "unsafe";
-  return (await realpath(dir)) === join(await realpath(paths.wiki), category) ? "ok" : "unsafe";
-}
+/** A page's category and its file name in that directory. */
+const pagePlace = (path: string) => {
+  const slash = path.indexOf("/");
+  return { category: path.slice(0, slash), file: `${path.slice(slash + 1)}.md` };
+};
 
 /**
  * pages.next_item as a parse leaves it: above every written number, but not past the temporary
@@ -347,10 +337,9 @@ async function scanPages(
   const seen = new Set<string>();
   let changed = 0;
   for (const category of CATEGORIES) {
-    const dir = join(paths.wiki, category);
-    const state = await realCategory(paths, category, false);
-    if (state === "missing") continue;
-    if (state === "unsafe") {
+    const dir = await openWikiDir(paths, category);
+    if (dir === "missing") continue;
+    if (dir === "unsafe") {
       // Its pages keep their rows, as a blocked page does: the last good read is the best answer.
       warn(`略過 ${category}/：分類目錄不是真的目錄（symlink）`);
       for (const { path } of db
@@ -359,51 +348,56 @@ async function scanPages(
         seen.add(path);
       continue;
     }
-    const entries = await readdir(dir, { withFileTypes: true });
-    for (const ent of entries.toSorted((a, b) => (a.name < b.name ? -1 : 1))) {
-      if (ent.name.startsWith(".") || !ent.name.endsWith(".md")) continue;
-      const slug = ent.name.slice(0, -3);
-      const path = `${category}/${slug}`;
-      if (!SLUG.test(slug)) {
-        warn(`略過 ${category}/${ent.name}：檔名只能用小寫英數與連字號`);
-        continue;
-      }
-      if (!ent.isFile()) {
-        warn(`略過 ${path}：不是一般檔案`);
-        continue;
-      }
-      seen.add(path);
-      const text = await readFile(join(dir, ent.name), "utf8");
-      const hash = sha256(text);
-      const row = pageRow(db, path);
-      const same = row?.hash === hash;
-      if (same && !force) continue;
-      if (!same) changed++;
-      const parsed = parsePage(text, path, row?.next_item ?? 1);
-      db.transaction(() => {
-        if (parsed.ok) {
-          upsertPage(
-            db,
-            parsed.page,
-            hash,
-            same ? (row?.external_change ?? 0) : 1,
-            writtenNext(parsed.page, row?.next_item ?? 1),
-          );
-          indexPage(db, parsed.page);
-        } else if (row !== null)
-          // The old search rows stay: the last good parse is still the best answer.
-          db.run("UPDATE pages SET state = 'blocked', last_error = ?, hash = ? WHERE path = ?", [
-            parsed.error,
-            hash,
-            path,
-          ]);
-        else
-          db.run(
-            `INSERT INTO pages (path, title, aliases, created, updated, hash, next_item, state, last_error, external_change)
+    try {
+      const entries = await listDir(dir);
+      for (const ent of entries.toSorted((a, b) => (a.name < b.name ? -1 : 1))) {
+        if (ent.name.startsWith(".") || !ent.name.endsWith(".md")) continue;
+        const slug = ent.name.slice(0, -3);
+        const path = `${category}/${slug}`;
+        if (!SLUG.test(slug)) {
+          warn(`略過 ${category}/${ent.name}：檔名只能用小寫英數與連字號`);
+          continue;
+        }
+        if (!ent.isFile()) {
+          warn(`略過 ${path}：不是一般檔案`);
+          continue;
+        }
+        const text = await readIn(dir, ent.name);
+        if (text === undefined) continue;
+        seen.add(path);
+        const hash = sha256(text);
+        const row = pageRow(db, path);
+        const same = row?.hash === hash;
+        if (same && !force) continue;
+        if (!same) changed++;
+        const parsed = parsePage(text, path, row?.next_item ?? 1);
+        db.transaction(() => {
+          if (parsed.ok) {
+            upsertPage(
+              db,
+              parsed.page,
+              hash,
+              same ? (row?.external_change ?? 0) : 1,
+              writtenNext(parsed.page, row?.next_item ?? 1),
+            );
+            indexPage(db, parsed.page);
+          } else if (row !== null)
+            // The old search rows stay: the last good parse is still the best answer.
+            db.run("UPDATE pages SET state = 'blocked', last_error = ?, hash = ? WHERE path = ?", [
+              parsed.error,
+              hash,
+              path,
+            ]);
+          else
+            db.run(
+              `INSERT INTO pages (path, title, aliases, created, updated, hash, next_item, state, last_error, external_change)
              VALUES (?, ?, '[]', ?, ?, ?, 1, 'blocked', ?, 1)`,
-            [path, slug, today, today, hash, parsed.error],
-          );
-      })();
+              [path, slug, today, today, hash, parsed.error],
+            );
+        })();
+      }
+    } finally {
+      await dir.close();
     }
   }
   const gone = (db.query("SELECT path FROM pages").all() as { path: string }[]).filter(
@@ -426,10 +420,11 @@ async function writeIndex(db: Database, paths: TarsPaths): Promise<void> {
   const text = renderIndexFile(
     rows.map((r) => ({ ...r, aliases: JSON.parse(r.aliases) as string[] })),
   );
-  const old = await readFile(paths.wikiIndex, "utf8").catch(() => undefined);
-  if (old === text) return;
-  await mkdir(paths.wiki, { recursive: true });
-  await writeFileAtomic(paths.wikiIndex, text);
+  const name = basename(paths.wikiIndex);
+  const done = await withWikiDir(paths, undefined, true, async (dir) => {
+    if ((await readIn(dir, name)) !== text) await writeIn(dir, name, text);
+  });
+  if ("dir" in done) throw new TarsError(WIKI_SYMLINK(paths));
 }
 
 // --- Turns: agent.db's chat turns as sources and as raw search rows.
@@ -555,7 +550,13 @@ async function settleCommits(wiki: Database, paths: TarsPaths): Promise<void> {
     outcomes: string;
   }[];
   for (const r of rows) {
-    const text = await readFile(pageFile(paths, r.page), "utf8").catch(() => undefined);
+    const { category, file } = pagePlace(r.page);
+    const read = await withWikiDir(paths, category, false, (dir) =>
+      readIn(dir, file).catch(() => undefined),
+    );
+    // A symlinked directory cannot be checked: the journal waits for it to be fixed.
+    if ("dir" in read && read.dir === "unsafe") continue;
+    const text = "value" in read ? read.value : undefined;
     const parsed =
       text !== undefined && sha256(text) === r.hash
         ? parsePage(text, r.page, r.next_item)
@@ -763,8 +764,7 @@ export async function runSync(
   const { paths, io } = deps;
   refuseInSession(deps.env);
   const link = await lstat(paths.wiki).catch(() => undefined);
-  if (link?.isSymbolicLink() === true)
-    throw new TarsError(`${paths.wiki} 是 symlink；要在 Obsidian 看，把 vault 指到這個目錄`);
+  if (link?.isSymbolicLink() === true) throw new TarsError(WIKI_SYMLINK(paths));
   const { config } = await loadConfig(paths);
 
   const lock = await acquireLockAt(wikiLockSpec(paths), deps.now());
@@ -817,6 +817,9 @@ function endRun(
     id,
   ]);
 }
+
+const WIKI_SYMLINK = (paths: TarsPaths) =>
+  `${paths.wiki} 是 symlink；要在 Obsidian 看，把 vault 指到這個目錄`;
 
 async function runReindex(
   deps: SyncDeps,
@@ -1193,8 +1196,10 @@ async function runModel(
   async function consolidatePage(path: string): Promise<Halt | undefined> {
     const row = pageRow(wiki, path);
     if (row?.state === "blocked") return undefined;
-    const category = categoryOf(path);
-    if ((await realCategory(paths, category, false)) === "unsafe") return unsafeCategory(path);
+    const { category, file } = pagePlace(path);
+    const opened = await openWikiDir(paths, category);
+    if (opened === "unsafe") return unsafeCategory(path);
+    if (opened !== "missing") await opened.close();
     const cands = wiki
       .query(
         `SELECT c.id, c.source_turn_id AS turnId, s.conv_id AS convId, s.day, c.page, c.title,
@@ -1207,7 +1212,10 @@ async function runModel(
     let page: Page;
     if (row === null) page = newPage(path, (cands[0] as CandidateRow).title, today());
     else {
-      const text = await readFile(pageFile(paths, path), "utf8").catch(() => undefined);
+      const read = await withWikiDir(paths, category, false, (dir) =>
+        readIn(dir, file).catch(() => undefined),
+      );
+      const text = "value" in read ? read.value : undefined;
       const parsed = text === undefined ? undefined : parsePage(text, path, row.next_item);
       if (parsed === undefined || !parsed.ok) return undefined;
       page = parsed.page;
@@ -1258,13 +1266,16 @@ async function runModel(
             return reason === undefined ? [c.id, "applied", null] : [c.id, "dropped", reason];
           });
           if (result.write) {
-            // Checked again at the write: the directory may have changed during the request.
-            if ((await realCategory(paths, category, true)) !== "ok") return unsafeCategory(path);
-            wiki.run(
-              "INSERT OR REPLACE INTO page_commits (page, hash, next_item, outcomes) VALUES (?, ?, ?, ?)",
-              [path, hash, next.nextItem, JSON.stringify(outcomes)],
-            );
-            await writeFileAtomic(pageFile(paths, path), text);
+            // Opened again at the write, and the file written through that descriptor: the
+            // directory may have changed during the request, and may change during the write.
+            const wrote = await withWikiDir(paths, category, true, async (dir) => {
+              wiki.run(
+                "INSERT OR REPLACE INTO page_commits (page, hash, next_item, outcomes) VALUES (?, ?, ?, ?)",
+                [path, hash, next.nextItem, JSON.stringify(outcomes)],
+              );
+              await writeIn(dir, file, text);
+            });
+            if ("dir" in wrote) return unsafeCategory(path);
           }
           wiki.transaction(() => {
             if (result.write) {
