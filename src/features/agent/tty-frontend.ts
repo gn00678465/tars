@@ -34,6 +34,7 @@ const NOTICE_TEXT: Readonly<Record<NoticeCode, (d: Data) => string>> = {
   effort_clamped: (d) => `模型不支援這個推理強度，這個回合用 ${d.effort}`,
   effort_truncated: () => "輸出上限被思考用完，請降低推理強度或調高 max_output_tokens",
   approval_no_tty: () => "沒有終端可以核准，這個動作記為拒絕",
+  usage_missing: () => "這個請求沒有回報用量，花費是估的",
 };
 
 export const noticeText = (code: NoticeCode, data: Data = {}) => NOTICE_TEXT[code](data);

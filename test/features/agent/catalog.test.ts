@@ -7,6 +7,7 @@ import {
   EMPTY_CATALOG,
   loadCatalog,
   mergeListing,
+  priceState,
   resolve,
   saveCatalog,
   type Catalog,
@@ -391,5 +392,115 @@ describe("mergeListing", () => {
       TODAY,
     );
     await saveCatalog(paths(), catalog);
+  });
+});
+
+describe("OpenRouter prices", () => {
+  const TODAY = "2026-11-20";
+  const ROUTED: ModelEntry = {
+    provider: "openrouter",
+    id: "vendor/model-r",
+    label: "Model R",
+    status: "active",
+    contextWindow: 128000,
+    maxOutput: 16000,
+    price: { input: 1, output: 4, cacheRead: 1, cacheWrite: 1 },
+    priceSource: "openrouter",
+    pricedAt: "2026-11-19",
+    firstSeen: "2026-11-01",
+    lastSeen: "2026-11-19",
+  };
+  const upstreamPrice = { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 2 };
+
+  test("mergeListing writes an upstream price with its source and date; an owner's price stays", () => {
+    const listed = [
+      {
+        id: "vendor/model-r",
+        label: "Model R",
+        price: upstreamPrice,
+        priceSource: "openrouter" as const,
+      },
+      { id: "vendor/new", label: "New", price: upstreamPrice, priceSource: "openrouter" as const },
+      {
+        id: "vendor/manual",
+        label: "Manual",
+        price: upstreamPrice,
+        priceSource: "openrouter" as const,
+      },
+    ];
+    const manual: ModelEntry = { ...ROUTED, id: "vendor/manual", priceSource: "manual" };
+    const { catalog } = mergeListing(catalogOf(ROUTED, manual), "openrouter", listed, TODAY);
+    const by = (id: string) => catalog.models.find((m) => m.id === id);
+    expect(by("vendor/model-r")).toMatchObject({
+      price: upstreamPrice,
+      priceSource: "openrouter",
+      pricedAt: TODAY,
+    });
+    expect(by("vendor/new")).toMatchObject({
+      status: "candidate",
+      price: upstreamPrice,
+      priceSource: "openrouter",
+      pricedAt: TODAY,
+    });
+    expect(by("vendor/manual")).toEqual({ ...manual, label: "Manual", lastSeen: TODAY });
+  });
+
+  test("a guessed effortLevels fills an empty field and never replaces one already there", () => {
+    const set: ModelEntry = { ...ROUTED, effortLevels: ["low", "xhigh"] };
+    const bare: ModelEntry = { ...ROUTED, id: "vendor/bare" };
+    const guess = {
+      label: "R",
+      effortLevels: ["low", "medium", "high"] as const,
+      inferred: ["effortLevels"] as const,
+    };
+    const { catalog } = mergeListing(
+      catalogOf(set, bare),
+      "openrouter",
+      [
+        { id: "vendor/model-r", ...guess },
+        { id: "vendor/bare", ...guess },
+        { id: "vendor/added", ...guess },
+      ],
+      TODAY,
+    );
+    const by = (id: string) => catalog.models.find((m) => m.id === id);
+    expect(by("vendor/model-r")?.effortLevels).toEqual(["low", "xhigh"]);
+    expect(by("vendor/bare")?.effortLevels).toEqual(["low", "medium", "high"]);
+    expect(by("vendor/added")?.effortLevels).toEqual(["low", "medium", "high"]);
+  });
+
+  test("a list refresh wrote, with priceSource openrouter, loads back", async () => {
+    const p = paths();
+    await saveCatalog(p, catalogOf(ROUTED));
+    expect((await loadCatalog(p)).models[0]?.priceSource).toBe("openrouter");
+  });
+
+  test("over price_refuse_days: an OpenRouter price only warns, an owner's is refused", () => {
+    const old = "2026-08-20";
+    const limits = DEFAULT_LIMITS;
+    const routed = { ...ROUTED, pricedAt: old };
+    expect(priceState(routed, limits, NOW)).toBe("stale");
+    expect(resolve(catalogOf(routed), "openrouter", routed.id, limits, NOW)).toMatchObject({
+      ok: true,
+      warn: "prices_warn",
+    });
+    const manual = { ...routed, priceSource: "manual" as const };
+    expect(priceState(manual, limits, NOW)).toBe("refused");
+    expect(resolve(catalogOf(manual), "openrouter", manual.id, limits, NOW)).toMatchObject({
+      ok: false,
+      reason: "prices_stale",
+    });
+  });
+
+  test("cache_ttl 1h asks a 1-hour write price only of Anthropic models", () => {
+    const limits = { ...DEFAULT_LIMITS, cache_ttl: "1h" as const };
+    expect(resolve(catalogOf(ROUTED), "openrouter", ROUTED.id, limits, NOW).ok).toBe(true);
+    const { cacheWrite1h: _, ...price } = ACTIVE.price ?? {};
+    expect(
+      resolve(catalogOf({ ...ACTIVE, price }), "anthropic", "model-a", limits, NOW),
+    ).toMatchObject({
+      ok: false,
+      reason: "price_incomplete",
+    });
   });
 });

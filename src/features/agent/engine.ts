@@ -51,6 +51,7 @@ import {
   prepareModel,
   REASON_TEXT,
   rejected,
+  reportedUsage,
   retryWait,
   settleFailure,
   type Consumed,
@@ -492,7 +493,7 @@ export function createEngine(deps: EngineDeps) {
       ...(t.effort === undefined ? {} : { effort: t.effort }),
       toolResultBytes: limits.tool_result_bytes,
       thinkingKey: t.thinkingKey,
-      capabilities: { thinkingTypes: model.thinkingTypes },
+      capabilities: { thinkingTypes: model.thinkingTypes, effortLevels: model.effortLevels ?? [] },
     };
   }
 
@@ -541,10 +542,11 @@ export function createEngine(deps: EngineDeps) {
             },
           }))
         : [];
+    const usage = reportedUsage(end);
     const written = db.transaction(() => {
       recordEnd(db, {
         usageId,
-        usage: end.usage,
+        usage,
         ...(end.costUsd === undefined ? {} : { costUsd: end.costUsd }),
         turnKind: "chat",
         prefixKey: t.prefix,
@@ -569,14 +571,13 @@ export function createEngine(deps: EngineDeps) {
       );
       return items;
     })();
-    t.usage = addUsage(t.usage, end.usage);
+    t.usage = addUsage(t.usage, usage);
     deps.log.log("request_end", {
       turn: t.turnId,
       step: t.step,
       state: "final",
-      inputTokens:
-        end.usage.uncachedInputTokens + end.usage.cacheReadTokens + end.usage.cacheWriteTokens,
-      outputTokens: end.usage.outputTokens,
+      inputTokens: usage.uncachedInputTokens + usage.cacheReadTokens + usage.cacheWriteTokens,
+      outputTokens: usage.outputTokens,
     });
     for (const item of written) t.frontend.emit({ type: "item", item });
     if (end.stop === "max_tokens" && got.text === "")
@@ -919,7 +920,10 @@ export function createEngine(deps: EngineDeps) {
       effort: "off",
       toolResultBytes: s.limits.tool_result_bytes,
       thinkingKey: "",
-      capabilities: { thinkingTypes: s.model.thinkingTypes },
+      capabilities: {
+        thinkingTypes: s.model.thinkingTypes,
+        effortLevels: s.model.effortLevels ?? [],
+      },
     };
     // The summary is not a reply to the owner, so its text is not shown.
     const got = await consume(db, s.adapter, req, usageId, signal, () => {});
@@ -943,7 +947,7 @@ export function createEngine(deps: EngineDeps) {
       db.transaction(() => {
         recordEnd(db, {
           usageId,
-          usage: end.usage,
+          usage: reportedUsage(end),
           ...(end.costUsd === undefined ? {} : { costUsd: end.costUsd }),
           turnKind: "compaction",
           prefixKey: "",

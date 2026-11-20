@@ -26,6 +26,7 @@ import {
   failureOf,
   prepareModel,
   REASON_TEXT,
+  reportedUsage,
   retryWait,
   settleFailure,
   type Setup,
@@ -997,7 +998,10 @@ async function runModel(
         effort: "off",
         toolResultBytes: setup.limits.tool_result_bytes,
         thinkingKey: "",
-        capabilities: { thinkingTypes: setup.model.thinkingTypes },
+        capabilities: {
+          thinkingTypes: setup.model.thinkingTypes,
+          effortLevels: setup.model.effortLevels ?? [],
+        },
       };
       const got = await consume(wiki, setup.adapter, req, usageId, signal, () => {});
       if (got.error !== undefined) {
@@ -1015,7 +1019,7 @@ async function runModel(
       const end = got.end as NonNullable<typeof got.end>;
       recordEnd(wiki, {
         usageId,
-        usage: end.usage,
+        usage: reportedUsage(end),
         ...(end.costUsd === undefined ? {} : { costUsd: end.costUsd }),
         turnKind: "sync",
         prefixKey: "",

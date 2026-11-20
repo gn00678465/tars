@@ -67,7 +67,7 @@ export const DEFAULT_LIMITS: Limits = {
   cache_ttl: "5m",
 };
 
-export const DEFAULT_CHAT: ChatConfig = { effort: "medium" };
+export const DEFAULT_CHAT: ChatConfig = { effort: "medium", provider: "anthropic" };
 
 export const DEFAULT_WIKI: WikiConfig = { daily_cap_usd: 1, monthly_cap_usd: 10, model: "" };
 
@@ -79,6 +79,24 @@ stop_ratio = 0.95
 warn_ratio = 0.80
 daily_cap_usd = 10
 prior_spend_usd = 0      # period = "total" 時，tars 以外已用掉的金額
+
+[providers.gemini]
+enabled = false
+quota_usd = 1000
+period = "total"
+stop_ratio = 0.95
+warn_ratio = 0.80
+daily_cap_usd = 10
+prior_spend_usd = 0      # 這把金鑰在 tars 以外已經用掉的金額，從帳單頁抄
+
+[providers.openrouter]
+enabled = false
+quota_usd = 10           # 和 OpenRouter 上這把金鑰的額度上限一致
+period = "total"
+stop_ratio = 0.95
+warn_ratio = 0.80
+daily_cap_usd = 10
+prior_spend_usd = 0
 
 [limits]
 turn_cap_usd = 1
@@ -99,14 +117,13 @@ cache_ttl = "5m"         # 或 "1h"
 
 [chat]
 effort = "medium"        # low | medium | high | xhigh | max
+provider = "anthropic"   # 不帶 --model 時用哪一家
 
 [wiki]
 daily_cap_usd = 1        # 同步的每日上限（UTC 日）
 monthly_cap_usd = 10     # 同步的每月上限（UTC 月）
 model = ""               # 空字串：Anthropic 在 models.json 的預設模型。或 "<provider>/<id>"
 `;
-
-const KNOWN_PROVIDERS: readonly Provider[] = ["anthropic"];
 
 /** Reads config.toml from disk on every call; a turn picks up the owner's edits. */
 export async function loadConfig(
@@ -146,8 +163,8 @@ export function parseConfig(toml: unknown): {
   const providers: Partial<Record<Provider, ProviderConfig>> = {};
   const providerTables = section(top, "providers", problems);
   for (const [name, table] of Object.entries(providerTables)) {
-    if (!KNOWN_PROVIDERS.includes(name as Provider)) {
-      warnings.push(`[providers.${name}] is ignored; this tars knows only anthropic`);
+    if (!PROVIDERS.includes(name as Provider)) {
+      warnings.push(`[providers.${name}] is ignored; this tars knows ${PROVIDERS.join(", ")}`);
       continue;
     }
     if (!isRecord(table)) {
@@ -159,7 +176,12 @@ export function parseConfig(toml: unknown): {
   const limits = parseLimits(section(top, "limits", problems), problems);
   const chatTable = section(top, "chat", problems);
   const fields = new Fields("chat", chatTable, problems);
-  const chat: ChatConfig = { effort: fields.oneOf("effort", EFFORTS, DEFAULT_CHAT.effort) };
+  // Only that it names a provider: whether it is enabled is checked by tars chat, the one
+  // command that uses it, so tars cost and tars models still run.
+  const chat: ChatConfig = {
+    effort: fields.oneOf("effort", EFFORTS, DEFAULT_CHAT.effort),
+    provider: fields.oneOf("provider", PROVIDERS, DEFAULT_CHAT.provider),
+  };
   fields.rejectUnknown();
   const wiki = parseWiki(section(top, "wiki", problems), problems);
   return { config: { providers, limits, chat, wiki }, warnings, problems };

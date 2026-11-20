@@ -1,6 +1,10 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { TarsError } from "../../../src/core/exit.ts";
-import { resolveAnthropicBaseUrl } from "../../../src/features/agent/provider.ts";
+import {
+  E2E_BASE_URL_VARS,
+  loopbackUrl,
+  resolveAnthropicBaseUrl,
+} from "../../../src/features/agent/provider.ts";
 
 const VAR = "TARS_E2E_ANTHROPIC_BASE_URL";
 
@@ -37,4 +41,33 @@ test.each([
     expect(err).toBeInstanceOf(TarsError);
     expect((err as TarsError).exitCode).toBe(1);
   }
+});
+
+describe("loopbackUrl", () => {
+  test("unset or empty is undefined; a loopback address with a port is returned", () => {
+    expect(loopbackUrl("X", undefined, "http")).toBeUndefined();
+    expect(loopbackUrl("X", "", "http")).toBeUndefined();
+    expect(loopbackUrl("X", "http://127.0.0.1:8080", "http")).toBe("http://127.0.0.1:8080");
+    expect(loopbackUrl("X", "ws://127.0.0.1:8080", "ws")).toBe("ws://127.0.0.1:8080");
+  });
+
+  test.each([
+    "http://localhost:8080",
+    "http://0.0.0.0:8080",
+    "http://203.0.113.7:8080",
+    "http://127.0.0.1",
+    "http://127.0.0.1:8080/v1",
+    "http://user:pw@127.0.0.1:8080",
+    "https://127.0.0.1:8080",
+    "ws://127.0.0.1:8080",
+  ])("%s is refused for http, naming the variable", (value) => {
+    expect(() => loopbackUrl("TARS_E2E_X", value, "http")).toThrow(
+      "TARS_E2E_X must be http://127.0.0.1:<port>",
+    );
+  });
+
+  test.each(Object.entries(E2E_BASE_URL_VARS))("%s goes through it", (_provider, name) => {
+    expect(loopbackUrl(name, "http://127.0.0.1:9", "http")).toBe("http://127.0.0.1:9");
+    expect(() => loopbackUrl(name, "http://example.com:9", "http")).toThrow(name);
+  });
 });

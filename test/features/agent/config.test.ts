@@ -66,6 +66,30 @@ describe("loadConfig", () => {
       daily_cap_usd: 10,
       prior_spend_usd: 0,
     });
+    const off = { period: "total" as const, stop_ratio: 0.95, warn_ratio: 0.8, daily_cap_usd: 10 };
+    expect(config.providers.gemini).toEqual({
+      enabled: false,
+      quota_usd: 1000,
+      prior_spend_usd: 0,
+      ...off,
+    });
+    expect(config.providers.openrouter).toEqual({
+      enabled: false,
+      quota_usd: 10,
+      prior_spend_usd: 0,
+      ...off,
+    });
+    expect(config.chat.provider).toBe("anthropic");
+  });
+
+  test("[chat] provider: one of the three; one not enabled still parses; absent is anthropic", async () => {
+    const { config } = await loadConfig(pathsWith(`${PROVIDER}[chat]\nprovider = "gemini"\n`));
+    expect(config.chat.provider).toBe("gemini");
+    expect(config.providers.gemini).toBeUndefined();
+    expect((await loadConfig(pathsWith(PROVIDER))).config.chat.provider).toBe("anthropic");
+    expect(await problems(`${PROVIDER}[chat]\nprovider = "openai"\n`)).toContain(
+      "[chat] provider must be one of anthropic, gemini, openrouter",
+    );
   });
 
   test("[limits] and [chat] may be left out entirely", async () => {
@@ -91,12 +115,25 @@ describe("loadConfig", () => {
     expect(await problems(`${PROVIDER}nickname = "x"\n`)).toContain("unknown key nickname");
   });
 
-  test("a provider other than anthropic is a warning and is ignored", async () => {
+  test("gemini and openrouter are accepted and checked like anthropic", async () => {
+    const other = (name: string) =>
+      PROVIDER.replace("[providers.anthropic]", `[providers.${name}]`);
     const { config, warnings } = await loadConfig(
-      pathsWith(`${PROVIDER}[providers.gemini]\nenabled = "whatever"\n`),
+      pathsWith(`${PROVIDER}${other("gemini")}${other("openrouter")}`),
     );
-    expect(warnings.join("\n")).toContain("[providers.gemini]");
-    expect(config.providers.gemini).toBeUndefined();
+    expect(warnings).toEqual([]);
+    expect(config.providers.gemini).toEqual(config.providers.anthropic);
+    expect(config.providers.openrouter).toEqual(config.providers.anthropic);
+    const message = await problems(`${PROVIDER}[providers.gemini]\nenabled = "whatever"\n`);
+    expect(message).toContain("[providers.gemini] enabled must be true or false");
+  });
+
+  test("a provider tars does not know is a warning and is ignored", async () => {
+    const { config, warnings } = await loadConfig(
+      pathsWith(`${PROVIDER}[providers.mistral]\nenabled = true\n`),
+    );
+    expect(warnings.join("\n")).toContain("[providers.mistral]");
+    expect(Object.keys(config.providers)).toEqual(["anthropic"]);
   });
 
   const providerWith = (key: string, value: string) =>

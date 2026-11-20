@@ -51,6 +51,30 @@ describe("tars cost", () => {
           state: "ok",
           wiki: null,
         },
+        {
+          provider: "gemini",
+          period: "total",
+          spentUsd: 0,
+          quotaUsd: 1000,
+          warnUsd: 800,
+          stopUsd: 950,
+          todayUsd: 0,
+          dailyCapUsd: 10,
+          state: "ok",
+          wiki: null,
+        },
+        {
+          provider: "openrouter",
+          period: "total",
+          spentUsd: 0,
+          quotaUsd: 10,
+          warnUsd: 8,
+          stopUsd: 9.5,
+          todayUsd: 0,
+          dailyCapUsd: 10,
+          state: "ok",
+          wiki: null,
+        },
       ],
       recent: [],
     });
@@ -96,8 +120,10 @@ describe("tars cost", () => {
     const { env } = setup();
     const deps = testDeps({ env });
     expect(await run(["cost"], deps)).toBe(0);
-    expect(deps.io.stdout).toHaveLength(1);
+    expect(deps.io.stdout).toHaveLength(3);
     expect(deps.io.stdout[0]).toStartWith("anthropic: ");
+    expect(deps.io.stdout[1]).toStartWith("gemini: ");
+    expect(deps.io.stdout[2]).toStartWith("openrouter: ");
   });
 
   test("with a wiki.db: sync's spend is in the totals, with a line and a JSON field of its own", async () => {
@@ -105,10 +131,15 @@ describe("tars cost", () => {
     await syncUsage(paths, 0.42, new Date(TEST_NOW));
     const text = testDeps({ env });
     expect(await run(["cost"], text)).toBe(0);
-    expect(text.io.stdout).toHaveLength(2);
+    // Every configured provider gets its line and its sync line; the sync ran on Anthropic.
+    expect(text.io.stdout).toHaveLength(6);
     expect(text.io.stdout[0]).toContain("本期已用 0.42");
     expect(text.io.stdout[1]).toBe(
       "  其中 wiki 同步：本期 0.42；今日 0.42 / 1.00；本月 0.42 / 10.00",
+    );
+    expect(text.io.stdout[2]).toStartWith("gemini: ");
+    expect(text.io.stdout[3]).toBe(
+      "  其中 wiki 同步：本期 0.00；今日 0.42 / 1.00；本月 0.42 / 10.00",
     );
     const deps = testDeps({ env });
     expect(await run(["cost", "--json"], deps)).toBe(0);

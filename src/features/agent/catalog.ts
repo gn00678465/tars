@@ -24,6 +24,9 @@ export interface Price {
   readonly cacheWrite1h?: number;
 }
 
+const PRICE_SOURCES = ["manual", "openrouter"] as const;
+export type PriceSource = (typeof PRICE_SOURCES)[number];
+
 export const BASIC_PRICES = ["input", "output", "cacheRead", "cacheWrite"] as const;
 const PRICE_KEYS = [...BASIC_PRICES, "cacheWrite1h"] as const;
 
@@ -39,7 +42,8 @@ export interface ModelEntry {
   readonly effortLevels?: readonly Effort[];
   readonly thinkingTypes?: readonly string[];
   readonly price?: Partial<Price>;
-  readonly priceSource?: "manual";
+  /** manual: the owner typed it. openrouter: refresh wrote it; it only sizes reservations. */
+  readonly priceSource?: PriceSource;
   readonly pricedAt?: string;
   readonly firstSeen: string;
   readonly lastSeen: string;
@@ -194,8 +198,8 @@ function validateModels(models: readonly unknown[], problems: string[]): void {
 }
 
 function validatePrice(e: ModelEntry, bad: (rule: string) => void): void {
-  if (e.priceSource !== undefined && e.priceSource !== "manual")
-    bad('priceSource must be "manual"');
+  if (e.priceSource !== undefined && !PRICE_SOURCES.includes(e.priceSource))
+    bad(`priceSource must be one of ${PRICE_SOURCES.join(", ")}`);
   if (e.pricedAt !== undefined && (typeof e.pricedAt !== "string" || !DATE.test(e.pricedAt)))
     bad("pricedAt must be YYYY-MM-DD");
   if (e.price === undefined) {
@@ -230,10 +234,15 @@ export const daysSince = (day: string, now: Date) =>
 
 export type PriceState = "ok" | "stale" | "refused" | "missing";
 
+/**
+ * resolve uses this too, so tars models list shows what a turn does. Only a price the owner
+ * typed is refused when old: an OpenRouter price sizes reservations, never the charge.
+ */
 export function priceState(entry: ModelEntry, limits: Limits, now: Date): PriceState {
   if (entry.pricedAt === undefined) return "missing";
   const age = daysSince(entry.pricedAt, now);
-  return age > limits.price_refuse_days ? "refused" : age > limits.price_warn_days ? "stale" : "ok";
+  if (age > limits.price_refuse_days && entry.priceSource !== "openrouter") return "refused";
+  return age > limits.price_warn_days ? "stale" : "ok";
 }
 
 /** A model that passed resolve: every field a turn needs is there. */
@@ -274,16 +283,18 @@ export function resolve(
       message: `${ref} 不在模型清單上，或不是 active。查看：tars models list；啟用：tars models enable ${ref}`,
     };
   const price = entry.price ?? {};
+  // Only Anthropic requests carry cache control; the compatible endpoints have no 1h price.
+  const needs1h = limits.cache_ttl === "1h" && provider === "anthropic";
   const complete =
     entry.contextWindow !== undefined &&
     entry.maxOutput !== undefined &&
     BASIC_PRICES.every((k) => price[k] !== undefined) &&
-    (limits.cache_ttl !== "1h" || price.cacheWrite1h !== undefined);
+    (!needs1h || price.cacheWrite1h !== undefined);
   if (!complete || entry.pricedAt === undefined)
     return {
       ok: false,
       reason: "price_incomplete",
-      message: `${ref} 缺 context 視窗、輸出上限或單價${limits.cache_ttl === "1h" ? "（cache_ttl = 1h 要 --cache-write-1h）" : ""}。補上：tars models set ${ref} …`,
+      message: `${ref} 缺 context 視窗、輸出上限或單價${needs1h ? "（cache_ttl = 1h 要 --cache-write-1h）" : ""}。補上：tars models set ${ref} …`,
     };
   const state = priceState(entry, limits, now);
   const priceAgeDays = daysSince(entry.pricedAt, now);
@@ -336,7 +347,11 @@ export function mergeListing(
       if (entry.status === "retired") return entry;
       changes.push({ kind: "retired", id: entry.id, wasDefault: entry.default === true });
       const { default: _, ...rest } = entry;
-      return { ...rest, status: "retired", ...(up === undefined ? {} : upstreamFields(up)) };
+      return {
+        ...rest,
+        status: "retired",
+        ...(up === undefined ? {} : upstreamFields(up, entry, today)),
+      };
     }
     if (up.lifecycle === "deprecated")
       changes.push({
@@ -344,7 +359,7 @@ export function mergeListing(
         id: entry.id,
         ...(up.retiresAt ? { retiresAt: up.retiresAt } : {}),
       });
-    const next = { ...entry, ...upstreamFields(up), lastSeen: today };
+    const next = { ...entry, ...upstreamFields(up, entry, today), lastSeen: today };
     if (JSON.stringify(next) !== JSON.stringify({ ...entry, lastSeen: today }))
       changes.push({ kind: "updated", id: entry.id });
     return next;
@@ -363,7 +378,7 @@ export function mergeListing(
       provider,
       id: up.id,
       status: "candidate",
-      ...upstreamFields(up),
+      ...upstreamFields(up, undefined, today),
       firstSeen: today,
       lastSeen: today,
     });
@@ -371,15 +386,27 @@ export function mergeListing(
   return { catalog: { version: 1, models }, changes };
 }
 
-/** label and lifecycle always; the capability fields only when upstream gave a value. */
-function upstreamFields(up: ListedModel) {
+/**
+ * label and lifecycle always; the capability fields only when upstream gave a value, and a
+ * guessed one only where the entry has none, so `tars models set` is not undone. An upstream
+ * price replaces only a price that came from upstream: the owner's own stays.
+ */
+function upstreamFields(up: ListedModel, entry: ModelEntry | undefined, today: string) {
+  const guessed = (field: "effortLevels") =>
+    up.inferred?.includes(field) === true && entry?.[field] !== undefined;
+  const ownPrice = entry?.price !== undefined && entry.priceSource !== "openrouter";
   return {
     label: up.label,
     ...(up.lifecycle === undefined ? {} : { lifecycle: up.lifecycle }),
     ...(up.contextWindow === undefined ? {} : { contextWindow: up.contextWindow }),
     ...(up.maxOutput === undefined ? {} : { maxOutput: up.maxOutput }),
-    ...(up.effortLevels === undefined ? {} : { effortLevels: up.effortLevels }),
+    ...(up.effortLevels === undefined || guessed("effortLevels")
+      ? {}
+      : { effortLevels: up.effortLevels }),
     ...(up.thinkingTypes === undefined ? {} : { thinkingTypes: up.thinkingTypes }),
+    ...(up.price === undefined || up.priceSource === undefined || ownPrice
+      ? {}
+      : { price: up.price, priceSource: up.priceSource, pricedAt: today }),
   };
 }
 

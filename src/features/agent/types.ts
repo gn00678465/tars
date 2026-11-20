@@ -1,5 +1,8 @@
 // The neutral format the loop speaks. S3 moves these to packages/protocol.
 
+import type { Provider } from "../../core/secrets.ts";
+import type { Price } from "./catalog.ts";
+
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 
@@ -35,7 +38,11 @@ export interface ModelRequest {
   readonly toolResultBytes: number;
   /** thinkingKey of this request; assistant items made under another key lose their thinking. */
   readonly thinkingKey: string;
-  readonly capabilities: { readonly thinkingTypes: readonly string[] };
+  readonly capabilities: {
+    readonly thinkingTypes: readonly string[];
+    /** The model's effort levels in the catalog; empty when it has none. */
+    readonly effortLevels: readonly Effort[];
+  };
 }
 
 export interface Usage {
@@ -65,7 +72,8 @@ export const totalInputTokens = (u: InputUsage) =>
 export type StopReason = "end" | "tool_use" | "max_tokens" | "other";
 
 export type ProviderEvent =
-  | { readonly type: "start"; readonly usage: InputUsage }
+  /** usage absent: the endpoint does not report input tokens when the stream starts. */
+  | { readonly type: "start"; readonly usage?: InputUsage }
   | { readonly type: "thinking" }
   | { readonly type: "text"; readonly delta: string }
   | {
@@ -77,7 +85,8 @@ export type ProviderEvent =
   | {
       readonly type: "end";
       readonly stop: StopReason;
-      readonly usage: Usage;
+      /** Absent: the response ended without reporting usage; the cost is estimated. */
+      readonly usage?: Usage;
       readonly costUsd?: number;
       /** The blocks to replay as the assistant message; empty when there is nothing to replay. */
       readonly native: readonly unknown[];
@@ -92,6 +101,11 @@ export interface ListedModel {
   readonly maxOutput?: number;
   readonly effortLevels?: readonly Effort[];
   readonly thinkingTypes?: readonly string[];
+  /** US dollars per million tokens, from upstream. */
+  readonly price?: Partial<Price>;
+  readonly priceSource?: "openrouter";
+  /** Capability fields guessed from other upstream fields; a value already listed is kept. */
+  readonly inferred?: readonly "effortLevels"[];
 }
 
 // --- Stored items. items rows are written once and never changed.
@@ -120,6 +134,8 @@ export type ToolCallEndState = Exclude<
 
 export interface UserBody {
   readonly text: string;
+  /** Set: this item is the text carried over from that earlier conversation (its id). */
+  readonly carriedFrom?: string;
 }
 export interface AssistantBody {
   readonly text: string;
@@ -267,6 +283,7 @@ export const NOTICE_CODES = [
   "effort_clamped",
   "effort_truncated",
   "approval_no_tty",
+  "usage_missing",
 ] as const;
 export type NoticeCode = (typeof NOTICE_CODES)[number];
 
@@ -298,4 +315,6 @@ export interface ApprovalRecord {
 
 export interface ChatConfig {
   readonly effort: Effort;
+  /** The provider tars chat uses without --model. */
+  readonly provider: Provider;
 }

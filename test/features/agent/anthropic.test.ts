@@ -86,7 +86,7 @@ function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
     cacheHistory: true,
     toolResultBytes: 16384,
     thinkingKey: KEY,
-    capabilities: { thinkingTypes: ["adaptive", "disabled"] },
+    capabilities: { thinkingTypes: ["adaptive", "disabled"], effortLevels: [] },
     ...overrides,
   };
 }
@@ -303,7 +303,7 @@ describe("request body", () => {
       thinking: { type: "adaptive" },
     });
     const plain = requestBody(
-      request({ effort: "low", capabilities: { thinkingTypes: ["disabled"] } }),
+      request({ effort: "low", capabilities: { thinkingTypes: ["disabled"], effortLevels: [] } }),
     );
     expect(plain.output_config).toEqual({ effort: "low" });
     expect("thinking" in plain).toBe(false);
@@ -314,7 +314,7 @@ describe("request body", () => {
     expect("output_config" in off).toBe(false);
     expect(off.thinking).toEqual({ type: "disabled" });
     const none = requestBody(
-      request({ effort: "off", capabilities: { thinkingTypes: ["adaptive"] } }),
+      request({ effort: "off", capabilities: { thinkingTypes: ["adaptive"], effortLevels: [] } }),
     );
     expect("thinking" in none).toBe(false);
   });
@@ -424,7 +424,7 @@ describe("the adapter against the fake API", () => {
     });
     expect(events.filter((e) => e.type === "thinking")).toHaveLength(1);
     const end = events.at(-1) as Extract<ProviderEvent, { type: "end" }>;
-    expect(end.usage.thinkingTokens).toBe(25);
+    expect(end.usage?.thinkingTokens).toBe(25);
     expect(end.native[0]).toEqual({
       type: "thinking",
       thinking: "let me see",

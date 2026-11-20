@@ -6,7 +6,14 @@ import { loadCatalog, resolve, type ResolvedModel } from "./catalog.ts";
 import { loadConfig, type Limits, type ProviderConfig } from "./config.ts";
 import { recordFailure, recordStart } from "./ledger.ts";
 import { ProviderError, type AdapterFor, type ProviderAdapter } from "./provider.ts";
-import type { FailReason, ModelRequest, ProviderEvent, ReasonCode, RejectReason } from "./types.ts";
+import type {
+  FailReason,
+  ModelRequest,
+  ProviderEvent,
+  ReasonCode,
+  RejectReason,
+  Usage,
+} from "./types.ts";
 
 export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   aborted: "已取消",
@@ -160,7 +167,7 @@ export async function consume(
     for await (const ev of adapter.stream(req, signal)) {
       if (ev.type === "start") {
         receivedStart = true;
-        recordStart(db, usageId, ev.usage);
+        if (ev.usage !== undefined) recordStart(db, usageId, ev.usage);
       } else if (ev.type === "text") {
         text += ev.delta;
         onEvent({ type: "delta", text: ev.delta });
@@ -185,4 +192,10 @@ export function settleFailure(db: Database, usageId: number, got: Consumed): voi
     receivedStart: got.receivedStart,
     textBytes: utf8Bytes(got.text),
   });
+}
+
+/** Temporary until settleEnd: a response that reported no usage cannot be settled yet. */
+export function reportedUsage(end: { readonly usage?: Usage }): Usage {
+  if (end.usage === undefined) throw new Error("the response reported no usage");
+  return end.usage;
 }

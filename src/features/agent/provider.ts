@@ -55,19 +55,27 @@ export class ProviderError extends Error {
 export const ANTHROPIC_API = "https://api.anthropic.com";
 export const E2E_BASE_URL_VAR = "TARS_E2E_ANTHROPIC_BASE_URL";
 
-const LOOPBACK = /^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/;
+/** The variables that point a provider at an e2e fake; each can send a key elsewhere. */
+export const E2E_BASE_URL_VARS: Readonly<Record<Provider, string>> = {
+  anthropic: E2E_BASE_URL_VAR,
+  gemini: "TARS_E2E_GEMINI_BASE_URL",
+  openrouter: "TARS_E2E_OPENROUTER_BASE_URL",
+};
 
 /**
- * Only a loopback http address may replace the real endpoint, and only for the e2e fake. Two
- * independent checks: the regex alone would let "http://127.0.0.1:80@host" through a sloppy URL
- * parser, the parser alone would accept paths and credentials.
+ * undefined or "": undefined. Anything else must be <scheme>://127.0.0.1:<port>, or this throws.
+ * Two independent checks: the regex alone would let "http://127.0.0.1:80@host" through a sloppy
+ * URL parser, the parser alone would accept paths and credentials.
  */
-export function resolveAnthropicBaseUrl(env: Env): string {
-  const value = env[E2E_BASE_URL_VAR] ?? "";
-  if (value === "") return ANTHROPIC_API;
+export function loopbackUrl(
+  varName: string,
+  value: string | undefined,
+  scheme: "http" | "ws",
+): string | undefined {
+  if (value === undefined || value === "") return undefined;
   const refuse = () =>
-    new TarsError(`${E2E_BASE_URL_VAR} must be http://127.0.0.1:<port>, nothing else`);
-  const port = LOOPBACK.exec(value)?.[1];
+    new TarsError(`${varName} must be ${scheme}://127.0.0.1:<port>, nothing else`);
+  const port = new RegExp(`^${scheme}://127\\.0\\.0\\.1:([1-9]\\d{0,4})$`).exec(value)?.[1];
   if (port === undefined || Number(port) > 65535) throw refuse();
   let url: URL;
   try {
@@ -76,7 +84,7 @@ export function resolveAnthropicBaseUrl(env: Env): string {
     throw refuse();
   }
   const clean =
-    url.protocol === "http:" &&
+    url.protocol === `${scheme}:` &&
     url.hostname === "127.0.0.1" &&
     url.username === "" &&
     url.password === "" &&
@@ -85,6 +93,10 @@ export function resolveAnthropicBaseUrl(env: Env): string {
     url.hash === "";
   if (!clean) throw refuse();
   return value;
+}
+
+export function resolveAnthropicBaseUrl(env: Env): string {
+  return loopbackUrl(E2E_BASE_URL_VAR, env[E2E_BASE_URL_VAR], "http") ?? ANTHROPIC_API;
 }
 
 export type AdapterFor = (
@@ -96,8 +108,10 @@ export type AdapterFor = (
 
 /** The SDK is imported on demand: loaded at the top it adds ~30 ms to every other command (P5). */
 export const adapterFor: AdapterFor = async (provider, apiKey, env, warn) => {
-  if (provider !== "anthropic")
+  if (provider !== "anthropic") {
+    loopbackUrl(E2E_BASE_URL_VARS[provider], env[E2E_BASE_URL_VARS[provider]], "http");
     throw new TarsError(`${provider} is not supported yet; only anthropic is`);
+  }
   const baseURL = resolveAnthropicBaseUrl(env);
   return (await import("./anthropic.ts")).createAnthropicAdapter({ apiKey, baseURL, warn });
 };
