@@ -6,6 +6,7 @@ import { utf8Bytes } from "../../../src/features/agent/bytes.ts";
 import { loadCatalog, resolve } from "../../../src/features/agent/catalog.ts";
 import {
   buildActiveHistory,
+  planCompaction,
   sentBytes,
   SUMMARIZATION_PROMPT,
   SUMMARIZATION_SYSTEM,
@@ -36,6 +37,7 @@ import {
   MODEL_ID,
   type EngineHarness,
 } from "./engine-fixture.ts";
+import { writeWikiIndex } from "../wiki/wiki-fixture.ts";
 
 // A 10,000-token window: compaction at 5,000 estimated tokens, the hard stop at 8,500. The
 // compact line sits well under the stop line so a turn can still go ahead when compaction fails
@@ -677,5 +679,54 @@ describe("a changed prefix", () => {
     h.fake.reply(answer());
     expect(ended(await run(h, "short", convId)).state).toBe("completed");
     expect(h.fake.messages().filter(isSummary)).toHaveLength(0);
+  });
+});
+
+describe("the wiki index across a compaction", () => {
+  const indexes = (h: EngineHarness, convId: string) =>
+    readItems(h.db, convId).filter((i) => i.kind === "wiki_index");
+  const indexCount = (r: RecordedRequest) =>
+    JSON.stringify(r.body.messages).split("<wiki-index>").length - 1;
+
+  test("the first turn after a manual compaction brings a new index", async () => {
+    const h = await setup();
+    writeWikiIndex(h.paths, ["王小明"]);
+    const convId = await seed(h, 2);
+    h.fake.reply(summaryReply());
+    expect((await compact(h, convId)).kind).toBe("compacted");
+    h.fake.reply(text("ok"));
+    ended(await run(h, "next", convId));
+    const [old, fresh] = indexes(h, convId);
+    expect(fresh?.seq).toBeGreaterThan(compactions(h, convId)[0]?.seq as number);
+    expect(old?.seq).toBeLessThan(compactions(h, convId)[0]?.seq as number);
+    expect(indexCount(h.fake.messages().at(-1) as RecordedRequest)).toBe(1);
+  });
+
+  test("an automatic compaction stores one new index in the same turn, sent once", async () => {
+    const h = await setup();
+    writeWikiIndex(h.paths, ["王小明"]);
+    const convId = await seed(h, 2, OVER_LINE);
+    h.fake.reply(summaryReply(), text("reply"));
+    const out = ended(await run(h, "next", convId));
+    const all = indexes(h, convId);
+    expect(all).toHaveLength(2);
+    expect(all[1]?.turnId).toBe(out.turnId);
+    const sent = h.fake.messages();
+    expect(isSummary(sent[2] as RecordedRequest)).toBe(true);
+    expect(indexCount(sent[3] as RecordedRequest)).toBe(1);
+  });
+
+  test("the summary prompt never holds the index, and the plan ignores index items", async () => {
+    const h = await setup();
+    writeWikiIndex(h.paths, ["王小明"]);
+    const convId = await seed(h, 2);
+    const items = readItems(h.db, convId);
+    h.fake.reply(summaryReply());
+    expect((await compact(h, convId)).kind).toBe("compacted");
+    const summary = h.fake.messages().find(isSummary) as RecordedRequest;
+    expect(promptOf(summary)).not.toContain("王小明");
+    expect(promptOf(summary)).not.toContain("wiki-index");
+    const without = items.filter((i) => i.kind !== "wiki_index");
+    expect(planCompaction(items, DEFAULT_LIMITS)).toEqual(planCompaction(without, DEFAULT_LIMITS));
   });
 });

@@ -336,6 +336,11 @@ describe("parseSlash", () => {
 
   test("a built-in command wins over a skill of the same name", () => {
     expect(parseSlash("/model", skills)).toEqual({ kind: "builtin", name: "model", arg: "" });
+    expect(parseSlash("/wiki 財報", skills)).toEqual({
+      kind: "builtin",
+      name: "wiki",
+      arg: "財報",
+    });
     expect(parseSlash("/compact   keep the weather  ", skills)).toEqual({
       kind: "builtin",
       name: "compact",
@@ -454,6 +459,21 @@ describe("interactive", () => {
     expect(err(deps)).toContain(`anthropic/${MODEL_ID}  Model A`);
     expect(err(deps)).toContain("tars chat --model <provider>/<id>");
     expect(err(deps)).toContain("anthropic: 本期已用");
+    expect(h.fake.messages()).toHaveLength(1);
+    expect(counts(h)).toEqual(before);
+  });
+
+  test("/wiki searches in-process: no request, no new rows, output on stderr", async () => {
+    const h = await setup();
+    h.fake.reply(text("first"));
+    expect(await run(["chat", "--message", "台積電 財報"], chatDeps(h).deps)).toBe(0);
+    expect(await run(["wiki", "sync", "--reindex"], chatDeps(h).deps)).toBe(0);
+    const before = counts(h);
+    const { deps } = chatDeps(h, { answers: ["/wiki 財報", "/wiki", undefined] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).toMatch(/^原始對話紀錄（1）｜索引到 /m);
+    expect(err(deps)).toMatch(/^頁面：people 0、/m);
+    expect(deps.io.stdout).toEqual([]);
     expect(h.fake.messages()).toHaveLength(1);
     expect(counts(h)).toEqual(before);
   });

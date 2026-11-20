@@ -11,6 +11,7 @@ import type { Effort, Item } from "../../../src/features/agent/types.ts";
 import { tarsCall, text, toolUse, type FakeBlock, type FakeReply } from "../../fakes/anthropic.ts";
 import { tempHome, TEST_NOW } from "../../helpers.ts";
 import { installSample, sampleScript } from "../script/sample.ts";
+import { writeWikiIndex } from "../wiki/wiki-fixture.ts";
 import {
   configWith,
   engineHarness,
@@ -772,5 +773,74 @@ describe("preserved thinking", () => {
     expect(signatures(h)).toEqual([[], ["sig-b"]]);
     const texts = lastMessages(h)[1]?.content as { type: string }[];
     expect(texts.map((b) => b.type)).toEqual(["text"]);
+  });
+});
+
+describe("the wiki index in a conversation", () => {
+  type Sent = { role: string; content: { type: string; text?: string; cache_control?: unknown }[] };
+  const strip = (m: unknown) =>
+    JSON.parse(JSON.stringify(m), (k, v) => (k === "cache_control" ? undefined : v)) as Sent[];
+  const sent = (h: EngineHarness, i: number) =>
+    h.fake.messages()[i]?.body as Record<string, unknown>;
+  const kinds = (h: EngineHarness, convId: string) => readItems(h.db, convId).map((i) => i.kind);
+
+  test("a new conversation stores the index just before the message, in the same turn", async () => {
+    const h = await harness();
+    writeWikiIndex(h.paths, ["王小明"]);
+    h.fake.reply(text("ok"));
+    const out = ended(await runTurn(h, "hi"));
+    const items = readItems(h.db, out.convId);
+    expect(items.map((i) => i.kind).slice(0, 2)).toEqual(["wiki_index", "user"]);
+    expect(items[0]?.turnId).toBe(items[1]?.turnId as string);
+    expect(items[1]?.seq).toBe((items[0]?.seq as number) + 1);
+    const [first] = strip(sent(h, 0).messages);
+    expect(first?.content.map((b) => b.text?.split("\n")[0])).toEqual(["<wiki-index>", "hi"]);
+    expect(h.frontend.events.some((e) => e.type === "item" && e.item.kind === "wiki_index")).toBe(
+      true,
+    );
+  });
+
+  test("the next turn adds no index; a changed index.md leaves sent bytes alone", async () => {
+    const h = await harness();
+    writeWikiIndex(h.paths, ["王小明"]);
+    h.fake.reply(text("ok"), text("ok"));
+    const { convId } = ended(await runTurn(h, "hi"));
+    writeWikiIndex(h.paths, ["王小明", "陳大文"], "2026-11-20");
+    ended(await runTurn(h, "again", { convId }));
+    expect(kinds(h, convId).filter((k) => k === "wiki_index")).toHaveLength(1);
+    const [a, b] = [sent(h, 0), sent(h, 1)];
+    expect(b.system).toEqual(a.system);
+    expect(b.tools).toEqual(a.tools);
+    expect(strip(b.messages).slice(0, 1)).toEqual(strip(a.messages));
+    expect(JSON.stringify(b.messages)).not.toContain("陳大文");
+  });
+
+  test("a refused message leaves no index behind", async () => {
+    const h = await harness();
+    writeWikiIndex(h.paths, ["王小明"]);
+    adjust(h.db, "anthropic", 94.99, undefined, h.clock.now());
+    expect(await runTurn(h, "hi")).toMatchObject({ kind: "rejected" });
+    expect(counts(h.db).items).toBe(0);
+  });
+
+  test("without index.md the request is as before; once it appears, the next turn adds one", async () => {
+    const h = await harness();
+    h.fake.reply(text("ok"), text("ok"));
+    const { convId } = ended(await runTurn(h, "hi"));
+    expect(kinds(h, convId)).not.toContain("wiki_index");
+    expect(strip(sent(h, 0).messages)).toEqual([
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+    ]);
+    writeWikiIndex(h.paths, ["王小明"]);
+    ended(await runTurn(h, "again", { convId }));
+    const items = readItems(h.db, convId);
+    const at = items.findIndex((i) => i.kind === "wiki_index");
+    expect(items[at + 1]).toMatchObject({ kind: "user", body: { text: "again" } });
+    const second = strip(sent(h, 1).messages);
+    expect(second.slice(0, 1)).toEqual(strip(sent(h, 0).messages));
+    expect(second.at(-1)?.content.map((b) => b.text?.split("\n")[0])).toEqual([
+      "<wiki-index>",
+      "again",
+    ]);
   });
 });

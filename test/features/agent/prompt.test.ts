@@ -108,13 +108,45 @@ describe("PREAMBLE", () => {
       "secret list",
       "cost [--json]",
       "models list",
+      "wiki search <查詢> [--also <詞>]… [--since <日期>] [--until <日期>] [--limit <n>] [--json]",
+      "wiki list [<分類>] [--json]",
+      "wiki show <分類>/<名稱> [--json]",
+      "wiki source <對話>/<回合> [--json]",
+      "wiki status",
     ])
       expect(PREAMBLE).toContain(line);
     for (const tool of TOOL_SPECS) expect(PREAMBLE).toContain(tool.name);
   });
+
+  test("the wiki paragraph comes after the tars claude list, and that sentence leaves wiki out", () => {
+    const sentence = PREAMBLE.split("\n").find((l) => l.startsWith("這個入口不提供"));
+    expect(sentence).toContain("改用 tars claude");
+    expect(sentence).not.toContain("wiki");
+    expect(sentence).not.toContain("知識庫");
+    const wiki = PREAMBLE.indexOf("擁有者有一個個人知識庫（wiki）");
+    expect(wiki).toBeGreaterThan(PREAMBLE.indexOf(sentence as string));
+    expect(PREAMBLE).toContain("tars wiki sync 更新，不是用 tars claude");
+    expect(TOOL_SPECS.find((t) => t.name === "file_read")?.description).toContain(
+      "wiki/<分類>/<名稱>.md",
+    );
+  });
 });
 
 describe("buildSystem", () => {
+  test("does not depend on what <data>/wiki holds", async () => {
+    const paths = isolatedPaths();
+    const skills = [{ name: "a", description: "first", localOnly: false }];
+    const before = buildSystem(BOOT, skills);
+    mkdirSync(join(paths.wiki, "people"), { recursive: true });
+    writeFileSync(
+      paths.wikiIndex,
+      "# 知識庫索引\n\n## people（1 頁）\n- [[people/x]] 王小明｜｜2026-11-19\n",
+    );
+    writeFileSync(join(paths.wiki, "people", "x.md"), "王小明\n");
+    expect(buildSystem(BOOT, skills)).toEqual(before);
+    expect(JSON.stringify(before)).not.toContain("王小明");
+  });
+
   test("block 1 is the preamble and the index, uncached; then each boot file as its block, cached", () => {
     const skills = [
       { name: "a", description: "first", localOnly: false },

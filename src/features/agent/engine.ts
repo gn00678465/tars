@@ -15,6 +15,12 @@ import {
   validateSummary,
 } from "./compaction.ts";
 import type { WikiSpend } from "../wiki/db.ts";
+import {
+  activeWikiIndex,
+  loadWikiIndexBlock,
+  PENDING_SEQ,
+  requestHistory,
+} from "../wiki/index-file.ts";
 import type { Limits, ProviderConfig } from "./config.ts";
 import { effectiveEffort } from "./effort.ts";
 import type { Frontend } from "./frontend.ts";
@@ -67,6 +73,8 @@ import {
   type SystemBlock,
   type ToolCallEndState,
   type ToolCallItem,
+  type UserItem,
+  type WikiIndexBody,
   type TurnState,
   type Usage,
 } from "./types.ts";
@@ -123,9 +131,6 @@ export type CompactOutcome =
       readonly detail?: string;
     }
   | { readonly kind: "aborted" };
-
-/** The new message's place before it has a seq: after everything stored. */
-const PENDING_SEQ = Number.MAX_SAFE_INTEGER;
 
 const TEXT = {
   skipped: "前一個動作沒有執行，這個已略過",
@@ -184,7 +189,7 @@ export function createEngine(deps: EngineDeps) {
   const effortNoticed = new Set<string>();
   const skipNoticed = new Set<string>();
 
-  const activeHistory = (convId: string) => buildActiveHistory(store.readActiveItems(db, convId));
+  const activeHistory = (convId: string) => requestHistory(store.readActiveItems(db, convId));
   const historyBytes = (items: readonly ContextItem[], limits: Limits) =>
     items.reduce((n, i) => n + sentBytes(i, limits.tool_result_bytes), 0);
   /** Read at every check, never kept: rather not send than count short. */
@@ -291,19 +296,31 @@ export function createEngine(deps: EngineDeps) {
       system,
       tools: TOOL_SPECS,
     });
-    const pending: ContextItem = {
+    const pending: UserItem = {
       seq: PENDING_SEQ,
       turnId: "",
       step: 0,
       kind: "user",
       body: { text: input.text },
     };
-    const read = (convId: string | undefined) => {
+    // index.md is read at most once a turn, and only when this generation has no index yet: a
+    // stored one stays put, so the prefix the cache and the thinking signatures hold is unchanged.
+    let loaded: { body: WikiIndexBody | undefined } | undefined;
+    const read = async (convId: string | undefined) => {
       const conv = convId === undefined ? undefined : store.getConversation(db, convId);
       const items = conv === undefined ? [] : store.readActiveItems(db, conv.id);
-      return { conv, items, history: [...buildActiveHistory(items), pending] };
+      if (activeWikiIndex(items) !== undefined)
+        return { conv, items, fresh: undefined, history: requestHistory(items, { pending }) };
+      loaded ??= { body: await loadWikiIndexBlock(deps.paths, deps.warn) };
+      const fresh = loaded.body;
+      return {
+        conv,
+        items,
+        fresh,
+        history: requestHistory(items, { pending, ...(fresh === undefined ? {} : { fresh }) }),
+      };
     };
-    let current = read(input.convId);
+    let current = await read(input.convId);
     if (current.conv !== undefined) {
       const aborted = await autoCompact(
         s,
@@ -313,9 +330,9 @@ export function createEngine(deps: EngineDeps) {
         signal,
       );
       if (aborted) return rejected("aborted");
-      current = read(input.convId);
+      current = await read(input.convId);
     }
-    const { conv, items, history } = current;
+    const { conv, items, history, fresh } = current;
     const first = reserveChat({ s, system, prefix }, conv, history, undefined);
     if (!first.ok) return rejected(first.reason);
 
@@ -323,6 +340,7 @@ export function createEngine(deps: EngineDeps) {
     const turnId = store.newId();
     const now = deps.now().getTime();
     let usageId = 0;
+    let indexItem: Item | undefined;
     db.transaction(() => {
       if (conv === undefined)
         store.createConversation(db, {
@@ -334,9 +352,13 @@ export function createEngine(deps: EngineDeps) {
           now,
         });
       store.beginTurn(db, { id: turnId, convId, kind: "chat", effort: choice.effort ?? null, now });
-      append(convId, turnId, [{ kind: "user", step: 0, body: { text: input.text } }]);
+      indexItem = append(convId, turnId, [
+        ...(fresh === undefined ? [] : [{ kind: "wiki_index" as const, step: 0, body: fresh }]),
+        { kind: "user", step: 0, body: { text: input.text } },
+      ]).find((i) => i.kind === "wiki_index");
       usageId = insertRequest(s, { turnId, convId, step: 1, attempt: 1 }, first);
     })();
+    if (indexItem !== undefined) frontend.emit({ type: "item", item: indexItem });
     deps.log.log("turn_start", { turn: turnId, conv: convId, turnKind: "chat" });
 
     if (s.pricesWarn)

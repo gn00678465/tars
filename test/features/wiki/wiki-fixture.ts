@@ -1,7 +1,9 @@
 import type { Database } from "bun:sqlite";
+import { mkdirSync, writeFileSync } from "node:fs";
 import type { TarsPaths } from "../../../src/core/paths.ts";
 import { insertReserved, recordFailure } from "../../../src/features/agent/ledger.ts";
 import { openWikiDb } from "../../../src/features/wiki/db.ts";
+import { renderIndexFile } from "../../../src/features/wiki/index-file.ts";
 import { appendItems, endTurn } from "../../../src/features/agent/store.ts";
 import type { NewItem } from "../../../src/features/agent/types.ts";
 import { MODEL, NOW, seedTurn } from "../agent/db-fixture.ts";
@@ -85,4 +87,15 @@ export function chatTurn(
   const state = spec.state ?? "completed";
   if (state !== "running") endTurn(db, { ...t, id: t.turnId, state, now: now.getTime() });
   return t;
+}
+
+/** <data>/wiki/index.md listing one people page per title, updated on `day`. */
+export function writeWikiIndex(paths: TarsPaths, titles: readonly string[], day = "2026-11-19") {
+  mkdirSync(paths.wiki, { recursive: true });
+  writeFileSync(
+    paths.wikiIndex,
+    renderIndexFile(
+      titles.map((t, i) => ({ path: `people/p${i + 1}`, title: t, aliases: [], updated: day })),
+    ),
+  );
 }

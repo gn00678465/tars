@@ -158,6 +158,24 @@ describe("history to messages", () => {
     ]);
   });
 
+  test("two neighbouring user items, the wiki index and the message, are two blocks of one message", () => {
+    const messages = toMessages(
+      [user(9, "<wiki-index>…</wiki-index>"), user(10, "hi")],
+      16384,
+      null,
+      KEY,
+    );
+    expect(messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "<wiki-index>…</wiki-index>" },
+          { type: "text", text: "hi" },
+        ],
+      },
+    ]);
+  });
+
   test("a summary item and the first kept user message merge", () => {
     const messages = toMessages([user(-1, "<summary>"), user(10, "kept")], 16384, null, KEY);
     expect(messages).toHaveLength(1);

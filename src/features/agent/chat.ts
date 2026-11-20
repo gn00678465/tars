@@ -23,6 +23,7 @@ import {
 } from "./prompt.ts";
 import { reconcile, reconcileSummary } from "./reconcile.ts";
 import * as store from "./store.ts";
+import { chatWikiLines } from "../wiki/command.ts";
 import { TtyFrontend } from "./tty-frontend.ts";
 import type { Effort, Item } from "./types.ts";
 
@@ -50,7 +51,16 @@ const EXIT_SIGTERM = 143;
 const RESUME_ITEMS = 10;
 const LINE_CHARS = 80;
 
-export const BUILTINS = ["new", "effort", "compact", "model", "cost", "quit", "help"] as const;
+export const BUILTINS = [
+  "new",
+  "effort",
+  "compact",
+  "model",
+  "cost",
+  "wiki",
+  "quit",
+  "help",
+] as const;
 type Builtin = (typeof BUILTINS)[number];
 
 export type Slash =
@@ -432,6 +442,9 @@ class ChatSession {
         }
         return undefined;
       }
+      case "wiki":
+        for (const line of chatWikiLines(this.paths, this.db, arg)) io.err(line);
+        return undefined;
       case "help":
         io.err(HELP);
         io.err(`skills：${skills.map((s) => s.name).join("、") || "（沒有）"}`);
@@ -501,6 +514,7 @@ const HELP = `指令：
   /compact [焦點指示]  把較早的對話壓縮成摘要
   /model               目前的模型與可用的模型
   /cost                本期與今日的花費
+  /wiki [關鍵字]       查知識庫（不經模型）
   /<skill> [內容]      用一個 skill 處理內容
   /help                這份清單與可用的 skills
   /quit                結束

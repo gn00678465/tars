@@ -27,7 +27,13 @@ import {
   summarySources,
   type Category,
 } from "./page.ts";
-import { formatResults, searchTerms, searchWiki, unindexedTurns } from "./search.ts";
+import {
+  formatResults,
+  searchTerms,
+  searchWiki,
+  unindexedTurns,
+  type SearchJson,
+} from "./search.ts";
 import { reasonLabel, runSync } from "./sync.ts";
 import { matchQuery } from "./tokenize.ts";
 
@@ -256,9 +262,7 @@ Examples:
         withDbs(resolvePaths(ctx.env), (w, agent) => {
           const r = searchWiki({ wiki: w, agent }, q);
           if (opts.json === true) return out(JSON.stringify(r));
-          formatResults(r).forEach(out);
-          if (searchTerms(q).every((t) => matchQuery(t) === undefined))
-            out("查詢裡沒有可以搜尋的字");
+          searchText(r).forEach(out);
         });
       },
     );
@@ -439,12 +443,35 @@ Examples:
 const count = (db: Database, sql: string, ...params: (string | number)[]) =>
   (db.query(sql).get(...params) as { n: number }).n;
 
-function statusLines(
-  db: Database,
-  agent: Database | undefined,
-  now: Date,
-  caps: { daily_cap_usd: number; monthly_cap_usd: number },
-): string[] {
+const searchText = (r: SearchJson) =>
+  searchTerms(r).every((t) => matchQuery(t) === undefined)
+    ? [...formatResults(r), "查詢裡沒有可以搜尋的字"]
+    : formatResults(r);
+
+/**
+ * `/wiki` in tars chat, run in-process without the model: a search with no expansions, or the
+ * first two status lines. `agent` is the session's own connection.
+ */
+export function chatWikiLines(paths: TarsPaths, agent: Database, query: string): string[] {
+  let wiki: Database | undefined;
+  try {
+    wiki = readWikiDb(paths);
+  } catch (err) {
+    if (err instanceof TarsError) return [err.message];
+    throw err;
+  }
+  try {
+    if (query === "") return wiki === undefined ? ["還沒有同步過"] : overviewLines(wiki, agent);
+    if (!okTerm(query)) return [`查詢要 1 到 ${SEARCH.termChars} 字`];
+    const r = searchWiki({ wiki, agent }, { query, also: [], limit: SEARCH.defaultLimit });
+    return searchText(r);
+  } finally {
+    wiki?.close();
+  }
+}
+
+/** Pages per category, and how far both indexes reach. */
+function overviewLines(db: Database, agent: Database | undefined): string[] {
   const out: string[] = [];
   const byCategory = new Map(
     (
@@ -464,6 +491,16 @@ function statusLines(
       ? "還沒有掃描過"
       : `頁面索引到 ${minuteText(Number(scanned.value))}；原始紀錄索引到 ${minuteText(Number(scanned.value))}，之後有 ${unindexedTurns(db, agent)} 個回合還沒進索引`,
   );
+  return out;
+}
+
+function statusLines(
+  db: Database,
+  agent: Database | undefined,
+  now: Date,
+  caps: { daily_cap_usd: number; monthly_cap_usd: number },
+): string[] {
+  const out = overviewLines(db, agent);
   out.push(
     `待抽取的回合：${count(db, "SELECT COUNT(*) AS n FROM sources WHERE state = 'pending'")}；待整併的候選：${count(db, "SELECT COUNT(*) AS n FROM candidates WHERE state = 'pending'")}；等待中的回合（還在執行）：${count(db, "SELECT COUNT(*) AS n FROM waiting_turns")}`,
   );
