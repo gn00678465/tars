@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Engine, TurnOutcome } from "../../../src/features/agent/engine.ts";
+import { estimateTokens, utf8Bytes } from "../../../src/features/agent/bytes.ts";
 import { adjust } from "../../../src/features/agent/ledger.ts";
 import { REFUSAL_TEXT } from "../../../src/features/agent/tars-tool.ts";
 import { reconcile } from "../../../src/features/agent/reconcile.ts";
@@ -1058,6 +1059,24 @@ describe("compatible providers", () => {
     // effort medium reasons: the whole output limit stays counted.
     for (const r of settled) expect(r.output_tokens).toBe(r.max_tokens);
     expect(h.frontend.notices().filter((n) => n === "usage_missing")).toHaveLength(3);
+  });
+
+  test("no usage, no reasoning, only a tool call: its name and input are the output", async () => {
+    // No effort levels: a request to it does not count as reasoning.
+    const { effortLevels: _, ...plain } = { ...OPENROUTER_ENTRY, id: "vendor/plain" };
+    const h = await compat({ extraModels: [plain] });
+    const input = { argv: ["script", "run", "x", "--note", "長".repeat(500)] };
+    h.openrouter.reply(
+      { kind: "message", toolCalls: [{ id: "p1", name: "tars", args: input }], usage: null },
+      compatText("done"),
+    );
+    const out = await send(h, { provider: "openrouter", model: plain.id }, "go");
+    expect(ended(out).state).toBe("completed");
+    const first = usageRows(h)[0];
+    expect(first?.state).toBe("estimated");
+    expect(first?.output_tokens).toBe(
+      estimateTokens(utf8Bytes("tars") + utf8Bytes(JSON.stringify(input))),
+    );
   });
 
   test("the answer's items and its estimated row are written in one transaction", async () => {
