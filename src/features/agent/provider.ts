@@ -53,6 +53,11 @@ export class ProviderError extends Error {
 }
 
 export const ANTHROPIC_API = "https://api.anthropic.com";
+/** Kept here rather than in openai-compat.ts so naming them does not load the SDK. */
+export const COMPAT_ENDPOINTS = {
+  gemini: "https://generativelanguage.googleapis.com/v1beta/openai/",
+  openrouter: "https://openrouter.ai/api/v1",
+} as const;
 export const E2E_BASE_URL_VAR = "TARS_E2E_ANTHROPIC_BASE_URL";
 
 /** The variables that point a provider at an e2e fake; each can send a key elsewhere. */
@@ -95,6 +100,19 @@ export function loopbackUrl(
   return value;
 }
 
+/** The real endpoint, or the e2e fake its variable names; the fake is announced on stderr. */
+export function compatBaseUrl(
+  provider: "gemini" | "openrouter",
+  env: Env,
+  warn: (line: string) => void,
+): string {
+  const name = E2E_BASE_URL_VARS[provider];
+  const fake = loopbackUrl(name, env[name], "http");
+  if (fake === undefined) return COMPAT_ENDPOINTS[provider];
+  warn(`${name} 把 ${provider} 導到 ${fake}`);
+  return fake;
+}
+
 export function resolveAnthropicBaseUrl(env: Env): string {
   return loopbackUrl(E2E_BASE_URL_VAR, env[E2E_BASE_URL_VAR], "http") ?? ANTHROPIC_API;
 }
@@ -109,8 +127,13 @@ export type AdapterFor = (
 /** The SDK is imported on demand: loaded at the top it adds ~30 ms to every other command (P5). */
 export const adapterFor: AdapterFor = async (provider, apiKey, env, warn) => {
   if (provider !== "anthropic") {
-    loopbackUrl(E2E_BASE_URL_VARS[provider], env[E2E_BASE_URL_VARS[provider]], "http");
-    throw new TarsError(`${provider} is not supported yet; only anthropic is`);
+    const compat = await import("./openai-compat.ts");
+    return compat.createCompatAdapter({
+      provider,
+      apiKey,
+      baseURL: compatBaseUrl(provider, env, warn),
+      warn,
+    });
   }
   const baseURL = resolveAnthropicBaseUrl(env);
   return (await import("./anthropic.ts")).createAnthropicAdapter({ apiKey, baseURL, warn });
