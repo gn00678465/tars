@@ -92,6 +92,13 @@ const FACTS: readonly Fact[] = [
     quote: "陳大文是我的大學同學",
   },
   {
+    match: "王小明開始學游泳",
+    page: "people/wang-xiaoming",
+    title: "王小明",
+    text: "王小明開始學游泳。",
+    quote: "王小明開始學游泳",
+  },
+  {
     match: "王小明養了一隻柴犬",
     page: "people/wang-xiaoming",
     title: "王小明",
@@ -189,12 +196,17 @@ async function inner(): Promise<number> {
   ];
   // Sync's requests are answered from their prompt; chat turns take the queued replies first.
   const bad = new Set<string>();
-  let hang: "consolidate" | undefined;
+  // While set, a consolidation request hangs and this file appears: the shell waits for it
+  // before kill -9, so the kill lands with the request in flight.
+  let hangMarker: string | undefined;
   fake.handler = (body) => {
     const system = systemOf(body);
     if (system === EXTRACT_SYSTEM) return extractReply(promptOf(body));
-    if (system === CONSOLIDATE_SYSTEM)
-      return hang === "consolidate" ? { kind: "hang" } : consolidateReply(promptOf(body), bad);
+    if (system === CONSOLIDATE_SYSTEM) {
+      if (hangMarker === undefined) return consolidateReply(promptOf(body), bad);
+      writeFileSync(hangMarker, "");
+      return { kind: "hang" };
+    }
     return text("(no reply queued)");
   };
   const env = { [E2E_BASE_URL_VAR]: fake.url };
@@ -461,12 +473,18 @@ async function inner(): Promise<number> {
     // --- 10. kill -9 while a page is being consolidated, then sync again.
     fake.reply(text("好"));
     await say("turn-kill", "王小明養了一隻柴犬");
-    hang = "consolidate";
+    hangMarker = join(host.fakeHome, "consolidating");
     const killed = await run(
       "sync-kill-9",
-      "tars wiki sync >/dev/null 2>&1 & p=$!; sleep 4; kill -9 $p; wait $p; echo killed",
+      [
+        "tars wiki sync >/dev/null 2>&1 & p=$!",
+        "i=0",
+        `while [ ! -e ${host.home}/consolidating ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done`,
+        `[ -e ${host.home}/consolidating ] && echo seen`,
+        "kill -9 $p; wait $p; echo rc=$?",
+      ].join("\n"),
     );
-    hang = undefined;
+    hangMarker = undefined;
     const again = await sync("sync-after-kill");
     const status2 = await run("status-2", "tars wiki status");
     const wang3 = page("people/wang-xiaoming");
@@ -475,13 +493,52 @@ async function inner(): Promise<number> {
     check(
       "kill-9",
       "after kill -9 mid-sync, the next sync finishes: no repeated entries, and the last run is not left running",
-      killed.stdout.includes("killed") &&
+      killed.stdout.includes("seen") &&
+        killed.stdout.includes("rc=137") &&
         again.exitCode === 0 &&
         texts.filter((t) => t === "王小明養了一隻柴犬。").length === 1 &&
         new Set(texts).size === texts.length &&
         /上次同步：.*completed/.test(status2.stdout) &&
         !/上次同步：.*running/.test(status2.stdout),
-      `${brief(again)}; entries ${JSON.stringify(texts)}; status ${JSON.stringify(status2.stdout.slice(0, 400))}`,
+      `killed ${JSON.stringify(killed.stdout)}; ${brief(again)}; entries ${JSON.stringify(texts)}; status ${JSON.stringify(status2.stdout.slice(0, 400))}`,
+    );
+
+    // --- 11. Between the page file and the transaction: a trigger fails the transaction.
+    fake.reply(text("好"));
+    await say("turn-window", "王小明開始學游泳");
+    const wikiDb = new Database(join(data, "agent", "wiki.db"));
+    wikiDb.run(
+      `CREATE TRIGGER fault BEFORE UPDATE ON candidates WHEN NEW.state = 'applied'
+       BEGIN SELECT RAISE(ABORT, 'e2e fault'); END`,
+    );
+    wikiDb.close();
+    const failed = await sync("sync-window-fault");
+    const journal = query<{ n: number }>("wiki.db", "SELECT COUNT(*) AS n FROM page_commits")[0]?.n;
+    const writtenPage = page("people/wang-xiaoming");
+    const dropTrigger = new Database(join(data, "agent", "wiki.db"));
+    dropTrigger.run("DROP TRIGGER fault");
+    dropTrigger.close();
+    const consolidations = () =>
+      fake.messages().filter((m) => systemOf(m.body) === CONSOLIDATE_SYSTEM).length;
+    const before = consolidations();
+    const settled = await sync("sync-window-settle");
+    const swim = page("people/wang-xiaoming").match(/王小明開始學游泳。/g)?.length;
+    const left = query<{ state: string }>(
+      "wiki.db",
+      "SELECT state FROM candidates ORDER BY id DESC LIMIT 1",
+    )[0]?.state;
+    check(
+      "write-window",
+      "a failure after the page file and before its transaction is settled from the journal: no request, the entry once",
+      failed.exitCode === 1 &&
+        journal === 1 &&
+        writtenPage.includes("王小明開始學游泳。") &&
+        settled.exitCode === 0 &&
+        consolidations() === before &&
+        swim === 1 &&
+        left === "applied" &&
+        query<{ n: number }>("wiki.db", "SELECT COUNT(*) AS n FROM page_commits")[0]?.n === 0,
+      `${brief(failed)}; journal ${journal}; ${brief(settled)}; entries ${swim}; candidate ${left}`,
     );
   } finally {
     await fake.stop();
