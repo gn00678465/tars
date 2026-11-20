@@ -486,6 +486,39 @@ describe("consolidation", () => {
     },
   );
 
+  test("an assistant-only batch with a facts merge: the file stays, attempts go up", async () => {
+    const h = await harness();
+    const t1 = h.turn({ owner: "王小明喜歡茶，也喜歡咖啡" });
+    h.fake.reply(
+      extracted(
+        { source: t1.ref, quote: "王小明喜歡茶", text: "喜歡茶。" },
+        { source: t1.ref, quote: "也喜歡咖啡", text: "喜歡咖啡。" },
+      ),
+      json(
+        keepAll([
+          { from: ["c1"], text: "喜歡茶。" },
+          { from: ["c2"], text: "喜歡咖啡。" },
+        ]),
+      ),
+    );
+    await h.sync();
+    const before = h.page("people/wang-xiaoming");
+    const t2 = h.turn({ owner: "x", assistant: ["他可能會升職"] });
+    h.fake.reply(
+      extracted({ source: t2.ref, quote: "他可能會升職", speaker: "assistant", section: "open" }),
+      json({
+        summary: { keep: true },
+        facts: [{ op: "merge", ids: ["i1", "i2"], text: "擁有者犯了詐欺。", from: ["c3"] }],
+        open: [{ op: "add", text: "可能升職。", from: ["c3"] }],
+      }),
+    );
+    await h.sync();
+    expect(h.page("people/wang-xiaoming")).toBe(before);
+    expect(
+      one(h.wiki(), "SELECT state, attempts, last_error FROM candidates WHERE id = 3"),
+    ).toEqual({ state: "pending", attempts: 1, last_error: "assistant_only" });
+  });
+
   test("one candidate in an add and in the summary rewrite's from passes", async () => {
     const h = await harness();
     const t = h.turn({ owner: OWNER });

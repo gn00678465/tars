@@ -120,8 +120,9 @@ Rules:
   "from" may repeat candidates that an operation also uses.
 - Entries you do not mention stay exactly as they are.
 - What the owner said outranks what the assistant said. A candidate with
-  speaker=assistant may only be used in "open". Any operation on "facts", and a
-  rewrite of "summary", needs at least one speaker=owner candidate in "from".
+  speaker=assistant may only be used in "open". Any operation on "facts"
+  (add, update, retract, merge), and a rewrite of "summary", needs at least one
+  speaker=owner candidate in "from".
 - When two sources disagree and you cannot tell which is right, keep both, each
   with its date.
 - "add" creates an entry. "update" replaces an entry's text; it keeps every
@@ -130,7 +131,11 @@ Rules:
   the reason.
 - A list holds at most 20 entries. When an "add" would exceed that, first "merge"
   the oldest entries (the lowest numbers) into one dated entry. A merged entry
-  keeps all the sources of the entries it replaces.
+  keeps all the sources of the entries it replaces. Its text may only restate
+  what those entries say. A "merge" in "facts" must name in "from" at least one
+  speaker=owner candidate and no speaker=assistant candidate; it may repeat a
+  candidate that another operation also uses. Without such a candidate, do not
+  merge "facts".
 - Do not write [[source:…]] or "（助理的說法）" inside an entry's "text". The
   program attaches sources from the candidates you name in "from".
 - Change "summary" only when the page's picture has changed. To keep it, output
@@ -148,7 +153,7 @@ Format:
           {"op":"update","id":"i2","text":"…","from":["c43"],
            "removed_sources":[{"source":"<conv>/<turn>","reason":"…"}]},
           {"op":"retract","id":"i5","reason":"…","from":["c44"]},
-          {"op":"merge","ids":["i1","i2"],"text":"…"}],
+          {"op":"merge","ids":["i1","i2"],"text":"…","from":["c41"]}],
  "open":[{"op":"add","text":"…","from":["c42"]}],
  "related":["projects/<slug>"],
  "aliases":["…"],

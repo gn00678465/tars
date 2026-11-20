@@ -237,8 +237,29 @@ describe("applyPatch: each check refuses and leaves the page as it was", () => {
     );
   });
 
-  test("4 assistant_only: facts add, update, retract and a summary rewrite need the owner", () => {
+  test("4 assistant_only: facts add, update, retract, merge and a summary rewrite need the owner", () => {
     const only = { dropped: [{ candidate: "c41", reason: "dup" }] };
+    // The review's attack: only an assistant candidate, used in open, backs a facts merge.
+    const tea = { ...BASE, facts: [e(1, "喜歡茶。", [A]), e(2, "喜歡咖啡。", [B])] };
+    const attack = patch({
+      ...only,
+      facts: [{ op: "merge", ids: ["i1", "i2"], text: "擁有者犯了詐欺。", from: ["c42"] }],
+      open: [{ op: "add", text: "可能升職。", from: ["c42"] }],
+    });
+    const before = structuredClone(tea);
+    expect(applyPatch(tea, attack, ctx())).toEqual({
+      ok: false,
+      reason: "assistant_only",
+    } as never);
+    expect(tea).toEqual(before);
+    const mixed = patch({
+      ...BOTH,
+      facts: [
+        { op: "merge", ids: ["i1", "i2"], text: "合併。", from: ["c41", "c42"] },
+        ...BOTH.facts,
+      ],
+    });
+    rejects(mixed, "assistant_only");
     rejects(patch({ ...only, facts: [{ op: "add", text: "x", from: ["c42"] }] }), "assistant_only");
     rejects(
       patch({ ...only, facts: [{ op: "update", id: "i1", text: "x", from: ["c42"] }] }),
@@ -262,9 +283,13 @@ describe("applyPatch: each check refuses and leaves the page as it was", () => {
     );
   });
 
-  test("5 no_from: an add with nothing behind it", () => {
+  test("5 no_from: an add with nothing behind it, or a facts merge without from", () => {
     rejects(
       patch({ ...BOTH, open: [...BOTH.open, { op: "add", text: "x", from: [] }] }),
+      "no_from",
+    );
+    rejects(
+      patch({ ...BOTH, facts: [{ op: "merge", ids: ["i1", "i2"], text: "x" }, ...BOTH.facts] }),
       "no_from",
     );
   });
@@ -289,13 +314,19 @@ describe("applyPatch: each check refuses and leaves the page as it was", () => {
 
   test("7 bad_merge: not the lowest-numbered entries, or only one", () => {
     rejects(
-      patch({ ...BOTH, facts: [...BOTH.facts, { op: "merge", ids: ["i2"], text: "x" }] }),
+      patch({
+        ...BOTH,
+        facts: [...BOTH.facts, { op: "merge", ids: ["i2"], text: "x", from: ["c41"] }],
+      }),
       "bad_merge",
     );
     const three = { ...BASE, facts: [...BASE.facts, e(4, "第三。", [D])], nextItem: 5 };
     const r = applyPatch(
       three,
-      patch({ ...BOTH, facts: [...BOTH.facts, { op: "merge", ids: ["i2", "i4"], text: "x" }] }),
+      patch({
+        ...BOTH,
+        facts: [...BOTH.facts, { op: "merge", ids: ["i2", "i4"], text: "x", from: ["c41"] }],
+      }),
       ctx(),
     );
     expect(r).toEqual({ ok: false, reason: "bad_merge" } as never);
@@ -388,7 +419,7 @@ describe("applyPatch: changes that pass", () => {
     expect(r.page.changeLog[0]).toBe("2026-12-05 事實：撤回 i1（搬家取消）。未決：新增 i4。");
   });
 
-  test("merge takes the lowest numbers even with a gap, and keeps every source", () => {
+  test("merge takes the lowest numbers even with a gap; its sources are the merged ones only", () => {
     const gap = {
       ...BASE,
       facts: [e(2, "二。", [A]), e(5, "五。", [B]), e(6, "六。", [C])],
@@ -397,7 +428,7 @@ describe("applyPatch: changes that pass", () => {
     const r = applies(
       patch({
         ...BOTH,
-        facts: [{ op: "merge", ids: ["i2", "i5"], text: "二與五。" }, ...BOTH.facts],
+        facts: [{ op: "merge", ids: ["i2", "i5"], text: "二與五。", from: ["c41"] }, ...BOTH.facts],
       }),
       {},
       gap,
@@ -407,6 +438,29 @@ describe("applyPatch: changes that pass", () => {
       e(6, "六。", [C]),
       e(8, "在新竹上班。", [D]),
     ]);
+  });
+
+  test("a candidate only in a merge's from has no destination", () => {
+    rejects(
+      patch({
+        open: BOTH.open,
+        facts: [{ op: "merge", ids: ["i1", "i2"], text: "合併。", from: ["c41"] }],
+      }),
+      "bad_from",
+    );
+  });
+
+  test("an open merge needs no from", () => {
+    const full = { ...BASE, open: [e(3, "三。", [C], true), e(4, "四。", [D])], nextItem: 5 };
+    const r = applies(
+      patch({
+        ...BOTH,
+        open: [{ op: "merge", ids: ["i3", "i4"], text: "三與四。" }, ...BOTH.open],
+      }),
+      {},
+      full,
+    );
+    expect(r.page.open[0]).toEqual(e(6, "三與四。", [C, D], true));
   });
 
   test("a candidate may back both an add and the summary rewrite", () => {
@@ -475,6 +529,19 @@ describe("the assistant mark", () => {
       first.page,
     );
     expect(second.page.open.at(-1)?.assistant).toBe(false);
+  });
+
+  test("an open merge of a marked and an unmarked entry keeps the mark, even with the owner in from", () => {
+    const two = { ...BASE, open: [e(3, "三。", [C], true), e(4, "四。", [D])], nextItem: 5 };
+    const r = applies(
+      patch({
+        ...BOTH,
+        open: [{ op: "merge", ids: ["i3", "i4"], text: "三與四。", from: ["c41"] }, ...BOTH.open],
+      }),
+      {},
+      two,
+    );
+    expect(r.page.open[0]?.assistant).toBe(true);
   });
 });
 

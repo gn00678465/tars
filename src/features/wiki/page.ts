@@ -345,7 +345,13 @@ export type Op =
       readonly reason: string;
       readonly from: readonly string[];
     }
-  | { readonly op: "merge"; readonly ids: readonly string[]; readonly text: string };
+  | {
+      readonly op: "merge";
+      readonly ids: readonly string[];
+      readonly text: string;
+      /** Required in facts (check 5); it only shows the owner spoke, and adds no source. */
+      readonly from?: readonly string[];
+    };
 export type SummaryPatch =
   | { readonly keep: true }
   | {
@@ -397,7 +403,12 @@ function isOp(v: unknown): v is Op {
         isStrings(v.from)
       );
     case "merge":
-      return onlyKeys(v, ["op", "ids", "text"]) && isStrings(v.ids) && isString(v.text);
+      return (
+        onlyKeys(v, ["op", "ids", "text"], ["from"]) &&
+        isStrings(v.ids) &&
+        isString(v.text) &&
+        (v.from === undefined || isStrings(v.from))
+      );
     default:
       return false;
   }
@@ -525,6 +536,13 @@ export function applyPatch(page: Page, patch: Patch, ctx: ApplyContext): ApplyRe
       if (!byKey.has(key) || inOps.has(key)) return fail("bad_from");
       inOps.add(key);
     }
+  // A merge's "from" may repeat a key another operation uses, and is no destination of its own.
+  const mergeFrom = ops.flatMap(([, op]) => (op.op === "merge" ? (op.from ?? []) : []));
+  for (const [, op] of ops) {
+    const from = op.op === "merge" ? (op.from ?? []) : [];
+    if (from.some((k) => !byKey.has(k)) || new Set(from).size !== from.length)
+      return fail("bad_from");
+  }
   const summaryFrom = patch.summary.keep ? [] : patch.summary.from;
   if (summaryFrom.some((k) => !byKey.has(k)) || new Set(summaryFrom).size !== summaryFrom.length)
     return fail("bad_from");
@@ -532,7 +550,8 @@ export function applyPatch(page: Page, patch: Patch, ctx: ApplyContext): ApplyRe
   const droppedKeys = new Set(dropped.map((d) => d.candidate));
   if (droppedKeys.size !== dropped.length) return fail("bad_from");
   for (const key of droppedKeys)
-    if (!byKey.has(key) || inOps.has(key) || summaryFrom.includes(key)) return fail("bad_from");
+    if (!byKey.has(key) || inOps.has(key) || summaryFrom.includes(key) || mergeFrom.includes(key))
+      return fail("bad_from");
   for (const c of ctx.candidates)
     if (!inOps.has(c.key) && !summaryFrom.includes(c.key) && !droppedKeys.has(c.key))
       return fail("bad_from");
@@ -541,7 +560,13 @@ export function applyPatch(page: Page, patch: Patch, ctx: ApplyContext): ApplyRe
   const speakers = (keys: readonly string[]) =>
     keys.map((k) => (byKey.get(k) as BatchCandidate).speaker);
   for (const [name, op] of ops) {
-    if (op.op === "merge") continue;
+    if (op.op === "merge") {
+      if (name === "open") continue;
+      const from = op.from ?? [];
+      if (from.length === 0) return fail("no_from");
+      if (speakers(from).some((s) => s !== "owner")) return fail("assistant_only");
+      continue;
+    }
     if (op.from.length === 0) return fail("no_from");
     if (name === "facts" && !speakers(op.from).includes("owner")) return fail("assistant_only");
   }
@@ -652,7 +677,7 @@ export function applyPatch(page: Page, patch: Patch, ctx: ApplyContext): ApplyRe
         id: next,
         text,
         sources: unique(merged.flatMap((e) => e.sources)),
-        assistant: merged.every((e) => e.assistant),
+        assistant: merged.some((e) => e.assistant),
         temp: false,
       };
       // The merged entry takes the place of the first one it replaces.
