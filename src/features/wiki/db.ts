@@ -173,6 +173,19 @@ export interface WikiSpend {
 
 const NONE: WikiSpend = { period: 0, today: 0, rawToday: 0, rawMonth: 0 };
 
+const sumUsage = (db: Database, where: string, ...params: (string | number)[]) =>
+  (
+    db.query(`SELECT COALESCE(SUM(cost_usd), 0) AS s FROM usage WHERE ${where}`).get(...params) as {
+      s: number;
+    }
+  ).s;
+
+/** What sync's own caps see: every provider's rows, adjustments aside. */
+export function rawSpend(db: Database, now: Date): { today: number; month: number } {
+  const day = utcDay(now);
+  return { today: sumUsage(db, "day = ?", day), month: sumUsage(db, "month = ?", day.slice(0, 7)) };
+}
+
 /**
  * Sync's spend, read fresh each time in one read transaction. An adjustment is the provider's
  * bill up to its time, sync's requests included, so only later rows (or rows still reserved,
@@ -198,26 +211,21 @@ export function wikiSpend(
   try {
     const adj = agentDb === undefined ? null : latestAdjustment(agentDb, provider, cfg, now);
     const day = utcDay(now);
-    const month = day.slice(0, 7);
-    const sum = (where: string, ...params: (string | number)[]) =>
-      (
-        wiki
-          .query(`SELECT COALESCE(SUM(cost_usd), 0) AS s FROM usage WHERE ${where}`)
-          .get(...params) as { s: number }
-      ).s;
+    const sum = (where: string, ...params: (string | number)[]) => sumUsage(wiki, where, ...params);
     return wiki
       .transaction(() => {
         const monthly = cfg.period === "utc-month";
         const scope = monthly ? "provider = ? AND month = ?" : "provider = ?";
-        const scoped = monthly ? [provider, month] : [provider];
+        const scoped = monthly ? [provider, day.slice(0, 7)] : [provider];
+        const raw = rawSpend(wiki, now);
         return {
           period:
             adj === null
               ? sum(scope, ...scoped)
               : sum(`${scope} AND (at > ? OR state = 'reserved')`, ...scoped, adj.at),
           today: sum("provider = ? AND day = ?", provider, day),
-          rawToday: sum("day = ?", day),
-          rawMonth: sum("month = ?", month),
+          rawToday: raw.today,
+          rawMonth: raw.month,
         };
       })
       .deferred();

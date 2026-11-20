@@ -268,7 +268,7 @@ function parseEntry(rest: string, id: number, temp: boolean): Entry | undefined 
   return { id, text, sources: unique(sources), assistant, temp };
 }
 
-const entryLine = (e: Entry) =>
+export const entryLine = (e: Entry) =>
   `- [i${e.id}] ${e.text}${e.assistant ? ASSISTANT_MARK : ""}${e.sources
     .map((s) => ` ${sourceLink(s)}`)
     .join("")}`;

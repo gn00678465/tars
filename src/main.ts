@@ -17,6 +17,7 @@ import { registerSecretCommands } from "./features/script/secret.ts";
 import { scriptRuntime } from "./features/script/runtime.ts";
 import { launch } from "./features/session/launch.ts";
 import { registerSessions, type SessionDeps } from "./features/session/session.ts";
+import { registerWikiCommands } from "./features/wiki/command.ts";
 
 export type Deps = InstallDeps &
   SessionDeps & {
@@ -114,6 +115,7 @@ Examples:
     },
     exitWith,
   );
+  registerWikiCommands(program, { ...agent, signals: deps.signals }, exitWith);
   return program;
 }
 
