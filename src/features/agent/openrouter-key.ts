@@ -104,7 +104,7 @@ export async function reconcileAfterTurn(
     const key = await fetchKeyLimit(apiKey, baseURL, signal);
     if (key === undefined) return deps.log.log("warning", {});
     const result = reconcileOpenRouter(deps.db, cfg, key, deps.now());
-    if (result.kind === "raised") deps.log.log("reconcile", { costUsd: result.to });
+    if (result.kind === "raised") deps.log.log("warning", { costUsd: result.to });
     else if (result.kind === "no_limit" && !warned.has("no_limit")) {
       warned.add("no_limit");
       deps.warn("OpenRouter 的金鑰沒有設額度上限，本機的帳無法自動校正");
