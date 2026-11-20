@@ -1,11 +1,13 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
-import { CONFIG_TEMPLATE } from "../../../src/features/agent/config.ts";
-import { adjust } from "../../../src/features/agent/ledger.ts";
+import { CONFIG_TEMPLATE, loadConfig } from "../../../src/features/agent/config.ts";
+import { adjust, spent } from "../../../src/features/agent/ledger.ts";
 import type { Log, LogEvent, LogFields } from "../../../src/features/agent/log.ts";
 import {
   fetchKeyLimit,
   reconcileAfterTurn,
+  reconcileOpenRouter,
   resetReconcileWarnings,
   type ReconcileDeps,
 } from "../../../src/features/agent/openrouter-key.ts";
@@ -126,6 +128,73 @@ describe("reconciling against the key limit", () => {
     expect(
       await fetchKeyLimit("or-test", x.openrouter.url, AbortSignal.timeout(50)),
     ).toBeUndefined();
+  });
+});
+
+describe("a cost adjust from another terminal", () => {
+  /**
+   * The harness's connection, with `onWrite` run by another connection to the same file at one
+   * point of the reconcile; that connection does not wait for a lock.
+   */
+  async function race(at: "first_lock" | "spend_read") {
+    const x = await setup();
+    const now = x.clock.now();
+    adjust(x.db, "openrouter", 1, undefined, now);
+    const cfg = (await loadConfig(x.paths)).config.providers.openrouter;
+    if (cfg === undefined) throw new Error("no [providers.openrouter]");
+    const other = new Database(x.paths.agentDb);
+    other.exec("PRAGMA busy_timeout=0");
+    let fired = false;
+    let refused = false;
+    const otherAdjusts = () => {
+      if (fired) return;
+      fired = true;
+      try {
+        adjust(other, "openrouter", 9, "other terminal", now);
+      } catch {
+        refused = true;
+      }
+    };
+    const db = new Proxy(x.db, {
+      get(target, prop) {
+        if (prop === "query" && at === "spend_read")
+          return (sql: string) => {
+            if (sql.includes("SUM(cost_usd)")) otherAdjusts();
+            return target.query(sql);
+          };
+        if (prop === "transaction" && at === "first_lock")
+          return (fn: () => unknown) => {
+            const tx = target.transaction(fn);
+            return Object.assign((...a: []) => tx(...a), {
+              deferred: tx.deferred,
+              exclusive: tx.exclusive,
+              immediate: (...a: []) => {
+                otherAdjusts();
+                return tx.immediate(...a);
+              },
+            });
+          };
+        const v: unknown = Reflect.get(target, prop);
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    const result = reconcileOpenRouter(db, cfg, { limit: 10, remaining: 8 }, now);
+    if (refused) adjust(other, "openrouter", 9, "other terminal, again", now);
+    other.close();
+    return { result, refused, books: spent(x.db, "openrouter", cfg, now) };
+  }
+
+  test("committed just before the reconcile takes the lock: it is read, nothing written", async () => {
+    const r = await race("first_lock");
+    expect(r.result).toEqual({ kind: "lower", gapUsd: 7 });
+    expect(r.books).toBe(9);
+  });
+
+  test("tried while the reconcile reads: refused until it is done, and the books end at 9", async () => {
+    const r = await race("spend_read");
+    expect(r.refused).toBe(true);
+    expect(r.result).toEqual({ kind: "raised", to: 2 });
+    expect(r.books).toBe(9);
   });
 });
 

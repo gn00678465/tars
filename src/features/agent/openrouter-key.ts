@@ -60,13 +60,20 @@ export function reconcileOpenRouter(
 ): ReconcileResult {
   if (key.limit === null || key.remaining === null) return { kind: "no_limit" };
   const used = key.limit - key.remaining;
-  const local = spent(db, "openrouter", cfg, now);
-  if (used - local >= MIN_GAP_USD) {
-    adjust(db, "openrouter", used, "auto: /key", now);
-    return { kind: "raised", to: used };
-  }
-  if (local - used >= MIN_GAP_USD) return { kind: "lower", gapUsd: local - used };
-  return { kind: "skip" };
+  // Read, compared and written under one write lock: `tars cost adjust` may run in another
+  // terminal, and a figure it wrote between a separate read and the write would be replaced by
+  // this lower one.
+  return db
+    .transaction((): ReconcileResult => {
+      const local = spent(db, "openrouter", cfg, now);
+      if (used - local >= MIN_GAP_USD) {
+        adjust(db, "openrouter", used, "auto: /key", now);
+        return { kind: "raised", to: used };
+      }
+      if (local - used >= MIN_GAP_USD) return { kind: "lower", gapUsd: local - used };
+      return { kind: "skip" };
+    })
+    .immediate();
 }
 
 export interface ReconcileDeps {
