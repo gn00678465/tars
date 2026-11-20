@@ -4,7 +4,7 @@ import type { Provider, SecretStore } from "../../core/secrets.ts";
 import { utf8Bytes } from "./bytes.ts";
 import { loadCatalog, resolve, type ResolvedModel } from "./catalog.ts";
 import { loadConfig, type Limits, type ProviderConfig } from "./config.ts";
-import { recordFailure, recordStart } from "./ledger.ts";
+import { recordEnd, recordEstimatedEnd, recordFailure, recordStart } from "./ledger.ts";
 import { ProviderError, type AdapterFor, type ProviderAdapter } from "./provider.ts";
 import type {
   FailReason,
@@ -12,6 +12,7 @@ import type {
   ProviderEvent,
   ReasonCode,
   RejectReason,
+  TurnKind,
   Usage,
 } from "./types.ts";
 
@@ -124,8 +125,24 @@ export interface Consumed {
   readonly text: string;
   readonly calls: readonly Extract<ProviderEvent, { type: "tool_call" }>[];
   readonly receivedStart: boolean;
+  /** start reported the input tokens. */
+  readonly inputKnown: boolean;
+  /** The request counted as reasoning; see reasoningOf. */
+  readonly reasoning: boolean;
   readonly end?: Extract<ProviderEvent, { type: "end" }>;
   readonly error?: ProviderError;
+}
+
+/**
+ * A model may think without a word in the stream: when its catalog entry has levels and this
+ * request did not send the off setting, it counts as reasoning. Only an off setting the model
+ * accepts (thinkingTypes has disabled), with no thinking seen, is not.
+ */
+function reasoningOf(req: ModelRequest, sawThinking: boolean): boolean {
+  if (sawThinking) return true;
+  if (req.effort !== undefined && req.effort !== "off") return true;
+  const offSent = req.effort === "off" && req.capabilities.thinkingTypes.includes("disabled");
+  return req.capabilities.effortLevels.length > 0 && !offSent;
 }
 
 /** What a failed request leads to when it is not retried. */
@@ -163,24 +180,38 @@ export async function consume(
   let text = "";
   const calls: Extract<ProviderEvent, { type: "tool_call" }>[] = [];
   let receivedStart = false;
+  let inputKnown = false;
+  let sawThinking = false;
+  const read = () => ({
+    text,
+    calls,
+    receivedStart,
+    inputKnown,
+    reasoning: reasoningOf(req, sawThinking),
+  });
   try {
     for await (const ev of adapter.stream(req, signal)) {
       if (ev.type === "start") {
         receivedStart = true;
-        if (ev.usage !== undefined) recordStart(db, usageId, ev.usage);
+        if (ev.usage !== undefined) {
+          inputKnown = true;
+          recordStart(db, usageId, ev.usage);
+        }
       } else if (ev.type === "text") {
         text += ev.delta;
         onEvent({ type: "delta", text: ev.delta });
-      } else if (ev.type === "thinking") onEvent(ev);
-      else if (ev.type === "tool_call") calls.push(ev);
-      else return { text, calls, receivedStart, end: ev };
+      } else if (ev.type === "thinking") {
+        sawThinking = true;
+        onEvent(ev);
+      } else if (ev.type === "tool_call") calls.push(ev);
+      else return { ...read(), end: ev };
     }
     throw new ProviderError("connection", { receivedStart, receivedContent: text !== "" });
   } catch (err) {
     if (!(err instanceof ProviderError) && !signal.aborted) throw err;
     const seen = { receivedStart, receivedContent: text !== "" || calls.length > 0 };
     const error = signal.aborted ? new ProviderError("aborted", seen) : (err as ProviderError);
-    return { text, calls, receivedStart, error };
+    return { ...read(), error };
   }
 }
 
@@ -191,11 +222,32 @@ export function settleFailure(db: Database, usageId: number, got: Consumed): voi
     ...(e.kind === "aborted" || e.status === undefined ? {} : { status: e.status }),
     receivedStart: got.receivedStart,
     textBytes: utf8Bytes(got.text),
+    inputKnown: got.inputKnown,
+    reasoning: got.reasoning,
   });
 }
 
-/** Temporary until settleEnd: a response that reported no usage cannot be settled yet. */
-export function reportedUsage(end: { readonly usage?: Usage }): Usage {
-  if (end.usage === undefined) throw new Error("the response reported no usage");
-  return end.usage;
+/**
+ * Settles a request that reached its end, in the caller's transaction. No usage in the result:
+ * the response reported none and its row is an estimate; the caller tells the owner.
+ */
+export function settleEnd(
+  db: Database,
+  usageId: number,
+  got: Consumed,
+  opts: { readonly turnKind: TurnKind | "sync"; readonly prefixKey: string },
+): { readonly usage?: Usage } {
+  const end = got.end as NonNullable<Consumed["end"]>;
+  if (end.usage === undefined) {
+    recordEstimatedEnd(db, { usageId, textBytes: utf8Bytes(got.text), reasoning: got.reasoning });
+    return {};
+  }
+  recordEnd(db, {
+    usageId,
+    usage: end.usage,
+    ...(end.costUsd === undefined ? {} : { costUsd: end.costUsd }),
+    turnKind: opts.turnKind,
+    prefixKey: opts.prefixKey,
+  });
+  return { usage: end.usage };
 }

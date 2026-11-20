@@ -9,6 +9,15 @@ import { reconcile } from "../../../src/features/agent/reconcile.ts";
 import { readItems } from "../../../src/features/agent/store.ts";
 import type { Effort, Item } from "../../../src/features/agent/types.ts";
 import { tarsCall, text, toolUse, type FakeBlock, type FakeReply } from "../../fakes/anthropic.ts";
+import { compatText, type FakeCompatReply } from "../../fakes/openai-compat.ts";
+import { openDb } from "../../../src/features/agent/db.ts";
+import {
+  compatHarness,
+  enableCompat,
+  GEMINI_ENTRY,
+  OPENROUTER_ENTRY,
+  type CompatHarness,
+} from "./compat-fixture.ts";
 import { tempHome, TEST_NOW } from "../../helpers.ts";
 import { installSample, sampleScript } from "../script/sample.ts";
 import { writeWikiIndex } from "../wiki/wiki-fixture.ts";
@@ -842,5 +851,206 @@ describe("the wiki index in a conversation", () => {
       "<wiki-index>",
       "again",
     ]);
+  });
+});
+
+describe("compatible providers", () => {
+  const compats: CompatHarness[] = [];
+  afterEach(async () => {
+    for (const h of compats.splice(0)) await h.stop();
+  });
+  async function compat(opts: HarnessOptions = {}) {
+    const h = await compatHarness(opts);
+    compats.push(h);
+    return h;
+  }
+  type Ref = { provider: "gemini" | "openrouter"; model: string };
+  const GEMINI: Ref = { provider: "gemini", model: GEMINI_ENTRY.id };
+  const OPENROUTER: Ref = { provider: "openrouter", model: OPENROUTER_ENTRY.id };
+  const send = (h: CompatHarness, ref: Ref, message: string, signal?: AbortSignal) =>
+    h.engine.runTurn(
+      { ...ref, effort: "medium", text: message },
+      h.frontend,
+      signal ?? new AbortController().signal,
+    );
+  const usageRows = (h: CompatHarness) =>
+    rows<{
+      state: string;
+      cost_usd: number;
+      cost_source: string;
+      reserved_usd: number;
+      output_tokens: number;
+      max_tokens: number;
+    }>(h.db, "SELECT * FROM usage ORDER BY id");
+  const fakeOf = (h: CompatHarness, ref: Ref) =>
+    ref.provider === "gemini" ? h.gemini : h.openrouter;
+
+  test("while the stream runs without input usage, the row stays at the reserved amount", async () => {
+    const h = await compat();
+    h.gemini.reply({ kind: "hang", text: "thinking" });
+    const ctl = new AbortController();
+    const pending = send(h, GEMINI, "hi", ctl.signal);
+    while (h.gemini.chats().length === 0) await Bun.sleep(5);
+    await Bun.sleep(30);
+    const [during] = usageRows(h);
+    expect(during).toMatchObject({ state: "reserved" });
+    expect(during?.cost_usd).toBe(during?.reserved_usd);
+    ctl.abort();
+    await pending;
+  });
+
+  test("a normal end is final; OpenRouter's amount is the response's cost", async () => {
+    const h = await compat();
+    h.openrouter.reply(compatText("hello", { prompt: 30, completion: 5, cost: 0.0042 }));
+    expect(ended(await send(h, OPENROUTER, "hi")).state).toBe("completed");
+    expect(usageRows(h)[0]).toMatchObject({
+      state: "final",
+      cost_usd: 0.0042,
+      cost_source: "provider",
+    });
+    h.gemini.reply(compatText("hello", { prompt: 1000, completion: 500, total: 1500 }));
+    expect(ended(await send(h, GEMINI, "hi")).state).toBe("completed");
+    // 1,000 in at 1 USD and 500 out at 4 USD per million.
+    expect(usageRows(h)[1]).toMatchObject({ state: "final", cost_source: "table" });
+    expect(usageRows(h)[1]?.cost_usd).toBeCloseTo(0.003, 10);
+  });
+
+  test("CUJ 7: Gemini at medium breaks off mid-stream: estimated, output at the full limit", async () => {
+    const h = await compat();
+    h.gemini.reply({ kind: "disconnect", text: "half an answer" });
+    const out = ended(await send(h, GEMINI, "hi"));
+    expect(out).toMatchObject({ state: "failed", reason: "stream_interrupted" });
+    const [row] = usageRows(h);
+    expect(row).toMatchObject({ state: "estimated", cost_source: "estimate" });
+    expect(row?.output_tokens).toBe(row?.max_tokens);
+    expect(row?.cost_usd).toBeCloseTo(row?.reserved_usd ?? -1, 10);
+  });
+
+  describe("what counts as reasoning", () => {
+    const PLAIN: Ref = { provider: "gemini", model: "gemini-plain" };
+    const plainEntry = { ...GEMINI_ENTRY, id: "gemini-plain", label: "plain" };
+    const { effortLevels: _, ...noLevels } = plainEntry;
+    const broken = async (h: CompatHarness, ref: Ref, reply: FakeCompatReply) => {
+      fakeOf(h, ref).reply(reply);
+      ended(await send(h, ref, "hi"));
+      return usageRows(h).at(-1);
+    };
+
+    test("a thinking signal in the stream", async () => {
+      const h = await compat({ extraModels: [noLevels] });
+      const row = await broken(h, PLAIN, { kind: "disconnect", text: "x" });
+      expect(row?.output_tokens).toBeLessThan(row?.max_tokens ?? 0);
+      // Same model, a reasoning delta before the break.
+      h.gemini.reply({ kind: "message", text: "x", reasoning: true, finish: null });
+      ended(await send(h, PLAIN, "hi"));
+      const thought = usageRows(h).at(-1);
+      expect(thought?.output_tokens).toBe(thought?.max_tokens);
+    });
+
+    test("a level sent", async () => {
+      const h = await compat();
+      const row = await broken(h, GEMINI, { kind: "disconnect", text: "x" });
+      expect(h.gemini.chats()[0]?.body.reasoning_effort).toBe("medium");
+      expect(row?.output_tokens).toBe(row?.max_tokens);
+    });
+
+    test("levels on the model and no off setting sent: the summary request to OpenRouter", async () => {
+      const h = await compat({ config: SHORT_KEEP });
+      const convId = ended(await sendText(h, OPENROUTER, "first")).convId;
+      h.openrouter.reply({ kind: "disconnect", text: "## Goal" });
+      await h.engine.compact(
+        convId,
+        { trigger: "manual" },
+        h.frontend,
+        new AbortController().signal,
+      );
+      const body = h.openrouter.chats().at(-1)?.body;
+      expect(body?.reasoning).toEqual({ effort: "low" });
+      const row = usageRows(h).at(-1);
+      expect(row?.output_tokens).toBe(row?.max_tokens);
+    });
+
+    test("the off setting sent and no thinking seen: not reasoning", async () => {
+      const h = await compat({ config: SHORT_KEEP });
+      const convId = ended(await sendText(h, GEMINI, "first")).convId;
+      h.gemini.reply({ kind: "disconnect", text: "## Goal" });
+      await h.engine.compact(
+        convId,
+        { trigger: "manual" },
+        h.frontend,
+        new AbortController().signal,
+      );
+      expect(h.gemini.chats().at(-1)?.body.reasoning_effort).toBe("none");
+      const row = usageRows(h).at(-1);
+      expect(row?.output_tokens).toBeLessThan(row?.max_tokens ?? 0);
+    });
+
+    // keep_recent 1,000 tokens: /compact has the earlier turns to replace.
+    const SHORT_KEEP = enableCompat(configWith({ compact_keep_recent_tokens: 1000 }));
+    // A conversation long enough that /compact has something to replace.
+    async function sendText(h: CompatHarness, ref: Ref, first: string) {
+      const fake = fakeOf(h, ref);
+      let convId: string | undefined;
+      let out: TurnOutcome | undefined;
+      for (let i = 0; i < 6; i++) {
+        fake.reply(compatText("a".repeat(3000)));
+        out = await h.engine.runTurn(
+          {
+            ...ref,
+            effort: "medium",
+            text: `${first} ${"u".repeat(3000)} ${i}`,
+            ...(convId === undefined ? {} : { convId }),
+          },
+          h.frontend,
+          new AbortController().signal,
+        );
+        convId = ended(out).convId;
+      }
+      return out as TurnOutcome;
+    }
+  });
+
+  test("an end without usage: the turn completes, the tool runs, the row is estimated, a notice", async () => {
+    const h = await compat();
+    h.openrouter.reply(
+      {
+        kind: "message",
+        toolCalls: [{ id: "p1", name: "tars", args: { argv: ["cost"] } }],
+        usage: null,
+      },
+      compatText("done", null),
+    );
+    const out = ended(await send(h, OPENROUTER, "cost?"));
+    expect(out.state).toBe("completed");
+    expect(rows<{ state: string }>(h.db, "SELECT state FROM tool_calls")).toEqual([
+      { state: "done" },
+    ]);
+    expect(usageRows(h).map((r) => [r.state, r.cost_source])).toEqual([
+      ["estimated", "estimate"],
+      ["estimated", "estimate"],
+    ]);
+    expect(h.frontend.notices().filter((n) => n === "usage_missing")).toHaveLength(2);
+  });
+
+  test("the answer's items and its estimated row are written in one transaction", async () => {
+    const h = await compat();
+    const writer = await openDb(h.paths);
+    writer.run(
+      `CREATE TRIGGER fault BEFORE INSERT ON items WHEN NEW.kind = 'assistant'
+       BEGIN SELECT RAISE(ABORT, 'fault'); END`,
+    );
+    writer.close();
+    h.openrouter.reply(compatText("never stored", null));
+    await expect(send(h, OPENROUTER, "hi")).rejects.toThrow("fault");
+    expect(usageRows(h)[0]?.state).toBe("reserved");
+  });
+
+  test("acceptance 2: Anthropic at its stop line; a Gemini turn goes ahead", async () => {
+    const h = await compat();
+    adjust(h.db, "anthropic", 95, undefined, h.clock.now());
+    expect(await runTurn(h, "hi")).toMatchObject({ kind: "rejected", reason: "budget_stopped" });
+    h.gemini.reply(compatText("fine"));
+    expect(ended(await send(h, GEMINI, "hi")).state).toBe("completed");
+    expect(h.fake.messages()).toHaveLength(0);
   });
 });

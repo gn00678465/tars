@@ -29,6 +29,8 @@ import { text, type FakeReply } from "../../fakes/anthropic.ts";
 import { captureIo } from "../../helpers.ts";
 import { engineHarness, type EngineHarness, type HarnessOptions } from "../agent/engine-fixture.ts";
 import { chatTurn, type ChatTurnSpec } from "./wiki-fixture.ts";
+import { compatText } from "../../fakes/openai-compat.ts";
+import { compatHarness, enableCompat, GEMINI_ENTRY } from "../agent/compat-fixture.ts";
 
 interface SyncHarness extends EngineHarness {
   readonly io: ReturnType<typeof captureIo>;
@@ -1110,4 +1112,48 @@ describe("refusals", () => {
     symlinkSync(real, h.paths.wiki);
     await expect(h.sync()).rejects.toThrow("symlink");
   });
+});
+
+test("job requests whose end reports no usage: the jobs finish, their rows are estimated, a count at the end", async () => {
+  const h = await compatHarness({
+    config: enableCompat(CONFIG_TEMPLATE).replace(
+      'model = ""',
+      `model = "gemini/${GEMINI_ENTRY.id}"`,
+    ),
+  });
+  harnesses.push(h);
+  const t = chatTurn(h.db, { now: h.clock.now(), owner: OWNER, assistant: ["好的"] });
+  h.gemini.reply(
+    compatText(
+      JSON.stringify({
+        candidates: [candidate({ source: sourceRef(t.convId, t.turnId), quote: "搬到台中西屯" })],
+      }),
+      null,
+    ),
+    compatText(JSON.stringify(keepAll([{ from: ["c1"] }])), null),
+  );
+  const io = captureIo();
+  const r = await runSync(
+    {
+      paths: h.paths,
+      env: h.env,
+      secrets: h.secrets,
+      adapterFor,
+      now: () => h.clock.now(),
+      sleep: async () => {},
+      io,
+    },
+    {},
+    new AbortController().signal,
+  );
+  expect(r).toEqual({ state: "completed" });
+  const w = openWikiDb(h.paths, { readonly: true });
+  if (w === undefined || w === "newer") throw new Error("no wiki.db");
+  opened.push(w);
+  expect(all(w, "SELECT state, cost_source FROM usage ORDER BY id")).toEqual([
+    { state: "estimated", cost_source: "estimate" },
+    { state: "estimated", cost_source: "estimate" },
+  ]);
+  expect(one(w, "SELECT state FROM candidates")).toEqual({ state: "applied" });
+  expect(io.stdout).toContain("有 2 個請求沒有回報用量，花費是估的");
 });

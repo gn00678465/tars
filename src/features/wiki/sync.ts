@@ -12,13 +12,7 @@ import { refuseInSession } from "../agent/cli.ts";
 import { usd } from "../agent/cost-command.ts";
 import { loadConfig, type TarsConfig } from "../agent/config.ts";
 import { acquireLockAt, openDb } from "../agent/db.ts";
-import {
-  estimateInput,
-  insertReserved,
-  reconcileLedger,
-  recordEnd,
-  reserve,
-} from "../agent/ledger.ts";
+import { estimateInput, insertReserved, reconcileLedger, reserve } from "../agent/ledger.ts";
 import type { AdapterFor } from "../agent/provider.ts";
 import {
   consume,
@@ -26,7 +20,7 @@ import {
   failureOf,
   prepareModel,
   REASON_TEXT,
-  reportedUsage,
+  settleEnd,
   retryWait,
   settleFailure,
   type Setup,
@@ -899,6 +893,7 @@ async function runModel(
     rejected: new Map<string, number>(),
     written: 0,
     failedPages: 0,
+    usageMissing: 0,
   };
 
   // --- One job: reserve, send, retry, settle, parse.
@@ -1017,13 +1012,8 @@ async function runModel(
         return halt({ state: "failed", reason });
       }
       const end = got.end as NonNullable<typeof got.end>;
-      recordEnd(wiki, {
-        usageId,
-        usage: reportedUsage(end),
-        ...(end.costUsd === undefined ? {} : { costUsd: end.costUsd }),
-        turnKind: "sync",
-        prefixKey: "",
-      });
+      if (settleEnd(wiki, usageId, got, { turnKind: "sync", prefixKey: "" }).usage === undefined)
+        count.usageMissing++;
       if (end.stop === "max_tokens") return { kind: "failed", jobId: id, reason: "truncated" };
       const value = parseJsonObject(got.text);
       return value === undefined
@@ -1377,6 +1367,7 @@ async function runModel(
     }`,
   );
   io.out(`整併：寫入 ${count.written} 頁，不合格 ${count.failedPages} 頁`);
+  if (count.usageMissing > 0) io.out(`有 ${count.usageMissing} 個請求沒有回報用量，花費是估的`);
   io.out(
     `花費：${usd(spentRun)} USD（今日 ${usd(raw.today)} / ${usd(config.wiki.daily_cap_usd)}，本月 ${usd(raw.month)} / ${usd(config.wiki.monthly_cap_usd)}）`,
   );

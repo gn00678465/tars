@@ -38,6 +38,8 @@ import {
   type EngineHarness,
 } from "./engine-fixture.ts";
 import { writeWikiIndex } from "../wiki/wiki-fixture.ts";
+import { compatText } from "../../fakes/openai-compat.ts";
+import { compatHarness, enableCompat, GEMINI_ENTRY } from "./compat-fixture.ts";
 
 // A 10,000-token window: compaction at 5,000 estimated tokens, the hard stop at 8,500. The
 // compact line sits well under the stop line so a turn can still go ahead when compaction fails
@@ -729,4 +731,31 @@ describe("the wiki index across a compaction", () => {
     const without = items.filter((i) => i.kind !== "wiki_index");
     expect(planCompaction(items, DEFAULT_LIMITS)).toEqual(planCompaction(without, DEFAULT_LIMITS));
   });
+});
+
+test("a summary whose end reports no usage: compacted, its row estimated, usage_missing shown", async () => {
+  const h = await compatHarness({ config: enableCompat(configWith(BASE)) });
+  harness = h;
+  const ref = { provider: "gemini" as const, model: GEMINI_ENTRY.id };
+  let convId: string | undefined;
+  for (let i = 0; i < 4; i++) {
+    h.gemini.reply(compatText(A));
+    const out = ended(
+      await h.engine.runTurn(
+        { ...ref, effort: "medium", text: U + i, ...(convId === undefined ? {} : { convId }) },
+        h.frontend,
+        new AbortController().signal,
+      ),
+    );
+    convId = out.convId;
+  }
+  h.gemini.reply(compatText(summaryText(), null));
+  const r = await compact(h, convId as string);
+  expect(r.kind).toBe("compacted");
+  const row = h.db.query("SELECT state, cost_source FROM usage ORDER BY id DESC LIMIT 1").get() as {
+    state: string;
+    cost_source: string;
+  };
+  expect(row).toEqual({ state: "estimated", cost_source: "estimate" });
+  expect(h.frontend.notices()).toContain("usage_missing");
 });

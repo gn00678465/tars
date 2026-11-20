@@ -29,7 +29,6 @@ import {
   estimateInput,
   insertReserved,
   limitReached,
-  recordEnd,
   reserve,
   spent,
   turnSpent,
@@ -51,7 +50,7 @@ import {
   prepareModel,
   REASON_TEXT,
   rejected,
-  reportedUsage,
+  settleEnd,
   retryWait,
   settleFailure,
   type Consumed,
@@ -542,15 +541,9 @@ export function createEngine(deps: EngineDeps) {
             },
           }))
         : [];
-    const usage = reportedUsage(end);
+    let usage: Usage | undefined;
     const written = db.transaction(() => {
-      recordEnd(db, {
-        usageId,
-        usage,
-        ...(end.costUsd === undefined ? {} : { costUsd: end.costUsd }),
-        turnKind: "chat",
-        prefixKey: t.prefix,
-      });
+      ({ usage } = settleEnd(db, usageId, got, { turnKind: "chat", prefixKey: t.prefix }));
       const items = append(t.convId, t.turnId, [
         { kind: "usage", step: t.step, body: { usageId } },
         ...answer,
@@ -571,15 +564,20 @@ export function createEngine(deps: EngineDeps) {
       );
       return items;
     })();
-    t.usage = addUsage(t.usage, usage);
-    deps.log.log("request_end", {
-      turn: t.turnId,
-      step: t.step,
-      state: "final",
-      inputTokens: usage.uncachedInputTokens + usage.cacheReadTokens + usage.cacheWriteTokens,
-      outputTokens: usage.outputTokens,
-    });
+    if (usage === undefined)
+      deps.log.log("request_end", { turn: t.turnId, step: t.step, state: "estimated" });
+    else {
+      t.usage = addUsage(t.usage, usage);
+      deps.log.log("request_end", {
+        turn: t.turnId,
+        step: t.step,
+        state: "final",
+        inputTokens: usage.uncachedInputTokens + usage.cacheReadTokens + usage.cacheWriteTokens,
+        outputTokens: usage.outputTokens,
+      });
+    }
     for (const item of written) t.frontend.emit({ type: "item", item });
+    if (usage === undefined) t.frontend.emit({ type: "notice", code: "usage_missing" });
     if (end.stop === "max_tokens" && got.text === "")
       t.frontend.emit({ type: "notice", code: "effort_truncated" });
     return written.filter((i): i is ToolCallItem => i.kind === "tool_call");
@@ -943,17 +941,14 @@ export function createEngine(deps: EngineDeps) {
       return reason === "aborted" ? { kind: "aborted" } : compactFailed(reason, got.error.detail);
     }
     const end = got.end as NonNullable<Consumed["end"]>;
-    const final = (fn: () => void) =>
-      db.transaction(() => {
-        recordEnd(db, {
-          usageId,
-          usage: reportedUsage(end),
-          ...(end.costUsd === undefined ? {} : { costUsd: end.costUsd }),
-          turnKind: "compaction",
-          prefixKey: "",
-        });
+    const final = (fn: () => void) => {
+      const { usage } = db.transaction(() => {
+        const settled = settleEnd(db, usageId, got, { turnKind: "compaction", prefixKey: "" });
         fn();
+        return settled;
       })();
+      if (usage === undefined) frontend.emit({ type: "notice", code: "usage_missing" });
+    };
     const check = validateSummary(got.text, end.stop);
     if (!check.ok) {
       final(() => close("failed", check.reason));

@@ -395,31 +395,71 @@ export function recordEnd(
  */
 export function recordFailure(
   db: Database,
-  f: { usageId: number; status?: number; receivedStart: boolean; textBytes: number },
+  f: {
+    usageId: number;
+    status?: number;
+    receivedStart: boolean;
+    textBytes: number;
+    /** Did start report the input? Defaults to receivedStart, as Anthropic's always does. */
+    inputKnown?: boolean;
+    /** Did this request count as reasoning (consume decides)? */
+    reasoning?: boolean;
+  },
 ): UsageState {
+  if (f.status !== undefined && !f.receivedStart) {
+    setEstimate(db, f.usageId, "voided", 0, 0);
+    return "voided";
+  }
   const row = usageRow(db, f.usageId);
   const price = JSON.parse(row.price) as PriceSnapshot;
-  let state: UsageState;
-  let cost: number;
-  let outputTokens = 0;
-  if (f.status !== undefined && !f.receivedStart) {
-    state = "voided";
-    cost = 0;
-  } else if (f.receivedStart) {
-    state = "estimated";
-    outputTokens = estimateTokens(f.textBytes);
-    cost = inputUsd(rowInput(row), price) + (outputTokens * price.output) / 1e6;
-  } else {
-    state = "estimated";
-    cost = row.reserved_usd - (row.max_tokens * price.output) / 1e6;
-  }
+  if (f.receivedStart && (f.inputKnown ?? f.receivedStart)) {
+    const outputTokens = estimateTokens(f.textBytes);
+    const cost = inputUsd(rowInput(row), price) + (outputTokens * price.output) / 1e6;
+    setEstimate(db, f.usageId, "estimated", outputTokens, cost);
+  } else if (f.receivedStart) unknownInput(db, f.usageId, f.textBytes, f.reasoning === true);
+  else setEstimate(db, f.usageId, "estimated", 0, reservedInput(row, price));
+  return "estimated";
+}
+
+/** A response that ended normally without reporting usage: costed as an unknown input. */
+export function recordEstimatedEnd(
+  db: Database,
+  e: { usageId: number; textBytes: number; reasoning: boolean },
+): void {
+  unknownInput(db, e.usageId, e.textBytes, e.reasoning);
+}
+
+/** The input cost the reservation was sized with: the reserved amount less a full output. */
+const reservedInput = (row: { reserved_usd: number; max_tokens: number }, price: PriceSnapshot) =>
+  row.reserved_usd - (row.max_tokens * price.output) / 1e6;
+
+/**
+ * The input as reserved. The output from the text received, or, when the request reasoned, the
+ * whole output limit: thinking may have used tokens the stream never showed, and the text
+ * cannot tell how many.
+ */
+function unknownInput(db: Database, usageId: number, textBytes: number, reasoning: boolean) {
+  const row = usageRow(db, usageId);
+  const price = JSON.parse(row.price) as PriceSnapshot;
+  const outputTokens = reasoning ? row.max_tokens : estimateTokens(textBytes);
+  const cost = reservedInput(row, price) + (outputTokens * price.output) / 1e6;
+  setEstimate(db, usageId, "estimated", outputTokens, cost);
+}
+
+function setEstimate(
+  db: Database,
+  usageId: number,
+  state: "estimated" | "voided",
+  outputTokens: number,
+  cost: number,
+) {
+  const row = usageRow(db, usageId);
   withTurnCost(db, row.turn_id, () =>
     db.run(
       "UPDATE usage SET state = ?, output_tokens = ?, cost_usd = ?, cost_source = ? WHERE id = ?",
-      [state, outputTokens, cost, state === "voided" ? "none" : "estimate", f.usageId],
+      [state, outputTokens, cost, state === "voided" ? "none" : "estimate", usageId],
     ),
   );
-  return state;
 }
 
 /** Reconcile: a reservation left by a dead process keeps its reserved amount as an estimate. */

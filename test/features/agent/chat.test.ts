@@ -19,6 +19,9 @@ import { appendItems, beginTurn, createConversation } from "../../../src/feature
 import { text, toolUse, type FakeReply } from "../../fakes/anthropic.ts";
 import { fakeSecrets, scriptedTerminal, tempHome, testDeps, TEST_NOW } from "../../helpers.ts";
 import { run } from "../../../src/main.ts";
+import { resetReconcileWarnings } from "../../../src/features/agent/openrouter-key.ts";
+import { compatText } from "../../fakes/openai-compat.ts";
+import { compatHarness, OPENROUTER_ENTRY, type CompatHarness } from "./compat-fixture.ts";
 import {
   configWith,
   engineHarness,
@@ -623,4 +626,60 @@ describe("/compact", () => {
       query<{ state: string }>(h, "SELECT state FROM turns WHERE kind = 'compaction'"),
     ).toEqual([{ state: "aborted" }]);
   });
+});
+
+describe("OpenRouter's key limit after a turn", () => {
+  const compats: CompatHarness[] = [];
+  afterEach(async () => {
+    for (const h of compats.splice(0)) {
+      await h.fake.stop();
+      await h.gemini.stop();
+      await h.openrouter.stop();
+    }
+  });
+  async function compat() {
+    resetReconcileWarnings();
+    const h = await compatHarness();
+    h.db.close();
+    compats.push(h);
+    const deps = testDeps({
+      env: h.env,
+      secrets: fakeSecrets({ "llm:anthropic": "sk-test", "llm:openrouter": "or-test" }),
+      adapterFor,
+      selfCommand: [process.execPath, join(REPO, "src/main.ts")],
+      signals: new EventEmitter(),
+    });
+    return { h, deps };
+  }
+  const keyRequests = (h: CompatHarness) => h.openrouter.requests.filter((r) => r.path === "/key");
+  const OPENROUTER = `openrouter/${OPENROUTER_ENTRY.id}`;
+
+  test("--message on OpenRouter: one /key request, its adjustment in the database before chat returns", async () => {
+    const { h, deps } = await compat();
+    h.openrouter.key = { limit: 10, limit_remaining: 5 };
+    h.openrouter.reply(compatText("hello", { cost: 0.001 }));
+    expect(await run(["chat", "--model", OPENROUTER, "--message", "hi"], deps)).toBe(0);
+    expect(keyRequests(h)).toHaveLength(1);
+    expect(query(h, "SELECT provider, spent_usd, note FROM adjustments")).toEqual([
+      { provider: "openrouter", spent_usd: 5, note: "auto: /key" },
+    ]);
+  });
+
+  test("an Anthropic turn asks nothing of /key", async () => {
+    const { h, deps } = await compat();
+    h.fake.reply(text("hello"));
+    expect(await run(["chat", "--message", "hi"], deps)).toBe(0);
+    expect(keyRequests(h)).toHaveLength(0);
+  });
+
+  test("a /key that hangs: chat goes on after 5 seconds", async () => {
+    const { h, deps } = await compat();
+    h.openrouter.key = "hang";
+    h.openrouter.reply(compatText("hello", { cost: 0.001 }));
+    const started = performance.now();
+    expect(await run(["chat", "--model", OPENROUTER, "--message", "hi"], deps)).toBe(0);
+    expect(performance.now() - started).toBeLessThan(6000);
+    expect(keyRequests(h)).toHaveLength(1);
+    expect(query(h, "SELECT * FROM adjustments")).toEqual([]);
+  }, 10000);
 });

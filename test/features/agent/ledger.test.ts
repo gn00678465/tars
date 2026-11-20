@@ -10,6 +10,7 @@ import {
   limitReached,
   recentRequests,
   recordEnd,
+  recordEstimatedEnd,
   recordFailure,
   recordStart,
   reconcileLedger,
@@ -700,5 +701,87 @@ describe("recentRequests", () => {
       ].toSorted(),
     );
     expect(recentRequests(undefined, 20)).toEqual([]);
+  });
+});
+
+describe("usage the response never gave", () => {
+  // Input reserved at 0.2 USD, a 1,000-token output limit at 15 USD per million: 0.015 more.
+  const reserved = (db: Database) =>
+    insertReserved(db, {
+      ...seedTurn(db),
+      step: ++step,
+      attempt: 1,
+      model: MODEL,
+      cacheTtl: "5m",
+      maxTokens: 1000,
+      inputUsd: 0.2,
+      now: NOW,
+    });
+  // 200 bytes of text: 100 tokens, 0.0015 USD.
+  const TEXT = 200;
+  const cost = (db: Database, id: number) => row(db, id).cost_usd as number;
+
+  test("an HTTP status before start: voided, 0", async () => {
+    const { db } = await agentDb();
+    const id = reserved(db);
+    expect(
+      recordFailure(db, { usageId: id, status: 500, receivedStart: false, textBytes: 0 }),
+    ).toBe("voided");
+    expect(cost(db, id)).toBe(0);
+  });
+
+  test("input known: the input start reported, plus the text's output", async () => {
+    const { db } = await agentDb();
+    const id = reserved(db);
+    recordStart(db, id, { uncachedInputTokens: 1000, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    recordFailure(db, { usageId: id, receivedStart: true, textBytes: TEXT });
+    expect(row(db, id).state).toBe("estimated");
+    expect(cost(db, id)).toBeCloseTo(0.003 + 0.0015, 10);
+  });
+
+  test("started, input unknown, no reasoning: the reserved input plus the text's output", async () => {
+    const { db } = await agentDb();
+    const id = reserved(db);
+    recordFailure(db, {
+      usageId: id,
+      receivedStart: true,
+      textBytes: TEXT,
+      inputKnown: false,
+      reasoning: false,
+    });
+    expect(row(db, id)).toMatchObject({ state: "estimated", cost_source: "estimate" });
+    expect(cost(db, id)).toBeCloseTo(0.2 + 0.0015, 10);
+  });
+
+  test("started, input unknown, reasoning: the whole reservation, output at the limit", async () => {
+    const { db } = await agentDb();
+    const id = reserved(db);
+    recordFailure(db, {
+      usageId: id,
+      receivedStart: true,
+      textBytes: TEXT,
+      inputKnown: false,
+      reasoning: true,
+    });
+    expect(row(db, id)).toMatchObject({ state: "estimated", output_tokens: 1000 });
+    expect(cost(db, id)).toBeCloseTo(0.215, 10);
+  });
+
+  test("nothing at all: the reserved input", async () => {
+    const { db } = await agentDb();
+    const id = reserved(db);
+    recordFailure(db, { usageId: id, receivedStart: false, textBytes: TEXT });
+    expect(cost(db, id)).toBeCloseTo(0.2, 10);
+  });
+
+  test("recordEstimatedEnd: the text's output, or the limit when the request reasoned", async () => {
+    const { db } = await agentDb();
+    const plain = reserved(db);
+    recordEstimatedEnd(db, { usageId: plain, textBytes: TEXT, reasoning: false });
+    expect(row(db, plain)).toMatchObject({ state: "estimated", cost_source: "estimate" });
+    expect(cost(db, plain)).toBeCloseTo(0.2015, 10);
+    const thought = reserved(db);
+    recordEstimatedEnd(db, { usageId: thought, textBytes: TEXT, reasoning: true });
+    expect(cost(db, thought)).toBeCloseTo(0.215, 10);
   });
 });

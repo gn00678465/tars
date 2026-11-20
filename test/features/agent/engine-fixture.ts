@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import { resolvePaths, type Env, type TarsPaths } from "../../../src/core/paths.ts";
+import type { SecretName } from "../../../src/core/secrets.ts";
 import type { ModelEntry } from "../../../src/features/agent/catalog.ts";
 import { CONFIG_TEMPLATE } from "../../../src/features/agent/config.ts";
 import type { WikiSpend } from "../../../src/features/wiki/db.ts";
@@ -96,6 +97,10 @@ export interface HarnessOptions {
   /** The whole config.toml; CONFIG_TEMPLATE by default. */
   readonly config?: string;
   readonly selfCommand?: readonly string[];
+  /** Entries listed after the default model's. */
+  readonly extraModels?: readonly ModelEntry[];
+  readonly extraEnv?: Env;
+  readonly extraSecrets?: Partial<Record<SecretName, string>>;
 }
 
 /** config.toml text with some `key = value` lines of the template replaced. */
@@ -130,11 +135,12 @@ export async function engineHarness(opts: HarnessOptions = {}): Promise<EngineHa
     XDG_CONFIG_HOME: join(home, "config"),
     PATH: process.env.PATH ?? "/usr/bin:/bin",
     [E2E_BASE_URL_VAR]: fake.url,
+    ...opts.extraEnv,
   };
   const paths = resolvePaths(env);
   mkdirSync(paths.config, { recursive: true });
   writeFileSync(paths.configFile, opts.config ?? CONFIG_TEMPLATE);
-  writeCatalog(paths, [{ ...MODEL_ENTRY, ...opts.model }]);
+  writeCatalog(paths, [{ ...MODEL_ENTRY, ...opts.model }, ...(opts.extraModels ?? [])]);
   mkdirSync(join(paths.skills, "demo"), { recursive: true });
   writeFileSync(
     join(paths.skills, "demo", "SKILL.md"),
@@ -145,7 +151,7 @@ export async function engineHarness(opts: HarnessOptions = {}): Promise<EngineHa
   const db = await openDb(paths);
   const frontend = recordingFrontend();
   const clock = testClock();
-  const secrets = fakeSecrets({ "llm:anthropic": "sk-test" });
+  const secrets = fakeSecrets({ "llm:anthropic": "sk-test", ...opts.extraSecrets });
   const sleeps: number[] = [];
   const warnings: string[] = [];
   const spend = {

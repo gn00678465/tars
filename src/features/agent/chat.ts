@@ -14,7 +14,8 @@ import { acquireLock, openDb } from "./db.ts";
 import { assertSelectable, EFFORTS, parseEffort } from "./effort.ts";
 import { createEngine, sleepAbortable, type Engine, type TurnOutcome } from "./engine.ts";
 import { usageCost } from "./ledger.ts";
-import { createLog } from "./log.ts";
+import { createLog, type Log } from "./log.ts";
+import { reconcileAfterTurn } from "./openrouter-key.ts";
 import {
   LOCAL_ONLY_SKILLS,
   loadSkillIndex,
@@ -283,6 +284,7 @@ function printRecent(
 class ChatSession {
   private readonly engine: Engine;
   private readonly frontend: TtyFrontend;
+  private readonly log: Log;
   private convId: string | undefined;
   private effort: Effort;
   private controller = new AbortController();
@@ -302,6 +304,7 @@ class ChatSession {
   ) {
     this.convId = start.conv?.id;
     this.effort = start.effort;
+    this.log = createLog(paths.agentLog, () => ctx.now());
     this.engine = createEngine({
       db,
       paths,
@@ -312,7 +315,7 @@ class ChatSession {
       approveCommand: (name) => ctx.approveCommand(name),
       now: () => ctx.now(),
       sleep: sleepAbortable,
-      log: createLog(paths.agentLog, () => ctx.now()),
+      log: this.log,
       warn: (w) => ctx.io.err(`warning: ${w}`),
       otherSpend: (provider, cfg, now) => wikiSpend(paths, db, provider, cfg, now),
     });
@@ -404,7 +407,25 @@ class ChatSession {
     );
     if (out.kind === "rejected") this.ctx.io.err(`沒有送出：${out.message}`);
     else this.convId = out.convId;
+    await this.reconcile();
     return out;
+  }
+
+  /** Awaited before the next prompt and before --message exits, so the row is written. */
+  private reconcile(): Promise<void> {
+    const { ctx } = this;
+    return reconcileAfterTurn(
+      {
+        db: this.db,
+        paths: this.paths,
+        env: ctx.env,
+        secrets: ctx.secrets,
+        now: () => ctx.now(),
+        warn: (w) => ctx.io.err(`warning: ${w}`),
+        log: this.log,
+      },
+      { provider: this.start.provider },
+    );
   }
 
   private async builtin(
@@ -487,6 +508,7 @@ class ChatSession {
       this.frontend,
       this.begin(),
     );
+    await this.reconcile();
     // A compaction that happened was already shown by the frontend's compaction item.
     if (r.kind === "skipped") io.err("上下文太短，沒有可以壓縮的部分");
     if (r.kind === "aborted") io.err("已取消");
