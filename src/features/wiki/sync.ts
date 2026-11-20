@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { lstat, mkdir, readdir, readFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 import { writeFileAtomic } from "../../core/fs.ts";
@@ -49,6 +49,7 @@ import { renderIndexFile } from "./index-file.ts";
 import {
   applyPatch,
   CATEGORIES,
+  categoryOf,
   entryLine,
   looksSecret,
   newPage,
@@ -260,6 +261,19 @@ const pageRow = (db: Database, path: string) =>
 const pageFile = (paths: TarsPaths, path: string) => join(paths.wiki, `${path}.md`);
 
 /**
+ * A category directory sync may read and write: a real directory right under <data>/wiki. As a
+ * symlink it would take pages outside the wiki. `create` makes a missing one first.
+ */
+async function realCategory(paths: TarsPaths, category: string, create: boolean) {
+  const dir = join(paths.wiki, category);
+  if (create) await mkdir(dir, { recursive: true });
+  const info = await lstat(dir).catch(() => undefined);
+  if (info === undefined) return "missing";
+  if (info.isSymbolicLink() || !info.isDirectory()) return "unsafe";
+  return (await realpath(dir)) === join(await realpath(paths.wiki), category) ? "ok" : "unsafe";
+}
+
+/**
  * pages.next_item as a parse leaves it: above every written number, but not past the temporary
  * ones, so the owner's unnumbered lines get the same numbers until a write makes them permanent.
  */
@@ -335,12 +349,18 @@ async function scanPages(
   let changed = 0;
   for (const category of CATEGORIES) {
     const dir = join(paths.wiki, category);
-    const entries = await readdir(dir, { withFileTypes: true }).catch(
-      (err: NodeJS.ErrnoException) => {
-        if (err.code === "ENOENT" || err.code === "ENOTDIR") return [];
-        throw err;
-      },
-    );
+    const state = await realCategory(paths, category, false);
+    if (state === "missing") continue;
+    if (state === "unsafe") {
+      // Its pages keep their rows, as a blocked page does: the last good read is the best answer.
+      warn(`略過 ${category}/：分類目錄不是真的目錄（symlink）`);
+      for (const { path } of db
+        .query("SELECT path FROM pages WHERE path LIKE ?")
+        .all(`${category}/%`) as { path: string }[])
+        seen.add(path);
+      continue;
+    }
+    const entries = await readdir(dir, { withFileTypes: true });
     for (const ent of entries.toSorted((a, b) => (a.name < b.name ? -1 : 1))) {
       if (ent.name.startsWith(".") || !ent.name.endsWith(".md")) continue;
       const slug = ent.name.slice(0, -3);
@@ -1110,9 +1130,17 @@ async function runModel(
     return batches;
   }
 
+  const unsafeCategory = (path: string) => {
+    io.out(`跳過 ${path}：分類目錄不是真的目錄（symlink）`);
+    count.failedPages++;
+    return undefined;
+  };
+
   async function consolidatePage(path: string): Promise<Halt | undefined> {
     const row = pageRow(wiki, path);
     if (row?.state === "blocked") return undefined;
+    const category = categoryOf(path);
+    if ((await realCategory(paths, category, false)) === "unsafe") return unsafeCategory(path);
     const cands = wiki
       .query(
         `SELECT c.id, c.source_turn_id AS turnId, s.conv_id AS convId, s.day, c.page, c.title,
@@ -1181,7 +1209,8 @@ async function runModel(
           const next = result.page;
           const text = renderPage(next);
           if (result.write) {
-            await mkdir(join(paths.wiki, next.type), { recursive: true });
+            // Checked again at the write: the directory may have changed during the request.
+            if ((await realCategory(paths, category, true)) !== "ok") return unsafeCategory(path);
             await writeFileAtomic(pageFile(paths, path), text);
           }
           const reasons = new Map(result.dropped.map((d) => [d.candidate, d.reason]));

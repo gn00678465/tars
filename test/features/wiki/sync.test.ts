@@ -1,6 +1,15 @@
 import type { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { CONFIG_TEMPLATE } from "../../../src/features/agent/config.ts";
 import { adjust } from "../../../src/features/agent/ledger.ts";
@@ -764,6 +773,67 @@ describe("refusals", () => {
     );
     expect(existsSync(h.paths.wikiDb)).toBe(false);
     expect(existsSync(h.paths.wiki)).toBe(false);
+  });
+
+  describe("a category directory that is a symlink", () => {
+    const linkPeople = (h: SyncHarness) => {
+      const outside = join(h.paths.data, "outside");
+      mkdirSync(outside, { recursive: true });
+      mkdirSync(h.paths.wiki, { recursive: true });
+      symlinkSync(outside, join(h.paths.wiki, "people"));
+      return outside;
+    };
+    const skipped = (h: SyncHarness) =>
+      h.io.stdout.includes("跳過 people/wang-xiaoming：分類目錄不是真的目錄（symlink）");
+
+    test("a new page is not written through it, and no consolidation is sent", async () => {
+      const h = await harness();
+      const outside = linkPeople(h);
+      const t = h.turn({ owner: OWNER });
+      h.fake.reply(extracted({ source: t.ref, quote: "搬到台中西屯" }));
+      expect(await h.sync()).toEqual({ state: "completed" });
+      expect(skipped(h)).toBe(true);
+      expect(sent(h, "consolidate")).toHaveLength(0);
+      expect(readdirSync(outside)).toEqual([]);
+      expect(one(h.wiki(), "SELECT state, attempts FROM candidates")).toEqual({
+        state: "pending",
+        attempts: 0,
+      });
+    });
+
+    test("an existing page is neither read by the scan nor rewritten; its rows stay", async () => {
+      const h = await harness();
+      await onePage(h);
+      const outside = join(h.paths.data, "outside");
+      renameSync(join(h.paths.wiki, "people"), outside);
+      symlinkSync(outside, join(h.paths.wiki, "people"));
+      const before = readFileSync(join(outside, "wang-xiaoming.md"), "utf8");
+      const t = h.turn({ owner: "王小明的生日是三月九日" });
+      h.fake.reply(extracted({ source: t.ref, quote: "生日是三月九日" }));
+      await h.sync();
+      expect(h.io.stderr).toContain("略過 people/：分類目錄不是真的目錄（symlink）");
+      expect(skipped(h)).toBe(true);
+      expect(readFileSync(join(outside, "wang-xiaoming.md"), "utf8")).toBe(before);
+      expect(one(h.wiki(), "SELECT COUNT(*) AS n FROM pages")).toEqual({ n: 1 });
+    });
+
+    test("swapped for a symlink while the request runs: nothing is written", async () => {
+      const h = await harness();
+      const t = h.turn({ owner: OWNER });
+      mkdirSync(join(h.paths.wiki, "people"), { recursive: true });
+      const outside = join(h.paths.data, "outside");
+      mkdirSync(outside);
+      h.fake.reply(extracted({ source: t.ref, quote: "搬到台中西屯" }));
+      h.fake.handler = () => {
+        rmSync(join(h.paths.wiki, "people"), { recursive: true });
+        symlinkSync(outside, join(h.paths.wiki, "people"));
+        return json(keepAll([{ from: ["c1"] }]));
+      };
+      await h.sync();
+      expect(skipped(h)).toBe(true);
+      expect(readdirSync(outside)).toEqual([]);
+      expect(one(h.wiki(), "SELECT state FROM candidates")).toEqual({ state: "pending" });
+    });
   });
 
   test("<data>/wiki as a symlink is refused", async () => {
