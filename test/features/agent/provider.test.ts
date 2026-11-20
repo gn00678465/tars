@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { TarsError } from "../../../src/core/exit.ts";
 import {
+  baseUrlFor,
   E2E_BASE_URL_VARS,
   loopbackUrl,
   resolveAnthropicBaseUrl,
@@ -70,4 +71,18 @@ describe("loopbackUrl", () => {
     expect(loopbackUrl(name, "http://127.0.0.1:9", "http")).toBe("http://127.0.0.1:9");
     expect(() => loopbackUrl(name, "http://example.com:9", "http")).toThrow(name);
   });
+});
+
+test("each provider's fake address is announced once on stderr; the real one is not", () => {
+  for (const [provider, name] of Object.entries(E2E_BASE_URL_VARS)) {
+    const lines: string[] = [];
+    const p = provider as keyof typeof E2E_BASE_URL_VARS;
+    expect(baseUrlFor(p, { [name]: "http://127.0.0.1:9" }, (l) => lines.push(l))).toBe(
+      "http://127.0.0.1:9",
+    );
+    expect(lines).toEqual([`${name} 把 ${provider} 導到 http://127.0.0.1:9`]);
+    const quiet: string[] = [];
+    expect(baseUrlFor(p, {}, (l) => quiet.push(l))).toStartWith("https://");
+    expect(quiet).toEqual([]);
+  }
 });

@@ -100,15 +100,15 @@ export function loopbackUrl(
   return value;
 }
 
-/** The real endpoint, or the e2e fake its variable names; the fake is announced on stderr. */
-export function compatBaseUrl(
-  provider: "gemini" | "openrouter",
-  env: Env,
-  warn: (line: string) => void,
-): string {
+/**
+ * The real endpoint, or the e2e fake its variable names. The fake is announced on stderr for
+ * every provider alike: the variable sends the key wherever it points.
+ */
+export function baseUrlFor(provider: Provider, env: Env, warn: (line: string) => void): string {
   const name = E2E_BASE_URL_VARS[provider];
   const fake = loopbackUrl(name, env[name], "http");
-  if (fake === undefined) return COMPAT_ENDPOINTS[provider];
+  if (fake === undefined)
+    return provider === "anthropic" ? ANTHROPIC_API : COMPAT_ENDPOINTS[provider];
   warn(`${name} 把 ${provider} 導到 ${fake}`);
   return fake;
 }
@@ -131,10 +131,10 @@ export const adapterFor: AdapterFor = async (provider, apiKey, env, warn) => {
     return compat.createCompatAdapter({
       provider,
       apiKey,
-      baseURL: compatBaseUrl(provider, env, warn),
+      baseURL: baseUrlFor(provider, env, warn),
       warn,
     });
   }
-  const baseURL = resolveAnthropicBaseUrl(env);
+  const baseURL = baseUrlFor(provider, env, warn);
   return (await import("./anthropic.ts")).createAnthropicAdapter({ apiKey, baseURL, warn });
 };
