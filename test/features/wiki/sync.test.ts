@@ -356,6 +356,49 @@ describe("extraction", () => {
     );
   });
 
+  test("a secret is blanked whatever else is wrong with the candidate", async () => {
+    const h = await harness();
+    const t = h.turn({ owner: OWNER });
+    const key = "sk-" + "c".repeat(20);
+    h.fake.reply(
+      extracted(
+        { source: t.ref, quote: "搬到台北", text: `金鑰 ${key}` },
+        { source: t.ref, quote: "搬到台中西屯", page: `people/${key}`, title: key },
+      ),
+    );
+    await h.sync();
+    expect(
+      all(
+        h.wiki(),
+        "SELECT state, last_error, page, title, text, quote FROM candidates ORDER BY id",
+      ),
+    ).toEqual([
+      { state: "rejected", last_error: "secret", page: "", title: "", text: "", quote: "" },
+      { state: "rejected", last_error: "secret", page: "", title: "", text: "", quote: "" },
+    ]);
+  });
+
+  test("a secret in a retract's reason never reaches the Change Log", async () => {
+    const h = await harness();
+    await onePage(h);
+    const before = h.page("people/wang-xiaoming");
+    const t2 = h.turn({ owner: "王小明其實沒有搬到台中西屯" });
+    const key = "sk-" + "d".repeat(20);
+    h.fake.reply(
+      extracted({ source: t2.ref, quote: "沒有搬到台中西屯", text: "沒有搬到台中。" }),
+      json({
+        summary: { keep: true },
+        facts: [{ op: "retract", id: "i1", reason: `金鑰 ${key}`, from: ["c2"] }],
+        open: [],
+      }),
+    );
+    await h.sync();
+    expect(h.page("people/wang-xiaoming")).toBe(before);
+    expect(one(h.wiki(), "SELECT last_error FROM candidates WHERE id = 2")).toEqual({
+      last_error: "secret",
+    });
+  });
+
   test("broken JSON and bad_request count against the batch; three tries and it is failed", async () => {
     const h = await harness();
     h.turn({ owner: OWNER });

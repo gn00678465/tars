@@ -503,6 +503,19 @@ const stripMark = (s: string) => s.replaceAll(ASSISTANT_MARK, "").trim();
 export function applyPatch(page: Page, patch: Patch, ctx: ApplyContext): ApplyResult {
   const fail = (reason: PatchReason): ApplyResult => ({ ok: false, reason });
   const byKey = new Map(ctx.candidates.map((c) => [c.key, c]));
+
+  // 11 first, whatever else is wrong: reasons reach the Change Log and wiki.db too.
+  const s = patch.summary;
+  const modelText = [
+    ...[...patch.facts, ...patch.open].flatMap((op) => [
+      ...("text" in op ? [op.text] : []),
+      ...(op.op === "retract" ? [op.reason] : []),
+      ...(op.op === "update" ? (op.removed_sources ?? []).map((r) => r.reason) : []),
+    ]),
+    ...(s.keep ? [] : [s.text, s.reason, ...(s.removed_sources ?? []).map((r) => r.reason)]),
+    ...(patch.dropped ?? []).map((d) => d.reason),
+  ];
+  if (modelText.some(looksSecret)) return fail("secret");
   const sections = { facts: page.facts, open: page.open } as const;
 
   // 2: entry numbers exist in their section, each used by one operation.
@@ -623,7 +636,6 @@ export function applyPatch(page: Page, patch: Patch, ctx: ApplyContext): ApplyRe
   // Apply to copies; 10 and 11 are checked on the result.
   let next = page.nextItem;
   const log: Record<"facts" | "open", string[]> = { facts: [], open: [] };
-  const written: string[] = [];
   let added = 0;
   let updatedCount = 0;
   const out = { facts: [...page.facts], open: [...page.open] };
@@ -633,7 +645,6 @@ export function applyPatch(page: Page, patch: Patch, ctx: ApplyContext): ApplyRe
       speakers(keys).every((s) => s === "assistant");
     if (op.op === "add") {
       const text = stripMark(op.text);
-      written.push(text);
       list.push({
         id: next,
         text,
@@ -649,7 +660,6 @@ export function applyPatch(page: Page, patch: Patch, ctx: ApplyContext): ApplyRe
       const old = list[at] as Entry;
       const removed = new Set((op.removed_sources ?? []).map((r) => r.source));
       const text = stripMark(op.text);
-      written.push(text);
       list[at] = {
         id: old.id,
         text,
@@ -666,7 +676,6 @@ export function applyPatch(page: Page, patch: Patch, ctx: ApplyContext): ApplyRe
       const merged = list.filter((e) => op.ids.includes(`i${e.id}`));
       const at = list.findIndex((e) => op.ids.includes(`i${e.id}`));
       const text = stripMark(op.text);
-      written.push(text);
       const entry: Entry = {
         id: next,
         text,
@@ -695,10 +704,6 @@ export function applyPatch(page: Page, patch: Patch, ctx: ApplyContext): ApplyRe
   for (const name of ["facts", "open"] as const)
     if (out[name].length > LIMITS.entries || !out[name].every((e) => okEntryText(e.text)))
       return fail("too_long");
-
-  // 11: nothing the model wrote looks like a secret.
-  if ([...written, ...(patch.summary.keep ? [] : [newSummary])].some(looksSecret))
-    return fail("secret");
 
   // related and aliases only grow; an entry that breaks a rule is dropped, not the patch.
   const related = [...page.related];

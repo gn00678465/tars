@@ -374,6 +374,33 @@ describe("applyPatch: each check refuses and leaves the page as it was", () => {
       "secret",
     );
   });
+
+  test("11 secret: in a reason that would reach the Change Log or wiki.db, whatever else fails", () => {
+    const key = `金鑰 ${"sk-" + "b".repeat(20)}`;
+    rejects(
+      patch({
+        open: BOTH.open,
+        facts: [{ op: "retract", id: "i1", reason: key, from: ["c41"] }],
+      }),
+      "secret",
+    );
+    rejects(
+      patch({
+        ...BOTH,
+        summary: { keep: false, text: `新摘要。 [[source:${A}]]`, reason: key, from: ["c41"] },
+      }),
+      "secret",
+    );
+    rejects(patch({ open: BOTH.open, dropped: [{ candidate: "c41", reason: key }] }), "secret");
+    // Also wrong in another way: the secret is what decides.
+    rejects(
+      patch({
+        ...BOTH,
+        facts: [...BOTH.facts, { op: "retract", id: "i9", reason: key, from: ["c41"] }],
+      }),
+      "secret",
+    );
+  });
 });
 
 describe("applyPatch: changes that pass", () => {

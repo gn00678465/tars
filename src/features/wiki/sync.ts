@@ -713,10 +713,14 @@ type Checked =
   | { readonly ok: true; readonly page: string }
   | { readonly ok: false; readonly reason: string };
 
-/** One candidate against its turn, in the design's order; a bad one never sinks the batch. */
+/**
+ * One candidate against its turn, in the design's order; a bad one never sinks the batch. The
+ * secret check comes before every check whose rejection keeps the candidate's text in wiki.db.
+ */
 function checkCandidate(c: RawCandidate, turn: TurnEvidence | undefined): Checked {
   const fail = (reason: string): Checked => ({ ok: false, reason });
   if (turn === undefined) return fail("bad_source");
+  if (CANDIDATE_KEYS.some((k) => looksSecret(c[k]))) return fail("secret");
   const page = parsePagePath(c.page);
   if (page === undefined) return fail("bad_page");
   if (!okTitle(c.title)) return fail("bad_title");
@@ -725,7 +729,6 @@ function checkCandidate(c: RawCandidate, turn: TurnEvidence | undefined): Checke
   if (!okEntryText(c.text)) return fail("bad_text");
   if (!quoteMatches(c.quote, c.speaker === "owner" ? turn.owner : turn.assistant))
     return fail("bad_quote");
-  if ([c.text, c.title, c.quote].some(looksSecret)) return fail("secret");
   return { ok: true, page };
 }
 
@@ -1082,7 +1085,7 @@ async function runModel(
         const blank = check.reason === "secret";
         insert.run(
           turn.turnId,
-          clipChars(c.page),
+          blank ? "" : clipChars(c.page),
           blank ? "" : clipChars(c.title),
           c.section === "facts" ? "facts" : "open",
           blank ? "" : clipChars(c.text),
