@@ -255,6 +255,41 @@ describe("--reindex", () => {
   });
 });
 
+describe("an interrupted --reindex", () => {
+  // A trigger fails the first insert into `table`: right after the indexes were emptied
+  // (page_docs), or with the pages rebuilt and the raw records not yet (raw_docs).
+  test.each(["page_docs", "raw_docs"])(
+    "failing at %s: the next plain sync rebuilds both indexes",
+    async (table) => {
+      const h = await harness();
+      await onePage(h);
+      h.turn({ owner: "另一句話", assistant: ["回答"] });
+      await h.sync();
+      const w = h.wiki();
+      const counts = () => ({
+        pages: one(w, "SELECT COUNT(*) AS n FROM page_docs"),
+        raw: one(w, "SELECT COUNT(*) AS n FROM raw_docs"),
+        rawFts: one(w, "SELECT COUNT(*) AS n FROM raw_fts"),
+      });
+      const before = counts();
+      const rw = (await openWikiDb(h.paths)) as Database;
+      opened.push(rw);
+      rw.run(
+        `CREATE TRIGGER fault BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'fault'); END`,
+      );
+      await expect(h.sync({ reindex: true })).rejects.toThrow("fault");
+      expect(counts()).not.toEqual(before);
+      rw.run("DROP TRIGGER fault");
+      expect(await h.sync()).toEqual({ state: "completed" });
+      expect(counts()).toEqual(before);
+      expect(one(w, "SELECT COUNT(*) AS n FROM meta WHERE key = 'reindex_pending'")).toEqual({
+        n: 0,
+      });
+      expect(h.io.stdout.some((l) => l.startsWith("接著重建上次中斷的索引"))).toBe(true);
+    },
+  );
+});
+
 describe("<wiki-pages>", () => {
   test("pages newest first, this sync's new pages first and marked, cut from the end", async () => {
     const h = await harness();

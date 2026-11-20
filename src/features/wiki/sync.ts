@@ -536,6 +536,15 @@ function scanTurns(wiki: Database, agent: Database, now: Date): ScanCount {
   return count;
 }
 
+/**
+ * Set in the transaction that empties the indexes and cleared when they are whole again: a sync
+ * that finds it set rebuilds from the start, since the page hashes and the scan cursor say the
+ * emptied rows are already indexed.
+ */
+const REINDEX_PENDING = "reindex_pending";
+const reindexPending = (wiki: Database) =>
+  wiki.query("SELECT 1 FROM meta WHERE key = ?").get(REINDEX_PENDING) !== null;
+
 /** --reindex: both search indexes rebuilt from the files and agent.db; progress untouched. */
 async function reindex(
   wiki: Database,
@@ -545,6 +554,7 @@ async function reindex(
   warn: (line: string) => void,
 ): Promise<{ pages: number; docs: number }> {
   wiki.transaction(() => {
+    wiki.run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, '1')", [REINDEX_PENDING]);
     wiki.run("DELETE FROM raw_fts");
     wiki.run("DELETE FROM raw_docs");
     // A blocked page keeps its rows: they are the last good parse, and nothing rebuilds them.
@@ -569,6 +579,7 @@ async function reindex(
   for (const t of turns)
     if (!waiting.has(t.rowid))
       wiki.transaction(() => void (docs += indexRawTurn(wiki, agent, t)))();
+  wiki.run("DELETE FROM meta WHERE key = ?", [REINDEX_PENDING]);
   const pages = (wiki.query("SELECT COUNT(*) AS n FROM pages").get() as { n: number }).n;
   return { pages, docs };
 }
@@ -801,6 +812,10 @@ async function runModel(
 ): Promise<SyncResult> {
   const { paths, io } = deps;
   const today = () => utcDay(deps.now());
+  if (reindexPending(wiki)) {
+    const rebuilt = await reindex(wiki, agent, paths, today(), warn);
+    io.out(`接著重建上次中斷的索引：頁面 ${rebuilt.pages}，原始紀錄的訊息 ${rebuilt.docs}`);
+  }
   const pagesChanged = await scanPages(wiki, paths, today(), warn);
   const scan = scanTurns(wiki, agent, deps.now());
 
