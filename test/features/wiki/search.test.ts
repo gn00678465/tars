@@ -189,6 +189,36 @@ describe("searchWiki", () => {
     expect(paths).toContain("topics/full");
   });
 
+  test("five pages with 42 strong rows each do not push out a sixth that only matches its title", async () => {
+    const { put, index, search } = await world();
+    for (let n = 1; n <= 6; n++) put(page(`topics/t${n}`, { title: "台積電", facts: [] }));
+    const w = await index();
+    const meta = tokenize("台積電");
+    const body = tokenize("台積電台積電台積電");
+    for (let n = 1; n <= 5; n++)
+      for (let i = 0; i < 42; i++) {
+        const { id } = w
+          .query(
+            "INSERT INTO page_docs (path, section, item, text) VALUES (?, 'facts', ?, '台積電') RETURNING id",
+          )
+          .get(`topics/t${n}`, `i${i + 1}`) as { id: number };
+        w.run("INSERT INTO page_fts (rowid, meta_tokens, body_tokens) VALUES (?, ?, ?)", [
+          id,
+          meta,
+          body,
+        ]);
+      }
+    const paths = search(w, { query: "台積電" }).pages.results.map((p) => p.path);
+    expect(paths.toSorted()).toEqual([
+      "topics/t1",
+      "topics/t2",
+      "topics/t3",
+      "topics/t4",
+      "topics/t5",
+      "topics/t6",
+    ]);
+  });
+
   test("a date range moves results up, keeps the rest, and reaches past the top 50", async () => {
     const { h, turn, index, search } = await world();
     for (let i = 0; i < 55; i++) turn({ owner: "颱風颱風颱風 停班停課" });

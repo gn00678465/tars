@@ -6,7 +6,6 @@ import { matchQuery, querySegments } from "./tokenize.ts";
 
 const RRF_K = 60;
 const LIST = 50;
-const PAGE_ROWS = 200;
 /** A result only a date-range list found counts as if it ranked just past the main list. */
 const EXTRA_RANK = LIST + 1;
 const SNIPPET_CHARS = 120;
@@ -174,24 +173,23 @@ export function searchWiki(dbs: SearchDbs, q: SearchQuery): SearchJson {
   const wiki = dbs.wiki;
   if (wiki === undefined || matches.length === 0) return json;
 
-  // Pages: the best rows, gathered page by page before the cut, so one page with many hits
-  // does not push the others out.
+  // Pages: each page's best row first, then the cut, so pages with many hits never push the
+  // others out.
   const pageRows = wiki.query(
-    `SELECT d.id, d.path, d.section, d.item, d.text, bm25(page_fts) AS s
-     FROM page_fts JOIN page_docs d ON d.id = page_fts.rowid JOIN pages p ON p.path = d.path
-     WHERE page_fts MATCH ?1 AND p.updated BETWEEN ?2 AND ?3 ORDER BY s, d.id LIMIT ${PAGE_ROWS}`,
+    `WITH hits AS (
+       SELECT d.id, d.path, d.section, d.item, d.text, bm25(page_fts) AS s
+       FROM page_fts JOIN page_docs d ON d.id = page_fts.rowid JOIN pages p ON p.path = d.path
+       WHERE page_fts MATCH ?1 AND p.updated BETWEEN ?2 AND ?3)
+     SELECT id, path, section, item, text FROM (
+       SELECT *, ROW_NUMBER() OVER (PARTITION BY path ORDER BY s, id) AS rn FROM hits)
+     WHERE rn = 1 ORDER BY s, id LIMIT ${LIST}`,
   );
   const firstRow = new Map<string, PageRow>();
-  const pageList = (match: string, lo: string, hi: string) => {
-    const paths: string[] = [];
-    for (const r of pageRows.all(match, lo, hi) as PageRow[]) {
-      if (paths.includes(r.path)) continue;
-      paths.push(r.path);
+  const pageList = (match: string, lo: string, hi: string) =>
+    (pageRows.all(match, lo, hi) as PageRow[]).map((r) => {
       if (!firstRow.has(r.path)) firstRow.set(r.path, r);
-      if (paths.length === LIST) break;
-    }
-    return paths;
-  };
+      return r.path;
+    });
   const pageScores = rrf(
     matches.map((m) => ({
       main: pageList(m, "0000-01-01", "9999-12-31"),
