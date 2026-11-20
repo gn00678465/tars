@@ -1,5 +1,5 @@
-import { readFile, realpath, stat } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, normalize, resolve, sep } from "node:path";
 import type { TarsPaths } from "../../core/paths.ts";
 import { isRecord, OUTPUT_LIMIT, SLUG } from "../script/metadata.ts";
 import { within } from "../script/out-dir.ts";
@@ -46,7 +46,14 @@ export async function runTool(
   const path = isRecord(input) ? input.path : undefined;
   if (typeof path !== "string" || path === "" || path.includes("\0"))
     return failed("path 必須是非空的字串");
-  return readPaged(isAbsolute(path) ? path : resolve(ctx.paths.skills, path), ctx, page);
+  return readPaged(readPath(path, ctx.paths), ctx, page);
+}
+
+/** A relative path whose first part is exactly "wiki" is under <data>; any other, skills. */
+function readPath(path: string, paths: TarsPaths): string {
+  if (isAbsolute(path)) return path;
+  const clean = normalize(path);
+  return clean.split(sep)[0] === "wiki" ? resolve(paths.data, clean) : resolve(paths.skills, clean);
 }
 
 interface Page {
@@ -69,9 +76,18 @@ function parsePage(input: unknown): Page | string {
   return { offset, limit };
 }
 
-/** The three roots the read tools may reach, resolved through symlinks. */
+/**
+ * The roots the read tools may reach, resolved through symlinks. <data>/wiki counts only as a
+ * real directory: as a link it could make anything readable.
+ */
 async function realRoots(paths: TarsPaths): Promise<string[]> {
-  const roots = [paths.skills, paths.playbooks, paths.outRoot];
+  const wiki = await lstat(paths.wiki).catch(() => undefined);
+  const roots = [
+    paths.skills,
+    paths.playbooks,
+    paths.outRoot,
+    ...(wiki?.isDirectory() === true ? [paths.wiki] : []),
+  ];
   const real = await Promise.all(roots.map((r) => realpath(r).catch(() => undefined)));
   return real.filter((r): r is string => r !== undefined);
 }
@@ -89,7 +105,7 @@ export async function readPaged(
   if (real === undefined) return failed(`${path} 不存在`);
   const roots = await realRoots(ctx.paths);
   if (!roots.some((root) => within(real, root)))
-    return failed(`${path} 不在可讀的範圍：skills、playbooks、workspace/out`);
+    return failed(`${path} 不在可讀的範圍：skills、playbooks、workspace/out、wiki`);
   const info = await stat(real);
   if (!info.isFile()) return failed(`${path} 不是一般檔案`);
   if (info.size > OUTPUT_LIMIT)

@@ -49,17 +49,23 @@ export interface TurnEvidence {
 export const sourceRef = (convId: string, turnId: string) =>
   `${shortId(convId)}/${shortId(turnId)}`;
 
-interface ItemRow {
-  seq: number;
-  kind: Item["kind"];
-  body: string;
+/** A turn's own words and its tool calls; tool results stay out (T5). */
+export interface TurnParts {
+  readonly owner: string;
+  /** Its non-empty assistant texts, in order. */
+  readonly assistant: readonly string[];
+  readonly tools: readonly {
+    readonly name: string;
+    readonly argv: readonly string[] | null;
+    readonly status: string;
+  }[];
 }
 
-export function readTurnEvidence(db: Database, turn: TurnRef): TurnEvidence {
+export function readTurnParts(db: Database, turn: Pick<TurnRef, "id" | "convId">): TurnParts {
   const items = (
     db
-      .query("SELECT seq, kind, body FROM items WHERE conv_id = ? AND turn_id = ? ORDER BY seq")
-      .all(turn.convId, turn.id) as ItemRow[]
+      .query("SELECT kind, body FROM items WHERE conv_id = ? AND turn_id = ? ORDER BY seq")
+      .all(turn.convId, turn.id) as { kind: Item["kind"]; body: string }[]
   ).map((r) => ({ kind: r.kind, body: JSON.parse(r.body) as Record<string, unknown> }));
   const textOf = (kind: string) =>
     items
@@ -70,24 +76,40 @@ export function readTurnEvidence(db: Database, turn: TurnRef): TurnEvidence {
       .filter((i) => i.kind === "tool_result")
       .map((i) => [i.body.callId as string, i.body.status as string]),
   );
-  const lines = items
-    .filter((i) => i.kind === "tool_call")
-    .map((i) => {
-      const argv = isRecord(i.body.input) ? i.body.input.argv : undefined;
-      const what =
-        i.body.name === "tars" && Array.isArray(argv) && argv.every((a) => typeof a === "string")
-          ? `tars ${argvText(argv)}`
-          : String(i.body.name);
-      return `${what}（${status.get(i.body.callId as string) ?? "沒有結果"}）`;
-    });
-  let tools = lines.join("\n");
+  return {
+    owner: textOf("user")[0] ?? "",
+    assistant: textOf("assistant"),
+    tools: items
+      .filter((i) => i.kind === "tool_call")
+      .map((i) => {
+        const argv = isRecord(i.body.input) ? i.body.input.argv : undefined;
+        return {
+          name: String(i.body.name),
+          argv:
+            i.body.name === "tars" &&
+            Array.isArray(argv) &&
+            argv.every((a) => typeof a === "string")
+              ? (argv as string[])
+              : null,
+          status: status.get(i.body.callId as string) ?? "沒有結果",
+        };
+      }),
+  };
+}
+
+export const toolLine = (t: TurnParts["tools"][number]) =>
+  `${t.argv === null ? t.name : `tars ${argvText(t.argv)}`}（${t.status}）`;
+
+export function readTurnEvidence(db: Database, turn: TurnRef): TurnEvidence {
+  const parts = readTurnParts(db, turn);
+  let tools = parts.tools.map(toolLine).join("\n");
   if (utf8Bytes(tools) > TOOLS_BYTES) tools = `${cutUtf8(tools, TOOLS_BYTES - 3)}…`;
   return {
     source: sourceRef(turn.convId, turn.id),
     turnId: turn.id,
     date: utcDay(new Date(turn.startedAt)),
-    owner: textOf("user")[0] ?? "",
-    assistant: textOf("assistant").join("\n"),
+    owner: parts.owner,
+    assistant: parts.assistant.join("\n"),
     tools,
   };
 }

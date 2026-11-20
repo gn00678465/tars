@@ -382,3 +382,76 @@ describe("toolText", () => {
     expect(bad.text).toContain("boom");
   });
 });
+
+describe("classify: wiki", () => {
+  const allowed: [string[], string[]][] = [
+    [
+      ["wiki", "search", "王小明", "--also", "小明", "--since", "2026-11-01", "--json"],
+      ["wiki", "search", "--also", "小明", "--since", "2026-11-01", "--json", "--", "王小明"],
+    ],
+    [
+      ["wiki", "search", "--limit", "5", "--", "-5% 那天"],
+      ["wiki", "search", "--limit", "5", "--", "-5% 那天"],
+    ],
+    [
+      ["wiki", "list"],
+      ["wiki", "list"],
+    ],
+    [
+      ["wiki", "list", "people", "--json"],
+      ["wiki", "list", "people", "--json"],
+    ],
+    [
+      ["wiki", "show", "people/wang-xiaoming"],
+      ["wiki", "show", "people/wang-xiaoming"],
+    ],
+    [
+      ["wiki", "source", "a1b2c3d4/9f8e7d6c", "--json"],
+      ["wiki", "source", "a1b2c3d4/9f8e7d6c", "--json"],
+    ],
+    [
+      ["wiki", "status"],
+      ["wiki", "status"],
+    ],
+  ];
+  for (const [argv, canonicalArgv] of allowed)
+    test(`${argv.join(" ")} is allowed`, async () => {
+      expect(await classify(argv, world().ctx)).toEqual({
+        kind: "allow",
+        canonicalArgv,
+        timeoutMs: 30_000,
+      });
+    });
+
+  const also = (n: number) => Array.from({ length: n }, (_, i) => ["--also", `w${i}`]).flat();
+  const refused: [string, string[]][] = [
+    ["a seventh --also", ["wiki", "search", "q", ...also(7)]],
+    ["--also -x", ["wiki", "search", "q", "--also", "-x"]],
+    ["a date that does not exist", ["wiki", "search", "q", "--since", "2026-02-30"]],
+    [
+      "--since after --until",
+      ["wiki", "search", "q", "--since", "2026-11-02", "--until", "2026-11-01"],
+    ],
+    ["--limit 0", ["wiki", "search", "q", "--limit", "0"]],
+    ["--limit 51", ["wiki", "search", "q", "--limit", "51"]],
+    ["a query starting with - outside --", ["wiki", "search", "-x"]],
+    ["no query", ["wiki", "search", "--json"]],
+    ["an unknown category", ["wiki", "list", "notes"]],
+    ["a path with capitals", ["wiki", "show", "people/Wang"]],
+    ["a path outside the categories", ["wiki", "show", "../agent/wiki"]],
+    ["a short ref that is too short", ["wiki", "source", "a1b/9f8e7d6c"]],
+    ["wiki sync", ["wiki", "sync"]],
+    ["wiki sync --reindex", ["wiki", "sync", "--reindex"]],
+    ["wiki reindex", ["wiki", "reindex"]],
+    ["wiki status --json", ["wiki", "status", "--json"]],
+    ["wiki alone", ["wiki"]],
+  ];
+  for (const [name, argv] of refused)
+    test(`${name} is refused`, async () => {
+      expect((await classify(argv, world().ctx)).kind).toBe("refuse");
+    });
+
+  test("six --also pass", async () => {
+    expect((await classify(["wiki", "search", "q", ...also(6)], world().ctx)).kind).toBe("allow");
+  });
+});

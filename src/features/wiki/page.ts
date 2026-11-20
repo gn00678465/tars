@@ -46,6 +46,33 @@ export const LIMITS = {
 
 export const chars = (s: string) => [...s].length;
 
+// --- What the read commands accept; the tars tool checks argv with the same rules.
+
+export const SEARCH = {
+  termChars: 100,
+  also: 6,
+  limit: 50,
+  defaultLimit: 10,
+} as const;
+
+/** A term as typed: 1 to 100 characters, not blank. */
+export const minuteText = (ms: number) => `${new Date(ms).toISOString().slice(0, 16)}Z`;
+
+export const okTerm = (s: string) => s.trim() !== "" && chars(s) <= SEARCH.termChars;
+
+/** YYYY-MM-DD that names a real UTC day, or undefined. */
+export function parseDay(s: string): string | undefined {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return undefined;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s ? s : undefined;
+}
+
+export const parseLimit = (s: string) =>
+  /^\d+$/.test(s) && Number(s) >= 1 && Number(s) <= SEARCH.limit ? Number(s) : undefined;
+
+/** `<conversation>/<turn>` as typed: a tail of 4 or more characters of each id. */
+export const SOURCE_ARG = /^[0-9a-f-]{4,36}\/[0-9a-f-]{4,36}$/;
+
 // oxlint-disable-next-line no-control-regex -- matching them is the point
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 /** A title or an alias: one line, and nothing that could end a link, a tag or an index cell. */

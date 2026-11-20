@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { utf8Bytes } from "../../../src/features/agent/bytes.ts";
 import type { SkillEntry } from "../../../src/features/agent/prompt.ts";
 import { runTool, type ReadToolContext } from "../../../src/features/agent/tools.ts";
 import { OUTPUT_LIMIT } from "../../../src/features/script/metadata.ts";
 import { isolatedPaths } from "./db-fixture.ts";
+import { REPO } from "./engine-fixture.ts";
 
 const SKILLS: SkillEntry[] = [
   { name: "demo", description: "a demo", localOnly: false },
@@ -203,5 +204,49 @@ describe("skill_load", () => {
     expect(header((await runTool("skill_load", { name: "other", limit: 3 }, ctx)).text)).toBe(
       `${join(paths.skills, "other", "SKILL.md")} 第 1–3 行，共 10 行；下一頁 offset=4`,
     );
+  });
+});
+
+describe("file_read: the wiki root", () => {
+  function wikiWorld() {
+    const w = world();
+    put(join(w.paths.wiki, "people", "x.md"), "王小明\n");
+    return w;
+  }
+
+  test("wiki/… and ./wiki/… are under <data>; an absolute path there works too", async () => {
+    const { paths, ctx } = wikiWorld();
+    for (const p of ["wiki/people/x.md", "./wiki/people/x.md", join(paths.wiki, "people/x.md")])
+      expect((await read(ctx, p)).status).toBe("done");
+  });
+
+  test("wiki-notes/… stays relative to skills", async () => {
+    const { paths, ctx } = wikiWorld();
+    put(join(paths.skills, "wiki-notes", "x.md"), "skills side\n");
+    const r = await read(ctx, "wiki-notes/x.md");
+    expect(r.text).toContain("skills side");
+  });
+
+  test("wiki/../agent/wiki.db and a link inside wiki/ that leads out are refused", async () => {
+    const { paths, ctx } = wikiWorld();
+    put(paths.wikiDb, "not really a database\n");
+    // Normalized first, it is agent/wiki.db under skills: nothing there, and nothing read.
+    expect(await read(ctx, "wiki/../agent/wiki.db")).toMatchObject({ status: "failed" });
+    expect((await read(ctx, paths.wikiDb)).text).toContain("不在可讀的範圍");
+    const outside = put(join(paths.data, "secret.md"), "secret\n");
+    symlinkSync(outside, join(paths.wiki, "people", "link.md"));
+    expect((await read(ctx, "wiki/people/link.md")).text).toContain("不在可讀的範圍");
+  });
+
+  test("<data>/wiki as a link is no root", async () => {
+    const { paths, ctx } = world();
+    const real = join(paths.data, "real-wiki");
+    put(join(real, "people", "x.md"), "王小明\n");
+    symlinkSync(real, paths.wiki);
+    expect((await read(ctx, "wiki/people/x.md")).text).toContain("不在可讀的範圍");
+  });
+
+  test("no skill shipped with tars is called wiki, so wiki/ never hides one", () => {
+    expect(existsSync(join(REPO, "tars-skills", "wiki"))).toBe(false);
   });
 });

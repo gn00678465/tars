@@ -9,6 +9,16 @@ import {
   type TarsPaths,
 } from "../../core/paths.ts";
 import { loadApprovedScript } from "../script/approved.ts";
+import {
+  CATEGORIES,
+  okTerm,
+  parseDay,
+  parseLimit,
+  parsePagePath,
+  SEARCH,
+  SOURCE_ARG,
+  type Category,
+} from "../wiki/page.ts";
 import { domainText, OUTPUT_LIMIT, SLUG } from "../script/metadata.ts";
 import {
   OUT_ROOT_ONLY_VAR,
@@ -93,6 +103,16 @@ export async function classify(argv: unknown, ctx: ClassifyContext): Promise<Cla
       return show(rest);
     case "script run":
       return run(rest, ctx);
+    case "wiki search":
+      return wikiSearch(rest);
+    case "wiki list":
+      return wikiOne(rest, "list", (v) => CATEGORIES.includes(v as Category), true);
+    case "wiki show":
+      return wikiOne(rest, "show", (v) => parsePagePath(v) === v);
+    case "wiki source":
+      return wikiOne(rest, "source", (v) => SOURCE_ARG.test(v));
+    case "wiki status":
+      return rest.length === 0 ? allow(["wiki", "status"]) : refuse("wiki status 不接受參數");
     default:
       return refuse(`${argv.slice(0, 2).join(" ")} 不在白名單上`);
   }
@@ -126,6 +146,80 @@ function show(rest: readonly string[]): Classified {
   }
   if (name === undefined || !SLUG.test(name)) return refuse("script show 要一個腳本名稱");
   return allow(["script", "show", name, ...(json ? ["--json"] : [])]);
+}
+
+/** One positional argument that `ok` accepts (none when `optional`), and --json. */
+function wikiOne(
+  rest: readonly string[],
+  name: string,
+  ok: (value: string) => boolean,
+  optional = false,
+): Classified {
+  let arg: string | undefined;
+  let json = false;
+  for (const t of rest) {
+    if (t === "--json" && !json) json = true;
+    else if (t.startsWith("-") || arg !== undefined || !ok(t))
+      return refuse(`wiki ${name} 不接受 ${t}`);
+    else arg = t;
+  }
+  if (arg === undefined && !optional) return refuse(`wiki ${name} 少了參數`);
+  return allow(["wiki", name, ...(arg === undefined ? [] : [arg]), ...(json ? ["--json"] : [])]);
+}
+
+/**
+ * The query goes after "--" in the canonical argv: it is any text, maybe starting with "-",
+ * and there the child's commander cannot read it as an option.
+ */
+function wikiSearch(rest: readonly string[]): Classified {
+  const tokens = new Tokens(rest);
+  let query: string | undefined;
+  const also: string[] = [];
+  const once: Record<"--since" | "--until" | "--limit", string | undefined> = {
+    "--since": undefined,
+    "--until": undefined,
+    "--limit": undefined,
+  };
+  let json = false;
+  while (!tokens.done) {
+    const t = tokens.next() as string;
+    if (t === "--") {
+      const r = tokens.rest();
+      if (r.length !== 1 || query !== undefined) return refuse("-- 之後只能有一個查詢");
+      query = r[0];
+    } else if (t === "--json" && !json) json = true;
+    else if (t === "--also") {
+      const v = tokens.next();
+      if (v === undefined || v.startsWith("-") || !okTerm(v) || also.length >= SEARCH.also)
+        return refuse(
+          `--also 最多 ${SEARCH.also} 個，每個 1 到 ${SEARCH.termChars} 字，不以 - 開頭`,
+        );
+      also.push(v);
+    } else if (t in once && once[t as keyof typeof once] === undefined) {
+      const v = tokens.next();
+      const valid =
+        v !== undefined &&
+        (t === "--limit" ? parseLimit(v) !== undefined : parseDay(v) !== undefined);
+      if (!valid) return refuse(`${t} 的值不對`);
+      once[t as keyof typeof once] = v;
+    } else if (!t.startsWith("-") && query === undefined) query = t;
+    else return refuse(`wiki search 不接受 ${t}`);
+  }
+  if (query === undefined || !okTerm(query))
+    return refuse(`wiki search 要一個 1 到 ${SEARCH.termChars} 字的查詢`);
+  const since = once["--since"];
+  const until = once["--until"];
+  if (since !== undefined && until !== undefined && since > until)
+    return refuse("--since 不能晚於 --until");
+  return allow([
+    "wiki",
+    "search",
+    ...also.flatMap((a) => ["--also", a]),
+    ...Object.entries(once).flatMap(([k, v]) => (v === undefined ? [] : [k, v])),
+    ...(json ? ["--json"] : []),
+    "--",
+    query,
+  ]);
 }
 
 async function run(rest: readonly string[], ctx: ClassifyContext): Promise<Classified> {

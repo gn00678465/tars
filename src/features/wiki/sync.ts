@@ -662,8 +662,6 @@ const clipChars = (s: string) => [...s].slice(0, REJECTED_CHARS).join("");
 
 // --- The run.
 
-export const minuteText = (ms: number) => `${new Date(ms).toISOString().slice(0, 16)}Z`;
-
 async function syncModel(paths: TarsPaths, config: TarsConfig) {
   const ref = config.wiki.model;
   if (ref !== "") {
