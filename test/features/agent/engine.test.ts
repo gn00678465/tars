@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Engine, TurnOutcome } from "../../../src/features/agent/engine.ts";
 import { estimateTokens, utf8Bytes } from "../../../src/features/agent/bytes.ts";
 import { adjust } from "../../../src/features/agent/ledger.ts";
+import { E2E_BASE_URL_VARS } from "../../../src/features/agent/provider.ts";
 import { REFUSAL_TEXT } from "../../../src/features/agent/tars-tool.ts";
 import { reconcile } from "../../../src/features/agent/reconcile.ts";
 import {
@@ -1077,6 +1078,62 @@ describe("compatible providers", () => {
     expect(first?.output_tokens).toBe(
       estimateTokens(utf8Bytes("tars") + utf8Bytes(JSON.stringify(input))),
     );
+  });
+
+  describe("no start and no status", () => {
+    const silent = { kind: "silent", after: "close" } as const;
+    // No effort levels: a request to it does not count as reasoning.
+    const { effortLevels: _, ...plain } = { ...OPENROUTER_ENTRY, id: "vendor/plain" };
+    const PLAIN: Ref = { provider: "openrouter", model: plain.id };
+    const wholeReservation = (r: { cost_usd: number; reserved_usd: number }) =>
+      expect(r.cost_usd).toBeCloseTo(r.reserved_usd, 12);
+    const inputOnly = (r: { cost_usd: number; reserved_usd: number; output_tokens: number }) => {
+      expect(r.output_tokens).toBe(0);
+      expect(r.cost_usd).toBeLessThan(r.reserved_usd);
+    };
+
+    test("reasoning, the body ends after the headers: each attempt keeps its reservation", async () => {
+      const h = await compat();
+      h.openrouter.reply(silent, silent, silent);
+      expect(ended(await send(h, OPENROUTER, "hi")).state).toBe("failed");
+      const settled = usageRows(h);
+      expect(settled.map((r) => r.state)).toEqual(["estimated", "estimated", "estimated"]);
+      for (const r of settled) {
+        wholeReservation(r);
+        expect(r.output_tokens).toBe(r.max_tokens);
+      }
+    });
+
+    test("reasoning, Ctrl+C before the first chunk: the reservation stays", async () => {
+      const h = await compat();
+      h.gemini.reply({ kind: "silent", after: "wait" });
+      const ctl = new AbortController();
+      const pending = send(h, GEMINI, "hi", ctl.signal);
+      while (h.gemini.chats().length === 0) await Bun.sleep(5);
+      ctl.abort();
+      await pending;
+      const [row] = usageRows(h);
+      expect(row?.state).toBe("estimated");
+      if (row !== undefined) wholeReservation(row);
+    });
+
+    test("not reasoning: the input only, as before", async () => {
+      const h = await compat({ extraModels: [plain] });
+      h.openrouter.reply(silent, silent, silent);
+      expect(ended(await send(h, PLAIN, "hi")).state).toBe("failed");
+      for (const r of usageRows(h)) inputOnly(r);
+    });
+
+    test("reasoning, but the connection failed before anything was sent: the input only", async () => {
+      const closed = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
+      const url = `http://127.0.0.1:${closed.port}`;
+      await closed.stop(true);
+      const h = await compat({ extraEnv: { [E2E_BASE_URL_VARS.openrouter]: url } });
+      expect(ended(await send(h, OPENROUTER, "hi")).state).toBe("failed");
+      const settled = usageRows(h);
+      expect(settled).toHaveLength(3);
+      for (const r of settled) inputOnly(r);
+    });
   });
 
   test("the answer's items and its estimated row are written in one transaction", async () => {

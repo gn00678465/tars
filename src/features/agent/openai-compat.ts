@@ -259,12 +259,13 @@ async function* streamChat(
   req: ModelRequest,
   signal: AbortSignal,
 ): AsyncGenerator<ProviderEvent> {
-  const seen = { receivedStart: false, receivedContent: false };
+  const seen = { receivedStart: false, receivedContent: false, responded: false };
   try {
     const stream = (await client.chat.completions.create(
       requestBody(req, provider) as unknown as OpenAI.ChatCompletionCreateParamsStreaming,
       { signal },
     )) as unknown as AsyncIterable<RawChunk>;
+    seen.responded = true;
     let text = "";
     let thinking = false;
     let finish: string | undefined;
@@ -306,7 +307,8 @@ async function* streamChat(
       }
       if (choice.finish_reason) finish = choice.finish_reason;
     }
-    if (finish === undefined) throw new ProviderError("connection", { ...seen });
+    if (finish === undefined)
+      throw new ProviderError("connection", { ...seen, mayHaveRun: !seen.receivedStart });
     const complete = [...calls.entries()]
       .toSorted(([a], [b]) => a - b)
       .map(([, c]) => c)
@@ -427,14 +429,24 @@ export function toProviderError(
   err: unknown,
   provider: CompatProvider,
   signal: AbortSignal,
-  seen: { receivedStart: boolean; receivedContent: boolean },
+  seen: { receivedStart: boolean; receivedContent: boolean; responded?: boolean },
   apiKey: string,
 ): unknown {
   const status = err instanceof APIError ? err.status : undefined;
-  const make = (kind: ProviderErrorKind, extra: { retryAfterMs?: number; detail?: string } = {}) =>
-    new ProviderError(kind, { ...seen, ...(status === undefined ? {} : { status }), ...extra });
+  const make = (
+    kind: ProviderErrorKind,
+    extra: { retryAfterMs?: number; detail?: string; mayHaveRun?: boolean } = {},
+  ) =>
+    new ProviderError(kind, {
+      receivedStart: seen.receivedStart,
+      receivedContent: seen.receivedContent,
+      ...(status === undefined ? {} : { status }),
+      ...extra,
+    });
+  // Sent and not refused, but no start: an abort, or a body that broke off after the headers.
+  const unseen = { mayHaveRun: !seen.receivedStart };
   // First: an abort can end the SDK's stream quietly, which then reads as a missing finish.
-  if (err instanceof APIUserAbortError || signal.aborted) return make("aborted");
+  if (err instanceof APIUserAbortError || signal.aborted) return make("aborted", unseen);
   if (err instanceof ProviderError) return err;
   if (err instanceof APIError) {
     const message = messageOf(err);
@@ -451,11 +463,12 @@ export function toProviderError(
     if (status === 503 || status === 529) return make("overloaded");
     if (status === 408) return make("connection");
     if (status !== undefined && status >= 500) return make("server");
-    if (err instanceof APIConnectionError) return make("connection");
+    if (err instanceof APIConnectionError)
+      return make("connection", seen.responded === true ? unseen : {});
     if (status !== undefined)
       return make("bad_request", { detail: redact(message, apiKey).slice(0, DETAIL_LIMIT) });
   }
-  if (err instanceof OpenAIError) return make("connection");
+  if (err instanceof OpenAIError) return make("connection", seen.responded === true ? unseen : {});
   return err;
 }
 

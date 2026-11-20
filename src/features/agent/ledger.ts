@@ -390,8 +390,10 @@ export function recordEnd(
 
 /**
  * A request that failed or was aborted. A provider that answered with a status before any
- * start refused it and charged nothing. Otherwise it may have run: a known input is kept and
- * the output is estimated from the text that arrived; an unknown input stays at its reservation.
+ * start refused it and charged nothing [unmeasured for the compatible endpoints]. Otherwise it
+ * may have run: a known input is kept and the output is estimated from the text that arrived;
+ * an unknown input stays at its reservation. Without a start the output counts as nothing,
+ * unless the request reasoned and may have run.
  */
 export function recordFailure(
   db: Database,
@@ -404,6 +406,8 @@ export function recordFailure(
     inputKnown?: boolean;
     /** Did this request count as reasoning (consume decides)? */
     reasoning?: boolean;
+    /** No start, but the upstream may have run it (ProviderError.mayHaveRun). */
+    mayHaveRun?: boolean;
   },
 ): UsageState {
   if (f.status !== undefined && !f.receivedStart) {
@@ -417,6 +421,9 @@ export function recordFailure(
     const cost = inputUsd(rowInput(row), price) + (outputTokens * price.output) / 1e6;
     setEstimate(db, f.usageId, "estimated", outputTokens, cost);
   } else if (f.receivedStart) unknownInput(db, f.usageId, f.textBytes, f.reasoning === true);
+  // The rule settleEnd follows without usage: a reasoning request keeps its whole reservation.
+  else if (f.mayHaveRun === true && f.reasoning === true)
+    unknownInput(db, f.usageId, f.textBytes, true);
   else setEstimate(db, f.usageId, "estimated", 0, reservedInput(row, price));
   return "estimated";
 }

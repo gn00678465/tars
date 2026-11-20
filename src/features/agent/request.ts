@@ -210,7 +210,10 @@ export async function consume(
   } catch (err) {
     if (!(err instanceof ProviderError) && !signal.aborted) throw err;
     const seen = { receivedStart, receivedContent: text !== "" || calls.length > 0 };
-    const error = signal.aborted ? new ProviderError("aborted", seen) : (err as ProviderError);
+    const mayHaveRun = err instanceof ProviderError && err.mayHaveRun === true;
+    const error = signal.aborted
+      ? new ProviderError("aborted", { ...seen, mayHaveRun })
+      : (err as ProviderError);
     return { ...read(), error };
   }
 }
@@ -224,6 +227,7 @@ export function settleFailure(db: Database, usageId: number, got: Consumed): voi
     textBytes: utf8Bytes(got.text),
     inputKnown: got.inputKnown,
     reasoning: got.reasoning,
+    mayHaveRun: e.mayHaveRun === true,
   });
 }
 

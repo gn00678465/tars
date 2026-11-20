@@ -25,6 +25,8 @@ export interface ProviderErrorInit {
   readonly receivedStart: boolean;
   readonly receivedContent: boolean;
   readonly detail?: string;
+  /** See ProviderError.mayHaveRun. */
+  readonly mayHaveRun?: boolean;
 }
 
 /**
@@ -37,6 +39,12 @@ export class ProviderError extends Error {
   readonly receivedStart: boolean;
   readonly receivedContent: boolean;
   readonly detail?: string;
+  /**
+   * No start, yet the upstream may have run the request: set by the compatible adapter, whose
+   * start waits for the first chunk, when the headers came and the body broke off, or on abort.
+   * A reasoning model may think for minutes before that chunk.
+   */
+  readonly mayHaveRun?: boolean;
 
   constructor(
     readonly kind: ProviderErrorKind,
@@ -49,6 +57,7 @@ export class ProviderError extends Error {
     if (init.status !== undefined) this.status = init.status;
     if (init.retryAfterMs !== undefined) this.retryAfterMs = init.retryAfterMs;
     if (init.detail !== undefined) this.detail = init.detail;
+    if (init.mayHaveRun === true) this.mayHaveRun = true;
   }
 }
 
