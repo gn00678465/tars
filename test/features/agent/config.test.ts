@@ -9,6 +9,7 @@ import {
   DEFAULT_LIMITS,
   DEFAULT_WIKI,
   loadConfig,
+  WIKI_NO_OPENROUTER,
 } from "../../../src/features/agent/config.ts";
 import { tempHome } from "../../helpers.ts";
 
@@ -251,6 +252,16 @@ describe("loadConfig", () => {
       expect(await problems(`${PROVIDER}[wiki]\nmodel = ${bad}\n`)).toContain("[wiki] model");
     const { config } = await loadConfig(pathsWith(`${PROVIDER}[wiki]\nmodel = "gemini/x"\n`));
     expect(config.wiki.model).toBe("gemini/x");
+  });
+
+  test("[wiki] model on openrouter is refused, with why; gemini and anthropic are not", async () => {
+    expect(await problems(`${PROVIDER}[wiki]\nmodel = "openrouter/vendor/x"\n`)).toContain(
+      WIKI_NO_OPENROUTER,
+    );
+    for (const ok of ["gemini/x", "anthropic/claude-x"])
+      expect(
+        (await loadConfig(pathsWith(`${PROVIDER}[wiki]\nmodel = "${ok}"\n`))).config.wiki.model,
+      ).toBe(ok);
   });
 
   test("[wiki] with an unknown key is an error", async () => {

@@ -198,6 +198,13 @@ const isModelRef = (v: string) => {
   );
 };
 
+/**
+ * The OpenRouter reconcile compares the key's figure with the chat books only, and an adjustment
+ * covers wiki requests by time: wiki requests on OpenRouter would drop out of the books.
+ */
+export const WIKI_NO_OPENROUTER =
+  "[wiki] model 不能是 openrouter/…：OpenRouter 的自動校正與 wiki 的帳尚未合併，wiki 暫不支援 OpenRouter 的模型。Gemini 與 Anthropic 不受影響";
+
 function parseWiki(table: Record<string, unknown>, problems: string[]): WikiConfig {
   const before = problems.length;
   const f = new Fields("wiki", table, problems);
@@ -208,6 +215,7 @@ function parseWiki(table: Record<string, unknown>, problems: string[]): WikiConf
     model: f.text("model", d.model, isModelRef, `"" or "<provider>/<id>"`),
   };
   f.rejectUnknown();
+  if (wiki.model.startsWith("openrouter/")) problems.push(WIKI_NO_OPENROUTER);
   if (problems.length === before && wiki.daily_cap_usd > wiki.monthly_cap_usd)
     problems.push("[wiki] needs daily_cap_usd ≤ monthly_cap_usd");
   return wiki;

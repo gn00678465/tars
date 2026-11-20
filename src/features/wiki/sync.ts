@@ -10,7 +10,7 @@ import { utf8Bytes } from "../agent/bytes.ts";
 import { defaultModel, loadCatalog, utcDay } from "../agent/catalog.ts";
 import { refuseInSession } from "../agent/cli.ts";
 import { usd } from "../agent/cost-command.ts";
-import { loadConfig, type TarsConfig } from "../agent/config.ts";
+import { loadConfig, WIKI_NO_OPENROUTER, type TarsConfig } from "../agent/config.ts";
 import { acquireLockAt, openDb } from "../agent/db.ts";
 import { estimateInput, insertReserved, reconcileLedger, reserve } from "../agent/ledger.ts";
 import type { AdapterFor } from "../agent/provider.ts";
@@ -751,7 +751,10 @@ async function syncModel(paths: TarsPaths, config: TarsConfig) {
   const ref = config.wiki.model;
   if (ref !== "") {
     const slash = ref.indexOf("/");
-    return { provider: ref.slice(0, slash) as Provider, id: ref.slice(slash + 1) };
+    const provider = ref.slice(0, slash) as Provider;
+    // Also refused by the config check; repeated here, where the request would be sent.
+    if (provider === "openrouter") throw new TarsError(WIKI_NO_OPENROUTER);
+    return { provider, id: ref.slice(slash + 1) };
   }
   let catalog;
   try {

@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { CONFIG_TEMPLATE } from "../../../src/features/agent/config.ts";
+import { CONFIG_TEMPLATE, WIKI_NO_OPENROUTER } from "../../../src/features/agent/config.ts";
 import { adjust } from "../../../src/features/agent/ledger.ts";
 import { adapterFor } from "../../../src/features/agent/provider.ts";
 import { openWikiDb } from "../../../src/features/wiki/db.ts";
@@ -30,7 +30,12 @@ import { captureIo } from "../../helpers.ts";
 import { engineHarness, type EngineHarness, type HarnessOptions } from "../agent/engine-fixture.ts";
 import { chatTurn, type ChatTurnSpec } from "./wiki-fixture.ts";
 import { compatText } from "../../fakes/openai-compat.ts";
-import { compatHarness, enableCompat, GEMINI_ENTRY } from "../agent/compat-fixture.ts";
+import {
+  compatHarness,
+  enableCompat,
+  GEMINI_ENTRY,
+  OPENROUTER_ENTRY,
+} from "../agent/compat-fixture.ts";
 
 interface SyncHarness extends EngineHarness {
   readonly io: ReturnType<typeof captureIo>;
@@ -1156,4 +1161,30 @@ test("job requests whose end reports no usage: the jobs finish, their rows are e
   ]);
   expect(one(w, "SELECT state FROM candidates")).toEqual({ state: "applied" });
   expect(io.stdout).toContain("有 2 個請求沒有回報用量，花費是估的");
+});
+
+test("an OpenRouter model for the wiki: sync refuses at the start, nothing is sent", async () => {
+  const h = await compatHarness({
+    config: enableCompat(CONFIG_TEMPLATE).replace(
+      'model = ""',
+      `model = "openrouter/${OPENROUTER_ENTRY.id}"`,
+    ),
+  });
+  harnesses.push(h);
+  chatTurn(h.db, { now: h.clock.now(), owner: OWNER, assistant: ["好的"] });
+  const run = runSync(
+    {
+      paths: h.paths,
+      env: h.env,
+      secrets: h.secrets,
+      adapterFor,
+      now: () => h.clock.now(),
+      sleep: async () => {},
+      io: captureIo(),
+    },
+    {},
+    new AbortController().signal,
+  );
+  await expect(run).rejects.toThrow(WIKI_NO_OPENROUTER);
+  expect(h.openrouter.chats()).toHaveLength(0);
 });
