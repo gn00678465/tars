@@ -3,11 +3,16 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolvePaths } from "../../../src/core/paths.ts";
 import type { Catalog, ModelEntry } from "../../../src/features/agent/catalog.ts";
-import { adapterFor, ProviderError } from "../../../src/features/agent/provider.ts";
+import {
+  adapterFor,
+  E2E_BASE_URL_VARS,
+  ProviderError,
+} from "../../../src/features/agent/provider.ts";
 import type { ListedModel } from "../../../src/features/agent/types.ts";
 import { run } from "../../../src/main.ts";
 import { capabilities, startFakeAnthropic, type FakeAnthropic } from "../../fakes/anthropic.ts";
 import { fakeSecrets, scriptedTerminal, tempHome, testDeps } from "../../helpers.ts";
+import { startFakeCompat, type FakeCompat } from "../../fakes/openai-compat.ts";
 
 const CANDIDATE: ModelEntry = {
   provider: "anthropic",
@@ -414,5 +419,214 @@ describe("tars models list", () => {
     writeFileSync(s.paths.configFile, "[limits]\nprice_warn_days = 10\n");
     expect(await run(["models", "list", "--json"], s.deps)).toBe(0);
     expect(JSON.parse(s.deps.io.stdout.join("\n")).models[0].priceState).toBe("stale");
+  });
+});
+
+describe("Gemini and OpenRouter lists", () => {
+  let gemini: FakeCompat;
+  let openrouter: FakeCompat;
+  beforeAll(() => {
+    gemini = startFakeCompat("gemini");
+    openrouter = startFakeCompat("openrouter");
+  });
+  afterAll(async () => {
+    await gemini.stop();
+    await openrouter.stop();
+  });
+
+  /** The real adapters, pointed at the two fakes. */
+  function compat(models: ModelEntry[]) {
+    const home = tempHome();
+    const env = {
+      HOME: home,
+      XDG_CONFIG_HOME: join(home, "cfg"),
+      TARS_DATA_DIR: join(home, "data"),
+      [E2E_BASE_URL_VARS.gemini]: gemini.url,
+      [E2E_BASE_URL_VARS.openrouter]: openrouter.url,
+    };
+    const paths = resolvePaths(env);
+    mkdirSync(paths.config, { recursive: true });
+    writeFileSync(paths.modelsFile, JSON.stringify({ version: 1, models }));
+    const deps = testDeps({
+      env,
+      secrets: fakeSecrets({ "llm:gemini": "gm-test", "llm:openrouter": "or-test" }),
+      adapterFor,
+    });
+    const raw = () => readFileSync(paths.modelsFile, "utf8");
+    const model = (provider: string, id: string) =>
+      (JSON.parse(raw()) as Catalog).models.find((m) => m.provider === provider && m.id === id);
+    return { deps, raw, model };
+  }
+  const err = (d: { io: { stderr: string[] } }) => d.io.stderr.join("\n");
+  const out = (d: { io: { stdout: string[] } }) => d.io.stdout.join("\n");
+
+  const upstream = (id: string, more: Record<string, unknown> = {}) => ({
+    id,
+    name: `Name of ${id}`,
+    context_length: 100000,
+    top_provider: { max_completion_tokens: 8000 },
+    supported_parameters: ["reasoning"],
+    pricing: { prompt: "0.000002", completion: "0.000008" },
+    ...more,
+  });
+  const listedEntry = (provider: "gemini" | "openrouter", id: string): ModelEntry => ({
+    provider,
+    id,
+    label: id,
+    status: "candidate",
+    firstSeen: "2026-11-01",
+    lastSeen: "2026-11-01",
+  });
+  const refresh = (...more: string[]) => ["models", "refresh", "--provider", "openrouter", ...more];
+
+  describe("OpenRouter", () => {
+    test("no options: only models already listed are updated; the rest are counted", async () => {
+      openrouter.models = [upstream("v/a"), upstream("v/b"), upstream("v/c")];
+      const s = compat([listedEntry("openrouter", "v/a")]);
+      expect(await run(refresh(), s.deps)).toBe(0);
+      expect(s.model("openrouter", "v/a")).toMatchObject({
+        label: "Name of v/a",
+        price: { input: 2, output: 8, cacheRead: 2, cacheWrite: 2 },
+        priceSource: "openrouter",
+        pricedAt: "2026-11-19",
+      });
+      expect(s.model("openrouter", "v/b")).toBeUndefined();
+      expect(out(s.deps)).toContain("上游另有 2 個模型不在清單上，用 --find 找、--add 加");
+    });
+
+    test("--find prints matches by id or name and writes nothing", async () => {
+      openrouter.models = [upstream("v/alpha"), upstream("v/beta", { name: "Gamma Pro" })];
+      const s = compat([]);
+      const before = s.raw();
+      expect(await run(refresh("--find", "gamma"), s.deps)).toBe(0);
+      expect(s.deps.io.stdout).toEqual(["v/beta\tGamma Pro"]);
+      expect(s.raw()).toBe(before);
+    });
+
+    test("--add writes a candidate with its prices; a missing output limit is named", async () => {
+      openrouter.models = [upstream("v/a"), upstream("v/c", { top_provider: {} })];
+      const s = compat([]);
+      expect(await run(refresh("--add", "v/a", "--add", "v/c"), s.deps)).toBe(0);
+      expect(s.model("openrouter", "v/a")).toMatchObject({
+        status: "candidate",
+        contextWindow: 100000,
+        maxOutput: 8000,
+        price: { input: 2, output: 8 },
+        priceSource: "openrouter",
+      });
+      expect(err(s.deps)).toContain(
+        "openrouter/v/c 缺 max-output；執行 tars models set openrouter/v/c --max-output <n>",
+      );
+      expect(err(s.deps)).not.toContain("openrouter/v/a 缺");
+      expect(err(s.deps)).toContain("openrouter/v/a 能關掉推理的話，加 --thinking-types disabled");
+    });
+
+    test("--add of an id not upstream is an error and writes nothing", async () => {
+      openrouter.models = [upstream("v/a")];
+      const s = compat([]);
+      const before = s.raw();
+      expect(await run(refresh("--add", "v/nope"), s.deps)).toBe(1);
+      expect(err(s.deps)).toContain("上游清單沒有 v/nope");
+      expect(s.raw()).toBe(before);
+    });
+
+    test("a list refresh wrote is read back, and its prices are not refused", async () => {
+      openrouter.models = [upstream("v/a")];
+      const s = compat([]);
+      expect(await run(refresh("--add", "v/a"), s.deps)).toBe(0);
+      expect(await run(["models", "list", "--json"], s.deps)).toBe(0);
+      const { models } = JSON.parse(s.deps.io.stdout.at(-1) as string);
+      expect(models[0]).toMatchObject({ priceSource: "openrouter", priceState: "ok" });
+    });
+
+    test("a model gone upstream becomes retired (acceptance 3, first half)", async () => {
+      openrouter.models = [upstream("v/a")];
+      const s = compat([listedEntry("openrouter", "v/a"), listedEntry("openrouter", "v/gone")]);
+      expect(await run(refresh(), s.deps)).toBe(0);
+      expect(s.model("openrouter", "v/gone")?.status).toBe("retired");
+      expect(s.model("openrouter", "v/a")?.status).toBe("candidate");
+    });
+
+    test("effortLevels the owner set survive a refresh", async () => {
+      openrouter.models = [upstream("v/a")];
+      const s = compat([
+        { ...listedEntry("openrouter", "v/a"), effortLevels: ["low", "medium", "high", "xhigh"] },
+      ]);
+      expect(await run(refresh(), s.deps)).toBe(0);
+      expect(s.model("openrouter", "v/a")?.effortLevels).toEqual([
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+      ]);
+    });
+
+    test.each([
+      [["models", "refresh", "--find", "x"]],
+      [["models", "refresh", "--provider", "gemini", "--add", "x"]],
+      [["models", "refresh", "--provider", "openrouter", "--find", "x", "--add", "y"]],
+    ])("%p is a usage error", async (args) => {
+      const s = compat([]);
+      expect(await run(args, s.deps)).toBe(2);
+    });
+  });
+
+  describe("Gemini", () => {
+    test("refresh writes candidates with only an id and a name", async () => {
+      gemini.models = [
+        { id: "models/gem-a", object: "model", owned_by: "google", display_name: "Gem A" },
+        { id: "gem-b", object: "model", owned_by: "google" },
+      ];
+      const s = compat([]);
+      expect(await run(["models", "refresh", "--provider", "gemini"], s.deps)).toBe(0);
+      const a = s.model("gemini", "gem-a");
+      expect(a).toMatchObject({ label: "Gem A", status: "candidate" });
+      expect(a?.price).toBeUndefined();
+      expect(a?.contextWindow).toBeUndefined();
+      expect(s.model("gemini", "gem-b")?.label).toBe("gem-b");
+    });
+
+    test("a model gone upstream becomes retired", async () => {
+      gemini.models = [{ id: "models/gem-a", object: "model", owned_by: "google" }];
+      const s = compat([listedEntry("gemini", "gem-a"), listedEntry("gemini", "gem-old")]);
+      expect(await run(["models", "refresh", "--provider", "gemini"], s.deps)).toBe(0);
+      expect(s.model("gemini", "gem-old")?.status).toBe("retired");
+    });
+
+    test("enable only once set has filled it in", async () => {
+      const s = compat([listedEntry("gemini", "gem-a")]);
+      expect(await run(["models", "enable", "gemini/gem-a"], s.deps)).toBe(1);
+      const set = [
+        "models",
+        "set",
+        "gemini/gem-a",
+        ...PRICES,
+        "--context-window",
+        "100000",
+        "--max-output",
+        "8000",
+        "--effort-levels",
+        "low,medium,high",
+        "--thinking-types",
+        "disabled",
+      ];
+      expect(await run(set, s.deps)).toBe(0);
+      expect(await run(["models", "enable", "gemini/gem-a"], s.deps)).toBe(0);
+      expect(s.model("gemini", "gem-a")?.status).toBe("active");
+    });
+  });
+
+  test("--effort-levels max on a Gemini model is refused; xhigh on OpenRouter is taken", async () => {
+    const s = compat([listedEntry("gemini", "gem-a"), listedEntry("openrouter", "v/a")]);
+    const before = s.raw();
+    expect(await run(["models", "set", "gemini/gem-a", "--effort-levels", "low,max"], s.deps)).toBe(
+      2,
+    );
+    expect(err(s.deps)).toContain("gemini 的模型只接受 --effort-levels low,medium,high");
+    expect(s.raw()).toBe(before);
+    expect(
+      await run(["models", "set", "openrouter/v/a", "--effort-levels", "low,xhigh"], s.deps),
+    ).toBe(0);
+    expect(s.model("openrouter", "v/a")?.effortLevels).toEqual(["low", "xhigh"]);
   });
 });

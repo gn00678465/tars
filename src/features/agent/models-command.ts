@@ -1,6 +1,6 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { existsSync } from "node:fs";
-import { TarsError } from "../../core/exit.ts";
+import { EXIT, TarsError } from "../../core/exit.ts";
 import { resolvePaths } from "../../core/paths.ts";
 import { PROVIDERS, type Provider } from "../../core/secrets.ts";
 import {
@@ -29,10 +29,23 @@ import {
 import { DEFAULT_LIMITS, loadConfig, type Limits } from "./config.ts";
 import { EFFORTS } from "./effort.ts";
 import { ProviderError } from "./provider.ts";
-import type { Effort } from "./types.ts";
+import type { Effort, ListedModel } from "./types.ts";
 
 const THINKING_TYPES = ["enabled", "disabled", "between_tools", "adaptive"];
 const LIST_TIMEOUT_MS = 30_000;
+
+/** The levels each endpoint can be sent: Gemini answers xhigh with a 400, neither has max. */
+const PROVIDER_EFFORTS: Record<Provider, readonly Effort[]> = {
+  anthropic: EFFORTS,
+  gemini: ["low", "medium", "high"],
+  openrouter: ["low", "medium", "high", "xhigh"],
+};
+
+interface RefreshOptions {
+  provider: Provider;
+  find?: string;
+  add: string[];
+}
 
 interface SetOptions {
   input?: number;
@@ -79,53 +92,104 @@ export function registerModelsCommands(program: Command, ctx: AgentCommandContex
     .command("refresh")
     .description("Fetch a provider's model list and fold it into models.json.")
     .option("--provider <name>", PROVIDERS.join(" | "), parseProvider, "anthropic" as Provider)
+    .option("--find <text>", "openrouter: list upstream models whose id or name has this text")
+    .option(
+      "--add <id>",
+      "openrouter: add this upstream model as a candidate (repeatable)",
+      (v: string, prev: string[]) => [...prev, v],
+      [] as string[],
+    )
     .addHelpText(
       "after",
       `
-New models join as candidate; models gone upstream become retired and lose default.
-Prices and active status are never changed here.
+Anthropic and Gemini: new models join as candidate. OpenRouter lists hundreds, so only models
+already in the list are updated; --find searches upstream without writing, --add adds one.
+Models gone upstream become retired and lose default. OpenRouter's prices are filled in from
+upstream; prices set by hand and active status are never changed here.
 
-Exit codes: 0 done, 1 no key, an invalid list, a provider error or inside a tars session,
-2 usage error.
+Exit codes: 0 done, 1 no key, an invalid list, an --add id not upstream, a provider error or
+inside a tars session, 2 usage error.
 
 Examples:
   tars models refresh
-  tars models refresh --provider anthropic`,
+  tars models refresh --provider gemini
+  tars models refresh --provider openrouter --find <text>
+  tars models refresh --provider openrouter --add <vendor>/<id>`,
     )
-    .action(async (opts: { provider: Provider }) => {
+    .action(async (opts: RefreshOptions) => {
+      const { provider } = opts;
+      if ((opts.find !== undefined || opts.add.length > 0) && provider !== "openrouter")
+        throw new TarsError("--find 與 --add 只用在 --provider openrouter", EXIT.usage);
+      if (opts.find !== undefined && opts.add.length > 0)
+        throw new TarsError("--find 不寫檔，不能和 --add 一起用", EXIT.usage);
       refuseInSession(ctx.env);
       await loadCatalog(paths());
-      const key = await ctx.secrets.get(`llm:${opts.provider}`);
+      const key = await ctx.secrets.get(`llm:${provider}`);
       if (key === null)
-        throw new TarsError(
-          `keyring 沒有 llm:${opts.provider}；先執行 tars llm key set ${opts.provider}`,
-        );
-      const adapter = await ctx.adapterFor(opts.provider, key, ctx.env, ctx.io.err);
+        throw new TarsError(`keyring 沒有 llm:${provider}；先執行 tars llm key set ${provider}`);
+      const adapter = await ctx.adapterFor(provider, key, ctx.env, ctx.io.err);
       const listed = await adapter.listModels(AbortSignal.timeout(LIST_TIMEOUT_MS)).catch((err) => {
         if (err instanceof ProviderError) throw new TarsError(`無法取得模型清單：${err.message}`);
         throw err;
       });
+      if (opts.find !== undefined) return printFound(listed, opts.find);
+      const upstream = new Set(listed.map((m) => m.id));
+      const unknown = opts.add.filter((id) => !upstream.has(id));
+      if (unknown.length > 0)
+        throw new TarsError(`上游清單沒有 ${unknown.join(", ")}；用 --find 找正確的 id`);
       // Merged into the list as it is after the fetch, so a `models set` made meanwhile stays.
       let changes: readonly ListingChange[] = [];
+      let unlisted = 0;
+      let added: ModelEntry[] = [];
       await update((latest) => {
-        const merged = mergeListing(latest, opts.provider, listed, today());
+        let listing = listed;
+        if (provider === "openrouter") {
+          const kept = new Set([
+            ...latest.models.filter((m) => m.provider === provider).map((m) => m.id),
+            ...opts.add,
+          ]);
+          listing = listed.filter((m) => kept.has(m.id));
+          unlisted = listed.length - listing.length;
+        }
+        const merged = mergeListing(latest, provider, listing, today());
         changes = merged.changes;
+        added = opts.add.flatMap((id) => findModel(merged.catalog, provider, id) ?? []);
         return merged.catalog;
       });
       for (const c of changes) {
-        if (c.kind === "added") ctx.io.out(`added      ${opts.provider}/${c.id} (candidate)`);
-        if (c.kind === "updated") ctx.io.out(`updated    ${opts.provider}/${c.id}`);
+        if (c.kind === "added") ctx.io.out(`added      ${provider}/${c.id} (candidate)`);
+        if (c.kind === "updated") ctx.io.out(`updated    ${provider}/${c.id}`);
         if (c.kind === "retired") {
-          ctx.io.out(`retired    ${opts.provider}/${c.id}`);
-          if (c.wasDefault) ctx.io.err(`warning: ${opts.provider} 現在沒有預設模型`);
+          ctx.io.out(`retired    ${provider}/${c.id}`);
+          if (c.wasDefault) ctx.io.err(`warning: ${provider} 現在沒有預設模型`);
         }
         if (c.kind === "deprecated")
           ctx.io.err(
-            `warning: ${opts.provider}/${c.id} 已被標為 deprecated${c.retiresAt ? `，預定 ${c.retiresAt} 下架` : ""}`,
+            `warning: ${provider}/${c.id} 已被標為 deprecated${c.retiresAt ? `，預定 ${c.retiresAt} 下架` : ""}`,
           );
       }
-      ctx.io.out(`${listed.length} models from ${opts.provider}`);
+      ctx.io.out(`${listed.length} models from ${provider}`);
+      if (unlisted > 0) ctx.io.out(`上游另有 ${unlisted} 個模型不在清單上，用 --find 找、--add 加`);
+      for (const m of added) {
+        const ref = `${m.provider}/${m.id}`;
+        const missing = missingToEnable(m);
+        if (missing.length > 0)
+          ctx.io.err(
+            `${ref} 缺 ${missing.join("、")}；執行 tars models set ${ref} ${missing.map((o) => `--${o} <n>`).join(" ")}`,
+          );
+        ctx.io.err(`${ref} 能關掉推理的話，加 --thinking-types disabled`);
+      }
     });
+
+  /** --find: id or name, any case; nothing is written. */
+  const printFound = (listed: readonly ListedModel[], text: string) => {
+    const needle = text.toLowerCase();
+    const found = listed.filter(
+      (m) => m.id.toLowerCase().includes(needle) || m.label.toLowerCase().includes(needle),
+    );
+    if (found.length === 0) return ctx.io.err(`上游沒有 id 或名稱含「${text}」的模型`);
+    for (const m of found) ctx.io.out(`${m.id}\t${m.label}`);
+  };
 
   models
     .command("set")
@@ -160,9 +224,18 @@ Exit codes: 0 done, 1 not in the list, an unusual price or inside a tars session
 
 Examples:
   tars models set anthropic/<id> --input 3 --output 15 --cache-read 0.3 --cache-write 3.75
-  tars models set anthropic/<id> --effort-levels low,medium,high --thinking-types adaptive,disabled`,
+  tars models set anthropic/<id> --effort-levels low,medium,high --thinking-types adaptive,disabled
+
+Effort levels each provider takes: anthropic ${PROVIDER_EFFORTS.anthropic.join(",")}; gemini
+${PROVIDER_EFFORTS.gemini.join(",")}; openrouter ${PROVIDER_EFFORTS.openrouter.join(",")}.`,
     )
     .action(async (ref: ModelRef, opts: SetOptions) => {
+      const sendable = PROVIDER_EFFORTS[ref.provider];
+      if (opts.effortLevels?.some((l) => !sendable.includes(l)))
+        throw new TarsError(
+          `${ref.provider} 的模型只接受 --effort-levels ${sendable.join(",")}`,
+          EXIT.usage,
+        );
       const unusual = PRICE_OPTIONS.filter((k) => {
         const v = opts[k];
         return v !== undefined && v !== 0 && (v < 0.01 || v > 500);
@@ -369,6 +442,7 @@ Examples:
               ? "effort:?"
               : `effort:${m.effortLevels.join(",") || "none"}`,
             priceText(m),
+            `source:${m.priceSource ?? "-"}`,
             m.pricedAt === undefined ? "priced:-" : `priced:${m.pricedAt} (${m.priceAgeDays}d)`,
             m.priceState,
           ].join("\t"),
@@ -381,6 +455,22 @@ Examples:
 }
 
 const PRICE_KEYS = [...BASIC_PRICES, "cacheWrite1h"] as const;
+
+const PRICE_FLAGS: Record<(typeof BASIC_PRICES)[number], string> = {
+  input: "input",
+  output: "output",
+  cacheRead: "cache-read",
+  cacheWrite: "cache-write",
+};
+
+/** The `tars models set` options an added model still needs before `enable` accepts it. */
+function missingToEnable(e: ModelEntry): string[] {
+  return [
+    ...BASIC_PRICES.filter((k) => e.price?.[k] === undefined).map((k) => PRICE_FLAGS[k]),
+    ...(e.contextWindow === undefined ? ["context-window"] : []),
+    ...(e.maxOutput === undefined ? ["max-output"] : []),
+  ];
+}
 const samePrice = (a: Partial<Price> | undefined, b: Partial<Price> | undefined) =>
   PRICE_KEYS.every((k) => a?.[k] === b?.[k]);
 
