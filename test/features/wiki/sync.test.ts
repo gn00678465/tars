@@ -684,7 +684,18 @@ describe("budget", () => {
 });
 
 describe("recovery", () => {
-  test("killed between the file and the transaction: no entry twice, the candidate applied, no request", async () => {
+  /** Fails the transaction after the page file: the window a death between the two leaves. */
+  async function failAfterWrite(h: SyncHarness) {
+    const w = (await openWikiDb(h.paths)) as Database;
+    opened.push(w);
+    w.run(
+      `CREATE TRIGGER fault BEFORE UPDATE ON candidates WHEN NEW.state IN ('applied', 'dropped')
+       BEGIN SELECT RAISE(ABORT, 'fault'); END`,
+    );
+    return w;
+  }
+
+  test("failing between the file and the transaction: settled from the journal, no request", async () => {
     const h = await harness();
     await onePage(h);
     const t2 = h.turn({ owner: "王小明的生日是三月九日" });
@@ -692,21 +703,68 @@ describe("recovery", () => {
       extracted({ source: t2.ref, quote: "生日是三月九日", text: "生日是 3 月 9 日。" }),
       json(keepAll([{ from: ["c2"], text: "生日是 3 月 9 日。" }])),
     );
-    const w = await openWikiDb(h.paths);
-    opened.push(w);
-    const old = one<{ hash: string; next_item: number }>(w, "SELECT hash, next_item FROM pages");
-    await h.sync();
+    const w = await failAfterWrite(h);
+    await expect(h.sync()).rejects.toThrow("fault");
     const written = h.page("people/wang-xiaoming");
-    // The state a death right after writeFileAtomic leaves: the file new, wiki.db as before.
-    w.run("UPDATE pages SET hash = ?, next_item = ?", [old.hash, old.next_item]);
-    w.run("UPDATE candidates SET state = 'pending' WHERE id = 2");
+    expect(written).toContain("生日是 3 月 9 日");
+    expect(one(w, "SELECT COUNT(*) AS n FROM page_commits")).toEqual({ n: 1 });
+    w.run("DROP TRIGGER fault");
     const requests = h.fake.messages().length;
-    await h.sync();
+    expect(await h.sync()).toEqual({ state: "completed" });
     expect(h.fake.messages()).toHaveLength(requests);
+    expect(one(w, "SELECT state, attempts FROM candidates WHERE id = 2")).toEqual({
+      state: "applied",
+      attempts: 0,
+    });
+    expect(h.page("people/wang-xiaoming")).toBe(written);
+    expect(one(w, "SELECT COUNT(*) AS n FROM page_commits")).toEqual({ n: 0 });
+    expect(one(w, "SELECT external_change FROM pages")).toEqual({ external_change: 0 });
+  });
+
+  test("a retract written before the failure is not sent again, and never piles up failures", async () => {
+    const h = await harness();
+    await onePage(h);
+    const t2 = h.turn({ owner: "王小明其實沒有搬到台中西屯" });
+    h.fake.reply(
+      extracted({ source: t2.ref, quote: "沒有搬到台中西屯", text: "沒有搬到台中。" }),
+      json({
+        summary: { keep: true },
+        facts: [{ op: "retract", id: "i1", reason: "擁有者更正", from: ["c2"] }],
+        open: [],
+      }),
+    );
+    const w = await failAfterWrite(h);
+    await expect(h.sync()).rejects.toThrow("fault");
+    expect(h.page("people/wang-xiaoming")).not.toContain("[i1]");
+    w.run("DROP TRIGGER fault");
+    const requests = h.fake.messages().length;
+    for (let i = 0; i < 3; i++) await h.sync();
+    expect(h.fake.messages()).toHaveLength(requests);
+    expect(one(w, "SELECT state, attempts FROM candidates WHERE id = 2")).toEqual({
+      state: "applied",
+      attempts: 0,
+    });
+  });
+
+  test("a journal whose file was never written: the candidates are done again", async () => {
+    const h = await harness();
+    await onePage(h);
+    const before = h.page("people/wang-xiaoming");
+    const t2 = h.turn({ owner: "王小明的生日是三月九日" });
+    h.fake.reply(
+      extracted({ source: t2.ref, quote: "生日是三月九日", text: "生日是 3 月 9 日。" }),
+      json(keepAll([{ from: ["c2"], text: "生日是 3 月 9 日。" }])),
+    );
+    const w = await failAfterWrite(h);
+    await expect(h.sync()).rejects.toThrow("fault");
+    w.run("DROP TRIGGER fault");
+    // As if the death came before the rename: the old file, the journal row left.
+    h.writePage("people/wang-xiaoming", before);
+    h.fake.reply(json(keepAll([{ from: ["c2"], text: "生日是 3 月 9 日。" }])));
+    expect(await h.sync()).toEqual({ state: "completed" });
+    expect(h.page("people/wang-xiaoming").match(/生日是 3 月 9 日/g)).toHaveLength(1);
     expect(one(w, "SELECT state FROM candidates WHERE id = 2")).toEqual({ state: "applied" });
-    const after = h.page("people/wang-xiaoming");
-    expect(after.match(/生日是 3 月 9 日/g)).toHaveLength(1);
-    expect(after).toBe(written);
+    expect(one(w, "SELECT COUNT(*) AS n FROM page_commits")).toEqual({ n: 0 });
   });
 
   test("killed before the file: the next run does the work as usual", async () => {

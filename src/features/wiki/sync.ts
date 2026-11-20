@@ -55,7 +55,6 @@ import {
   newPage,
   okEntryText,
   okTitle,
-  pageSources,
   parsePage,
   parsePagePath,
   parsePatch,
@@ -536,6 +535,42 @@ function scanTurns(wiki: Database, agent: Database, now: Date): ScanCount {
   return count;
 }
 
+type Outcome = [id: number, state: "applied" | "dropped", reason: string | null];
+
+const setOutcomes = (wiki: Database, outcomes: readonly Outcome[]) => {
+  for (const [id, state, reason] of outcomes)
+    wiki.run("UPDATE candidates SET state = ?, last_error = ? WHERE id = ?", [state, reason, id]);
+};
+
+/**
+ * A page written by a run that died before its transaction: when the file is still what that
+ * run wrote, its candidates are settled as that run decided; otherwise they are done again.
+ * Must run before scanPages, which would take the file for an outside edit.
+ */
+async function settleCommits(wiki: Database, paths: TarsPaths): Promise<void> {
+  const rows = wiki.query("SELECT * FROM page_commits").all() as {
+    page: string;
+    hash: string;
+    next_item: number;
+    outcomes: string;
+  }[];
+  for (const r of rows) {
+    const text = await readFile(pageFile(paths, r.page), "utf8").catch(() => undefined);
+    const parsed =
+      text !== undefined && sha256(text) === r.hash
+        ? parsePage(text, r.page, r.next_item)
+        : undefined;
+    wiki.transaction(() => {
+      if (parsed?.ok === true) {
+        upsertPage(wiki, parsed.page, r.hash, 0, r.next_item);
+        indexPage(wiki, parsed.page);
+        setOutcomes(wiki, JSON.parse(r.outcomes) as Outcome[]);
+      }
+      wiki.run("DELETE FROM page_commits WHERE page = ?", [r.page]);
+    })();
+  }
+}
+
 /**
  * Set in the transaction that empties the indexes and cleared when they are whole again: a sync
  * that finds it set rebuilds from the start, since the page hashes and the scan cursor say the
@@ -745,6 +780,7 @@ export async function runSync(
       now.getTime(),
     ]);
     const warn = (line: string) => io.err(line);
+    await settleCommits(wiki, paths);
     if (opts.reindex === true) return await runReindex(deps, wiki, agent, warn);
     return await runModel(deps, config, wiki, agent, warn, signal);
   } finally {
@@ -1175,18 +1211,7 @@ async function runModel(
     }
     let isNew = row === null;
     let externalChange = row?.external_change === 1;
-    // A candidate whose turn is already on the page was written by a run that died before its
-    // transaction: one turn's candidates for a page always travel in one batch.
-    const onPage = isNew ? new Set<string>() : pageSources(page);
-    const done = cands.filter((c) => onPage.has(sourceRef(c.convId, c.turnId)));
-    if (done.length > 0)
-      wiki.transaction(() => {
-        for (const c of done)
-          wiki.run("UPDATE candidates SET state = 'applied', last_error = NULL WHERE id = ?", [
-            c.id,
-          ]);
-      })();
-    const queue = consolidateBatches(cands.filter((c) => !done.includes(c)));
+    const queue = consolidateBatches(cands);
     let wrote = false;
     while (queue.length > 0) {
       const groups = queue.shift() as CandidateRow[][];
@@ -1223,25 +1248,28 @@ async function runModel(
         if (result?.ok === true) {
           const next = result.page;
           const text = renderPage(next);
+          const hash = sha256(text);
+          const reasons = new Map(result.dropped.map((d) => [d.candidate, d.reason]));
+          const outcomes = batch.map((c): Outcome => {
+            const reason = reasons.get(`c${c.id}`);
+            return reason === undefined ? [c.id, "applied", null] : [c.id, "dropped", reason];
+          });
           if (result.write) {
             // Checked again at the write: the directory may have changed during the request.
             if ((await realCategory(paths, category, true)) !== "ok") return unsafeCategory(path);
+            wiki.run(
+              "INSERT OR REPLACE INTO page_commits (page, hash, next_item, outcomes) VALUES (?, ?, ?, ?)",
+              [path, hash, next.nextItem, JSON.stringify(outcomes)],
+            );
             await writeFileAtomic(pageFile(paths, path), text);
           }
-          const reasons = new Map(result.dropped.map((d) => [d.candidate, d.reason]));
           wiki.transaction(() => {
             if (result.write) {
-              upsertPage(wiki, next, sha256(text), 0);
+              upsertPage(wiki, next, hash, 0);
               indexPage(wiki, next);
+              wiki.run("DELETE FROM page_commits WHERE page = ?", [path]);
             }
-            for (const c of batch) {
-              const key = `c${c.id}`;
-              wiki.run("UPDATE candidates SET state = ?, last_error = ? WHERE id = ?", [
-                reasons.has(key) ? "dropped" : "applied",
-                reasons.get(key) ?? null,
-                c.id,
-              ]);
-            }
+            setOutcomes(wiki, outcomes);
             endJob(out.jobId, "completed");
           })();
           if (result.write) {

@@ -107,6 +107,14 @@ CREATE TABLE pages (
   external_change INTEGER NOT NULL DEFAULT 0
 );
 
+-- A page file written before its candidates' states commit; the next sync settles it.
+CREATE TABLE page_commits (
+  page TEXT PRIMARY KEY,
+  hash TEXT NOT NULL,
+  next_item INTEGER NOT NULL,
+  outcomes TEXT NOT NULL          -- JSON [[candidate id, "applied" | "dropped", reason | null]]
+);
+
 CREATE TABLE cursors (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
 
 CREATE TABLE page_docs (

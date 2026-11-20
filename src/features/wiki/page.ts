@@ -133,12 +133,6 @@ export interface Page {
 export const summarySources = (summary: string) =>
   unique([...summary.matchAll(SOURCE_LINK)].map((m) => m[1] as string));
 
-export const pageSources = (page: Page) =>
-  new Set([
-    ...summarySources(page.summary),
-    ...[...page.facts, ...page.open].flatMap((e) => e.sources),
-  ]);
-
 const unique = <T>(xs: readonly T[]) => [...new Set(xs)];
 
 export function newPage(path: string, title: string, today: string): Page {
