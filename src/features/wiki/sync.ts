@@ -573,9 +573,9 @@ async function settleCommits(wiki: Database, paths: TarsPaths): Promise<void> {
 }
 
 /**
- * Set in the transaction that empties the indexes and cleared when they are whole again: a sync
- * that finds it set rebuilds from the start, since the page hashes and the scan cursor say the
- * emptied rows are already indexed.
+ * Set in the transaction that empties the raw index and cleared when the rebuild is done: a sync
+ * that finds it set rebuilds from the start, since the scan cursor says the emptied rows are
+ * already indexed.
  */
 const REINDEX_PENDING = "reindex_pending";
 const reindexPending = (wiki: Database) =>
@@ -593,11 +593,12 @@ async function reindex(
     wiki.run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, '1')", [REINDEX_PENDING]);
     wiki.run("DELETE FROM raw_fts");
     wiki.run("DELETE FROM raw_docs");
-    // A blocked page keeps its rows: they are the last good parse, and nothing rebuilds them.
-    for (const { path } of wiki.query("SELECT path FROM pages WHERE state = 'ok'").all() as {
-      path: string;
-    }[])
-      unindexPage(wiki, path);
+    // A page's rows are replaced only when its file parses, in scanPages; a page that no longer
+    // parses, or sits in an unsafe directory, keeps the rows of its last good parse.
+    wiki.run(
+      "DELETE FROM page_fts WHERE rowid IN (SELECT id FROM page_docs WHERE path NOT IN (SELECT path FROM pages))",
+    );
+    wiki.run("DELETE FROM page_docs WHERE path NOT IN (SELECT path FROM pages)");
   })();
   await scanPages(wiki, paths, today, warn, true);
   const waiting = new Set(

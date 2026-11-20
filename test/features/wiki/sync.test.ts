@@ -255,6 +255,38 @@ describe("--reindex", () => {
   });
 });
 
+describe("--reindex keeps the last good index of a page it cannot read", () => {
+  const facts = (h: SyncHarness) =>
+    all(
+      h.wiki(),
+      "SELECT text FROM page_docs WHERE path = 'people/wang-xiaoming' AND section = 'facts'",
+    );
+
+  test("a page edited by hand into something that does not parse", async () => {
+    const h = await harness();
+    await onePage(h);
+    const before = facts(h);
+    expect(before).toEqual([{ text: "搬到台中西屯。" }]);
+    h.writePage("people/wang-xiaoming", "---\ntitle: x\n---\n## 奇怪\n");
+    expect(await h.sync({ reindex: true })).toEqual({ state: "completed" });
+    expect(one(h.wiki(), "SELECT state FROM pages")).toEqual({ state: "blocked" });
+    expect(facts(h)).toEqual(before);
+    await h.sync();
+    expect(facts(h)).toEqual(before);
+  });
+
+  test("a category directory that became a symlink", async () => {
+    const h = await harness();
+    await onePage(h);
+    const before = facts(h);
+    const outside = join(h.paths.data, "outside");
+    renameSync(join(h.paths.wiki, "people"), outside);
+    symlinkSync(outside, join(h.paths.wiki, "people"));
+    expect(await h.sync({ reindex: true })).toEqual({ state: "completed" });
+    expect(facts(h)).toEqual(before);
+  });
+});
+
 describe("an interrupted --reindex", () => {
   // A trigger fails the first insert into `table`: right after the indexes were emptied
   // (page_docs), or with the pages rebuilt and the raw records not yet (raw_docs).
