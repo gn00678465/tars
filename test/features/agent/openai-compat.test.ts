@@ -298,7 +298,7 @@ describe("usage", () => {
         prompt_tokens: 100,
         completion_tokens: 20,
         prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
-      }).usage,
+      })?.usage,
     ).toEqual({
       uncachedInputTokens: 60,
       cacheReadTokens: 30,
@@ -306,33 +306,60 @@ describe("usage", () => {
       outputTokens: 20,
       thinkingTokens: 0,
     });
-    expect(usageOf("gemini", { prompt_tokens: 100, completion_tokens: 20 }).usage).toMatchObject({
+    expect(
+      usageOf("gemini", { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 })?.usage,
+    ).toMatchObject({
       uncachedInputTokens: 100,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     });
   });
 
-  test("OpenRouter's cost is taken; a negative one or Gemini's is not", () => {
+  test("OpenRouter's cost is taken; Gemini's is ignored", () => {
     expect(
-      usageOf("openrouter", { prompt_tokens: 1, completion_tokens: 1, cost: 0.0123 }).costUsd,
+      usageOf("openrouter", { prompt_tokens: 1, completion_tokens: 1, cost: 0.0123 })?.costUsd,
     ).toBe(0.0123);
     expect(
-      usageOf("openrouter", { prompt_tokens: 1, completion_tokens: 1, cost: -1 }).costUsd,
-    ).toBeUndefined();
-    expect(
-      usageOf("gemini", { prompt_tokens: 1, completion_tokens: 1, cost: 1 }).costUsd,
-    ).toBeUndefined();
+      usageOf("gemini", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, cost: 1 }),
+    ).toEqual({ usage: expect.any(Object) });
   });
 
-  test("Gemini's output is total − prompt; without total it falls back to completion", () => {
+  test("Gemini's output is total − prompt; without total its thinking is unknown: no usage", () => {
     expect(
-      usageOf("gemini", { prompt_tokens: 50, completion_tokens: 14, total_tokens: 456 }).usage,
+      usageOf("gemini", { prompt_tokens: 50, completion_tokens: 14, total_tokens: 456 })?.usage,
     ).toMatchObject({ outputTokens: 406, thinkingTokens: 392 });
-    expect(usageOf("gemini", { prompt_tokens: 50, completion_tokens: 14 }).usage).toMatchObject({
-      outputTokens: 14,
-      thinkingTokens: 0,
-    });
+    expect(usageOf("gemini", { prompt_tokens: 50, completion_tokens: 14 })).toBeUndefined();
+  });
+
+  test.each([
+    ["an empty object", {}],
+    ["no prompt_tokens", { completion_tokens: 5 }],
+    ["no completion_tokens", { prompt_tokens: 5 }],
+    ["a negative count", { prompt_tokens: -1, completion_tokens: 5 }],
+    ["a count as a string", { prompt_tokens: "5", completion_tokens: 5 }],
+    ["NaN", { prompt_tokens: Number.NaN, completion_tokens: 5 }],
+    ["Infinity", { prompt_tokens: 5, completion_tokens: Number.POSITIVE_INFINITY }],
+    [
+      "a negative cached count",
+      { prompt_tokens: 5, completion_tokens: 5, prompt_tokens_details: { cached_tokens: -2 } },
+    ],
+    ["a negative cost", { prompt_tokens: 5, completion_tokens: 5, cost: -1 }],
+    ["a NaN cost", { prompt_tokens: 5, completion_tokens: 5, cost: Number.NaN }],
+    ["a cost as a string", { prompt_tokens: 5, completion_tokens: 5, cost: "0.01" }],
+  ] as const)("OpenRouter, %s: not enough to price, no usage", (_, raw) => {
+    expect(usageOf("openrouter", raw)).toBeUndefined();
+  });
+
+  test("null details and a null cost count as absent", () => {
+    expect(
+      usageOf("openrouter", {
+        prompt_tokens: 5,
+        completion_tokens: 5,
+        prompt_tokens_details: null,
+        completion_tokens_details: null,
+        cost: null,
+      }),
+    ).toEqual({ usage: expect.objectContaining({ uncachedInputTokens: 5, outputTokens: 5 }) });
   });
 
   test("OpenRouter's reasoning tokens are inside completion, not added", () => {
@@ -342,7 +369,7 @@ describe("usage", () => {
         completion_tokens: 300,
         total_tokens: 310,
         completion_tokens_details: { reasoning_tokens: 250 },
-      }).usage,
+      })?.usage,
     ).toMatchObject({ outputTokens: 300, thinkingTokens: 250 });
   });
 });
@@ -683,6 +710,15 @@ describe("stream", () => {
     expect(end.stop).toBe("tool_use");
     expect(end.usage).toBeUndefined();
     expect(end.costUsd).toBeUndefined();
+  });
+
+  test("usage: {} at the end, or Gemini's without total_tokens: end has no usage", async () => {
+    expect(
+      endOf(await events("openrouter", { kind: "message", text: "x", rawUsage: {} })).usage,
+    ).toBeUndefined();
+    expect(endOf(await events("gemini", compatText("x", { total: null })))).not.toHaveProperty(
+      "usage",
+    );
   });
 
   test("Gemini's running totals on every chunk: the last one is used, not a sum", async () => {

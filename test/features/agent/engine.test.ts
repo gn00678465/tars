@@ -1038,6 +1038,28 @@ describe("compatible providers", () => {
     expect(h.frontend.notices().filter((n) => n === "usage_missing")).toHaveLength(2);
   });
 
+  test("usage that cannot price the request: estimated with the reservation, never zero", async () => {
+    const h = await compat();
+    h.openrouter.reply(
+      { kind: "message", text: "x", rawUsage: {} },
+      {
+        kind: "message",
+        text: "y",
+        rawUsage: { prompt_tokens: 10, completion_tokens: 2, cost: -1 },
+      },
+    );
+    h.gemini.reply(compatText("z", { total: null }));
+    for (const ref of [OPENROUTER, OPENROUTER, GEMINI])
+      expect(ended(await send(h, ref, "hi")).state).toBe("completed");
+    const settled = usageRows(h);
+    expect(settled.map((r) => [r.state, r.cost_source])).toEqual(
+      Array(3).fill(["estimated", "estimate"]),
+    );
+    // effort medium reasons: the whole output limit stays counted.
+    for (const r of settled) expect(r.output_tokens).toBe(r.max_tokens);
+    expect(h.frontend.notices().filter((n) => n === "usage_missing")).toHaveLength(3);
+  });
+
   test("the answer's items and its estimated row are written in one transaction", async () => {
     const h = await compat();
     const writer = await openDb(h.paths);

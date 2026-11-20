@@ -40,6 +40,8 @@ export type FakeCompatReply =
       readonly finish?: string | null;
       /** null: no usage at all. Default: a small usage. */
       readonly usage?: FakeCompatUsage | null;
+      /** Sent as is in one last chunk, in place of `usage`. */
+      readonly rawUsage?: unknown;
       /** A reasoning delta before the text. */
       readonly reasoning?: boolean;
       /** Two chunks for the same call, each with its own signature; the second should win. */
@@ -196,6 +198,10 @@ function messageChunks(mode: CompatMode, reply: Extract<FakeCompatReply, { kind:
       : reply.finish;
   if (finish !== null)
     out.push({ ...chunk({}), choices: [{ index: 0, delta: {}, finish_reason: finish }] });
+  if (reply.rawUsage !== undefined) {
+    out.push({ ...chunk({}), choices: [], usage: reply.rawUsage });
+    return out;
+  }
   const usage = reply.usage === undefined ? {} : reply.usage;
   if (usage !== null) {
     if (mode === "gemini")
