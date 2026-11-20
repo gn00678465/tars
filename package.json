@@ -9,7 +9,8 @@
     "e2e:script": "bun scripts/build.ts && bun test/e2e/script.ts",
     "e2e:pilots": "bun scripts/build.ts && bun test/e2e/pilots.ts",
     "e2e:chat": "bun scripts/build.ts && bun test/e2e/chat.ts",
-    "e2e:wiki": "bun scripts/build.ts && bun test/e2e/wiki.ts"
+    "e2e:wiki": "bun scripts/build.ts && bun test/e2e/wiki.ts",
+    "e2e:providers": "bun scripts/build.ts && bun test/e2e/providers.ts"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.81",
