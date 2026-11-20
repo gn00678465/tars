@@ -14,7 +14,8 @@
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.81",
     "@anthropic-ai/sdk": "1.8.0",
-    "commander": "15.1.0"
+    "commander": "15.1.0",
+    "openai": "7.55.0"
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
