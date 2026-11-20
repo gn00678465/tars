@@ -1,0 +1,606 @@
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { TarsError } from "../../../src/core/exit.ts";
+import { resolvePaths } from "../../../src/core/paths.ts";
+import type { Terminal } from "../../../src/core/terminal.ts";
+import { BUILTINS, parseSlash } from "../../../src/features/agent/chat.ts";
+import { SUMMARY_HEADINGS } from "../../../src/features/agent/compaction.ts";
+import { acquireLock, openDb } from "../../../src/features/agent/db.ts";
+import {
+  LOCAL_ONLY_SKILLS,
+  skillInvocationText,
+  type SkillEntry,
+} from "../../../src/features/agent/prompt.ts";
+import { adapterFor } from "../../../src/features/agent/provider.ts";
+import { appendItems, beginTurn, createConversation } from "../../../src/features/agent/store.ts";
+import { text, toolUse, type FakeReply } from "../../fakes/anthropic.ts";
+import { fakeSecrets, scriptedTerminal, tempHome, testDeps, TEST_NOW } from "../../helpers.ts";
+import { run } from "../../../src/main.ts";
+import {
+  configWith,
+  engineHarness,
+  MODEL_ENTRY,
+  MODEL_ID,
+  REPO,
+  writeCatalog,
+  type EngineHarness,
+  type HarnessOptions,
+} from "./engine-fixture.ts";
+
+const harnesses: EngineHarness[] = [];
+afterEach(async () => {
+  for (const h of harnesses.splice(0)) await h.fake.stop();
+});
+
+/** A data dir and fake server; the harness's own connection is closed so chat opens its own. */
+async function setup(opts: HarnessOptions = {}): Promise<EngineHarness> {
+  const h = await engineHarness(opts);
+  h.db.close();
+  harnesses.push(h);
+  return h;
+}
+
+type Answer = Parameters<typeof scriptedTerminal>[0][number];
+
+function chatDeps(
+  h: EngineHarness,
+  opts: { answers?: readonly Answer[]; env?: Record<string, string> } = {},
+) {
+  const signals = new EventEmitter();
+  const terminal = opts.answers === undefined ? undefined : scriptedTerminal(opts.answers);
+  const deps = testDeps({
+    env: { ...h.env, ...opts.env },
+    secrets: fakeSecrets({ "llm:anthropic": "sk-test" }),
+    adapterFor,
+    selfCommand: [process.execPath, join(REPO, "src/main.ts")],
+    signals,
+    ...(terminal === undefined ? {} : { openTerminal: (): Terminal => terminal }),
+  });
+  return { deps, signals, terminal };
+}
+
+const err = (d: { io: { stderr: string[] } }) => d.io.stderr.join("\n");
+const out = (d: { io: { stdout: string[] } }) => d.io.stdout.join("");
+
+function query<T>(h: EngineHarness, sql: string, ...params: string[]): T[] {
+  const db = new Database(h.paths.agentDb, { readonly: true });
+  try {
+    return db.query(sql).all(...params) as T[];
+  } finally {
+    db.close();
+  }
+}
+
+const counts = (h: EngineHarness) =>
+  ["conversations", "turns", "items", "usage"].map(
+    (t) => query<{ n: number }>(h, `SELECT COUNT(*) AS n FROM ${t}`)[0]?.n,
+  );
+
+/** The text of the first block of the last user message of request `i` (default: the last). */
+function lastUserText(h: EngineHarness, i = -1): string {
+  const body = h.fake.messages().at(i)?.body as
+    | { messages: { role: string; content: { type: string; text?: string }[] }[] }
+    | undefined;
+  const user = body?.messages.filter((m) => m.role === "user").at(-1);
+  return user?.content.find((b) => b.type === "text")?.text ?? "";
+}
+
+const summary = SUMMARY_HEADINGS.map((h) => `## ${h}\n- kept`).join("\n\n");
+const big = (n: number) => `turn ${n} ${"x".repeat(2600)}`;
+
+describe("options", () => {
+  test.each([
+    [["--model", `anthropic/${MODEL_ID}`, "--resume", "abcd"]],
+    [["--list", "--model", `anthropic/${MODEL_ID}`]],
+    [["--list", "--effort", "low"]],
+    [["--list", "--resume", "abcd"]],
+    [["--list", "--message", "hi"]],
+    [["--effort", "extreme"]],
+    [["--model", "no-slash"]],
+  ])("chat %p is a usage error", async (args) => {
+    const h = await setup();
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", ...args], deps)).toBe(2);
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("inside a tars session it is refused", async () => {
+    const h = await setup();
+    const { deps } = chatDeps(h, { env: { TARS_IN_SESSION: "1" } });
+    expect(await run(["chat", "--message", "hi"], deps)).toBe(1);
+    expect(err(deps)).toContain("只給你自己終端的 tars chat 用");
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("--list without a database lists nothing and creates nothing", async () => {
+    const home = tempHome();
+    const env = { HOME: home, TARS_DATA_DIR: join(home, "data"), XDG_CONFIG_HOME: join(home, "c") };
+    const deps = testDeps({ env });
+    expect(await run(["chat", "--list"], deps)).toBe(0);
+    expect(deps.io.stdout).toEqual([]);
+    expect(existsSync(resolvePaths(env).agentDb)).toBe(false);
+  });
+
+  test("--list works while another tars chat holds the lock", async () => {
+    const h = await setup();
+    h.fake.reply(text("hello"));
+    expect(await run(["chat", "--message", "first message"], chatDeps(h).deps)).toBe(0);
+    const lock = await acquireLock(h.paths, new Date(TEST_NOW));
+    try {
+      const { deps } = chatDeps(h);
+      expect(await run(["chat", "--list"], deps)).toBe(0);
+      const [line] = deps.io.stdout;
+      const cols = line?.split("\t") ?? [];
+      expect(cols).toHaveLength(5);
+      expect(cols[1]).toBe("first message");
+      expect(cols[2]).toBe(`anthropic/${MODEL_ID}`);
+      expect(cols[3]).toBe("medium");
+      expect(cols[4]).toBe(new Date(TEST_NOW).toISOString());
+    } finally {
+      lock.release();
+    }
+  });
+
+  test("a second tars chat is refused while the lock is held", async () => {
+    const h = await setup();
+    const lock = await acquireLock(h.paths, new Date(TEST_NOW));
+    try {
+      const { deps } = chatDeps(h);
+      expect(await run(["chat", "--message", "hi"], deps)).toBe(1);
+      expect(err(deps)).toContain(`pid ${process.pid}`);
+      expect(h.fake.messages()).toHaveLength(0);
+    } finally {
+      lock.release();
+    }
+  });
+
+  test("without a default model it exits 1, listing the active models and the fix", async () => {
+    const h = await setup();
+    writeCatalog(h.paths, [{ ...MODEL_ENTRY, default: false }]);
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--message", "hi"], deps)).toBe(1);
+    expect(err(deps)).toContain(`anthropic/${MODEL_ID}`);
+    expect(err(deps)).toContain("tars models default");
+    expect(existsSync(h.paths.agentLockInfo)).toBe(false);
+  });
+
+  test("without a key it exits 1 before the database is touched", async () => {
+    const h = await setup();
+    const deps = testDeps({ env: h.env, secrets: fakeSecrets(), adapterFor });
+    expect(await run(["chat", "--message", "hi"], deps)).toBe(1);
+    expect(err(deps)).toContain("tars llm key set anthropic");
+    expect(existsSync(h.paths.agentLockInfo)).toBe(false);
+  });
+
+  test("--effort with a level the model lacks exits 1 and lists the levels", async () => {
+    const h = await setup();
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--effort", "max", "--message", "hi"], deps)).toBe(1);
+    expect(err(deps)).toContain("low, medium, high");
+  });
+});
+
+describe("--message", () => {
+  test("a completed turn exits 0 with only the reply on stdout", async () => {
+    const h = await setup();
+    h.fake.reply(text("the reply"));
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--message", "hi"], deps)).toBe(0);
+    expect(out(deps)).toBe("the reply\n");
+    expect(err(deps)).toContain("用量：");
+  });
+
+  test("a turn that does not complete exits 1", async () => {
+    const h = await setup();
+    h.fake.reply({ kind: "http_error", status: 401, type: "authentication_error" });
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--message", "hi"], deps)).toBe(1);
+    expect(query<{ state: string }>(h, "SELECT state FROM turns")).toEqual([{ state: "failed" }]);
+  });
+
+  test("SIGTERM during a turn aborts it and exits 143", async () => {
+    const h = await setup();
+    const { deps, signals } = chatDeps(h);
+    h.fake.handler = () => {
+      setTimeout(() => signals.emit("SIGTERM"), 50);
+      return { kind: "hang" };
+    };
+    expect(await run(["chat", "--message", "hi"], deps)).toBe(143);
+    expect(query<{ state: string }>(h, "SELECT state FROM turns")).toEqual([{ state: "aborted" }]);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+  });
+});
+
+describe("--resume", () => {
+  async function conversations(h: EngineHarness, ids: readonly string[]) {
+    const db = await openDb(h.paths);
+    try {
+      for (const id of ids)
+        createConversation(db, {
+          id,
+          text: `title ${id}`,
+          provider: "anthropic",
+          model: MODEL_ID,
+          effort: "low",
+          now: TEST_NOW,
+        });
+    } finally {
+      db.close();
+    }
+  }
+
+  test("a tail of the id resumes; the recent items show the compaction line", async () => {
+    const h = await setup();
+    const id = "01a1f461-0000-7000-8000-00000000abcd";
+    await conversations(h, [id]);
+    const db = await openDb(h.paths);
+    beginTurn(db, { id: "turn-1", convId: id, kind: "chat", effort: "low", now: TEST_NOW });
+    appendItems(
+      db,
+      id,
+      "turn-1",
+      [
+        { kind: "user", step: 0, body: { text: "earlier question" } },
+        {
+          kind: "assistant",
+          step: 1,
+          body: { text: "earlier answer", state: "complete", native: null },
+        },
+        { kind: "user", step: 0, body: { text: "kept question" } },
+        {
+          kind: "compaction",
+          step: 1,
+          body: {
+            firstKeptSeq: 3,
+            summary,
+            tokensBefore: 100,
+            replacedCount: 2,
+            trigger: "manual",
+            usageId: 0,
+          },
+        },
+      ],
+      TEST_NOW,
+    );
+    db.close();
+    h.fake.reply(text("resumed"));
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--resume", "abcd", "--message", "again"], deps)).toBe(0);
+    expect(err(deps)).toContain(`接續對話 ${id}`);
+    expect(err(deps)).toContain("（這之前的內容已壓縮成摘要）");
+    expect(err(deps)).toContain("你：kept question");
+    // The seeded turn was left running, so reconcile settles it before the new one runs.
+    expect(
+      query<{ id: string; state: string }>(
+        h,
+        "SELECT id, state FROM turns WHERE conv_id = ? ORDER BY rowid",
+        id,
+      ).map((t) => t.state),
+    ).toEqual(["interrupted", "completed"]);
+    // The conversation's own level, not the config default.
+    expect(h.fake.messages()[0]?.body.output_config).toEqual({ effort: "low" });
+  });
+
+  test("--resume with --effort changes the conversation's level", async () => {
+    const h = await setup();
+    const id = "01a1f461-0000-7000-8000-00000000beef";
+    await conversations(h, [id]);
+    h.fake.reply(text("ok"));
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--resume", id, "--effort", "high", "--message", "x"], deps)).toBe(0);
+    expect(query<{ effort: string }>(h, "SELECT effort FROM conversations")).toEqual([
+      { effort: "high" },
+    ]);
+  });
+
+  test("a tail naming two conversations exits 1 and lists both", async () => {
+    const h = await setup();
+    const ids = ["01a1f461-0000-7000-8000-0000aaaa1234", "01a1f461-0000-7000-8000-0000bbbb1234"];
+    await conversations(h, ids);
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--resume", "1234", "--message", "x"], deps)).toBe(1);
+    for (const id of ids) expect(err(deps)).toContain(id);
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("a tail shorter than 4 characters is refused", async () => {
+    const h = await setup();
+    await conversations(h, ["01a1f461-0000-7000-8000-00000000abcd"]);
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--resume", "bcd", "--message", "x"], deps)).toBe(1);
+    expect(err(deps)).toContain("至少要 4 碼");
+  });
+});
+
+describe("parseSlash", () => {
+  const skill = (name: string, localOnly = false): SkillEntry => ({
+    name,
+    description: `${name} skill`,
+    localOnly,
+  });
+  const demo = skill("demo");
+  const memory = skill("memory", true);
+  const skills = [demo, skill("model"), memory];
+
+  test("plain text is a message; // sends the rest with one slash", () => {
+    expect(parseSlash("hello /there", skills)).toEqual({ kind: "message", text: "hello /there" });
+    expect(parseSlash("//etc/hosts 是什麼", skills)).toEqual({
+      kind: "message",
+      text: "/etc/hosts 是什麼",
+    });
+  });
+
+  test("a built-in command wins over a skill of the same name", () => {
+    expect(parseSlash("/model", skills)).toEqual({ kind: "builtin", name: "model", arg: "" });
+    expect(parseSlash("/compact   keep the weather  ", skills)).toEqual({
+      kind: "builtin",
+      name: "compact",
+      arg: "keep the weather",
+    });
+  });
+
+  test("a skill in the index, with or without content", () => {
+    expect(parseSlash("/demo 我想學\n線性代數", skills)).toEqual({
+      kind: "skill",
+      skill: demo,
+      content: "我想學\n線性代數",
+    });
+    expect(parseSlash("/demo", skills)).toEqual({ kind: "skill", skill: demo, content: "" });
+  });
+
+  test("a local-only skill is not a skill to send", () => {
+    expect(parseSlash("/memory 記住這個", skills)).toEqual({
+      kind: "local_only",
+      skill: memory,
+    });
+  });
+
+  test("an unknown or malformed name is unknown", () => {
+    expect(parseSlash("/nope", skills)).toEqual({ kind: "unknown", name: "nope" });
+    expect(parseSlash("/Demo", skills)).toEqual({ kind: "unknown", name: "Demo" });
+    expect(parseSlash("/../x", skills)).toEqual({ kind: "unknown", name: "../x" });
+    expect(parseSlash("/", skills)).toEqual({ kind: "unknown", name: "" });
+  });
+});
+
+describe("interactive", () => {
+  function addSkill(h: EngineHarness, name: string, description = `${name} skill`) {
+    mkdirSync(join(h.paths.skills, name), { recursive: true });
+    writeFileSync(
+      join(h.paths.skills, name, "SKILL.md"),
+      `---\nname: ${name}\ndescription: ${description}\n---\nbody\n`,
+    );
+  }
+
+  test("end of input at the prompt exits 0", async () => {
+    const h = await setup();
+    const { deps, terminal } = chatDeps(h, { answers: [] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(terminal?.transcript).toEqual(["> "]);
+    expect(terminal?.closed).toBe(true);
+  });
+
+  test("Ctrl-C at the prompt exits 0 without an error", async () => {
+    const h = await setup();
+    const cancel = () => Promise.reject(new TarsError("cancelled"));
+    const { deps } = chatDeps(h, { answers: [cancel] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).not.toContain("error");
+  });
+
+  test("blank lines are ignored; /quit exits 0", async () => {
+    const h = await setup();
+    const { deps } = chatDeps(h, { answers: ["   ", "/quit", "never reached"] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("/<skill> sends the fixed text, with and without content, after a 使用 skill line", async () => {
+    const h = await setup();
+    h.fake.reply(toolUse("s1", "skill_load", { name: "demo" }), text("ok"), text("ok"));
+    const { deps } = chatDeps(h, { answers: ["/demo 我想學線性代數", "/demo", undefined] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).toContain("使用 skill：demo — a demo skill");
+    const requests = h.fake.messages();
+    expect(requests).toHaveLength(3);
+    expect(lastUserText(h, 0)).toBe(skillInvocationText("demo", "我想學線性代數"));
+    expect(lastUserText(h, 2)).toBe(skillInvocationText("demo", ""));
+    expect(skillInvocationText("demo", "")).not.toContain("\n");
+  });
+
+  test("local-only skills and unknown commands send nothing", async () => {
+    const h = await setup();
+    for (const name of Object.keys(LOCAL_ONLY_SKILLS)) addSkill(h, name);
+    const { deps } = chatDeps(h, {
+      answers: ["/memory 記住這個", "/beancount-ledger", "/serenity-skill x", "/nope", undefined],
+    });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(h.fake.messages()).toHaveLength(0);
+    for (const [name, why] of Object.entries(LOCAL_ONLY_SKILLS))
+      expect(err(deps)).toContain(`${name} 要在 tars claude 裡用（${why}）`);
+    expect(err(deps)).toContain("不認得的指令 /nope");
+  });
+
+  test("a skill named like a built-in is not reachable by slash", async () => {
+    const h = await setup();
+    addSkill(h, "cost");
+    const { deps } = chatDeps(h, { answers: ["/cost", undefined] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).toContain("anthropic: 本期已用");
+    expect(err(deps)).not.toContain("使用 skill");
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("// sends a message that starts with a slash", async () => {
+    const h = await setup();
+    h.fake.reply(text("ok"));
+    const { deps } = chatDeps(h, { answers: ["//etc/hosts", undefined] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(lastUserText(h)).toBe("/etc/hosts");
+  });
+
+  test("/model and /cost print, send nothing and change nothing", async () => {
+    const h = await setup();
+    h.fake.reply(text("first"));
+    expect(await run(["chat", "--message", "hi"], chatDeps(h).deps)).toBe(0);
+    const before = counts(h);
+    const { deps } = chatDeps(h, { answers: ["/model", "/cost", undefined] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).toContain(`目前的模型：anthropic/${MODEL_ID}`);
+    expect(err(deps)).toContain(`anthropic/${MODEL_ID}  Model A`);
+    expect(err(deps)).toContain("tars chat --model <provider>/<id>");
+    expect(err(deps)).toContain("anthropic: 本期已用");
+    expect(h.fake.messages()).toHaveLength(1);
+    expect(counts(h)).toEqual(before);
+  });
+
+  test("/help lists the commands and the skill names", async () => {
+    const h = await setup();
+    const { deps } = chatDeps(h, { answers: ["/help", undefined] });
+    expect(await run(["chat"], deps)).toBe(0);
+    for (const name of BUILTINS) expect(err(deps)).toMatch(new RegExp(`^  /${name} `, "m"));
+    expect(err(deps)).toContain("//");
+    expect(err(deps)).toContain("demo");
+  });
+
+  test("/new makes the next message start another conversation", async () => {
+    const h = await setup();
+    h.fake.reply(text("a"), text("b"), text("c"));
+    const { deps } = chatDeps(h, { answers: ["one", "two", "/new", "three", undefined] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).toContain("下一則訊息開新對話");
+    expect(query<{ title: string }>(h, "SELECT title FROM conversations ORDER BY title")).toEqual([
+      { title: "one" },
+      { title: "three" },
+    ]);
+  });
+
+  test("/effort shows, sets, and refuses a level the model lacks", async () => {
+    const h = await setup();
+    h.fake.reply(text("a"), text("b"));
+    const { deps } = chatDeps(h, {
+      answers: [
+        "/effort",
+        "hi",
+        "/effort high",
+        "/effort max",
+        "/effort bogus",
+        "again",
+        undefined,
+      ],
+    });
+    expect(await run(["chat"], deps)).toBe(0);
+    const e = err(deps);
+    expect(e).toContain("推理強度：medium；這個模型支援：low, medium, high");
+    expect(e).toContain("推理強度改成 high，下一則訊息起生效");
+    expect(e).toContain("可選：low, medium, high");
+    expect(e).toContain("推理強度是 low | medium | high | xhigh | max 之一");
+    const efforts = h.fake
+      .messages()
+      .map((r) => (r.body.output_config as { effort: string }).effort);
+    expect(efforts).toEqual(["medium", "high"]);
+    expect(query<{ effort: string }>(h, "SELECT effort FROM conversations")).toEqual([
+      { effort: "high" },
+    ]);
+  });
+
+  test("SIGINT during a turn aborts it and returns to the prompt", async () => {
+    const h = await setup();
+    const { deps, signals, terminal } = chatDeps(h, { answers: ["slow", "fast", undefined] });
+    let first = true;
+    h.fake.handler = (): FakeReply => {
+      if (!first) return text("fast reply");
+      first = false;
+      setTimeout(() => signals.emit("SIGINT"), 50);
+      return { kind: "hang" };
+    };
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(
+      query<{ state: string }>(h, "SELECT state FROM turns ORDER BY started_at, rowid"),
+    ).toEqual([{ state: "aborted" }, { state: "completed" }]);
+    expect(terminal?.transcript.filter((t) => t === "> ")).toHaveLength(3);
+    expect(out(deps)).toContain("fast reply");
+  });
+
+  test("a rejected message prints why and stays at the prompt", async () => {
+    const h = await setup();
+    const { deps } = chatDeps(h, {
+      answers: [
+        () => {
+          writeCatalog(h.paths, [{ ...MODEL_ENTRY, status: "retired" }]);
+          return Promise.resolve("hi");
+        },
+        undefined,
+      ],
+    });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).toContain("沒有送出：");
+    expect(counts(h)).toEqual([0, 0, 0, 0]);
+  });
+});
+
+describe("/compact", () => {
+  const options = { config: configWith({ compact_keep_recent_tokens: 1000 }) };
+
+  test("without a conversation it says so and sends nothing", async () => {
+    const h = await setup(options);
+    const { deps } = chatDeps(h, { answers: ["/compact", undefined] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).toContain("還沒有對話");
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("compacted with the focus text, then skipped right after", async () => {
+    const h = await setup(options);
+    h.fake.reply(text("one"), text("two"), text(summary));
+    const { deps } = chatDeps(h, {
+      answers: [big(1), big(2), "/compact keep the weather", "/compact", undefined],
+    });
+    expect(await run(["chat"], deps)).toBe(0);
+    const requests = h.fake.messages();
+    expect(requests).toHaveLength(3);
+    expect(lastUserText(h, 2)).toEndWith("Additional focus: keep the weather");
+    const e = err(deps);
+    expect(e).toMatch(/已壓縮 2 個項目。壓縮前約 \d+ tokens，花費 [\d.]+ USD/);
+    expect(e).toContain("上下文太短，沒有可以壓縮的部分");
+    expect(
+      query<{ n: number }>(h, "SELECT COUNT(*) AS n FROM items WHERE kind = 'compaction'")[0]?.n,
+    ).toBe(1);
+  });
+
+  test("a failed compaction prints the reason and the detail", async () => {
+    const h = await setup(options);
+    h.fake.reply(text("one"), text("two"), {
+      kind: "http_error",
+      status: 400,
+      type: "invalid_request_error",
+      message: "prompt is broken",
+    });
+    const { deps } = chatDeps(h, { answers: [big(1), big(2), "/compact", undefined] });
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).toContain("壓縮失敗：provider 拒絕了這個請求");
+    expect(err(deps)).toContain("prompt is broken");
+  });
+
+  test("Ctrl-C during a compaction cancels it and leaves the context alone", async () => {
+    const h = await setup(options);
+    const { deps, signals } = chatDeps(h, { answers: [big(1), big(2), "/compact", undefined] });
+    h.fake.reply(text("one"), text("two"));
+    h.fake.handler = () => {
+      setTimeout(() => signals.emit("SIGINT"), 50);
+      return { kind: "hang" };
+    };
+    expect(await run(["chat"], deps)).toBe(0);
+    expect(err(deps)).toContain("已取消");
+    expect(
+      query<{ n: number }>(h, "SELECT COUNT(*) AS n FROM items WHERE kind = 'compaction'")[0]?.n,
+    ).toBe(0);
+    expect(
+      query<{ state: string }>(h, "SELECT state FROM turns WHERE kind = 'compaction'"),
+    ).toEqual([{ state: "aborted" }]);
+  });
+});

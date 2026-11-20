@@ -36,3 +36,15 @@ async function readBootFile(label: BootLabel, path: string): Promise<BootFile> {
   }
   return { label, content, sha256: sha256(bytes) };
 }
+
+const BLOCK_TAG = /<(\s*\/?\s*tars-file)/gi;
+
+/** One boot file as a tagged block; escaping "<" keeps its content from closing the block or opening a forged one. */
+export function composeBootBlock({ label, sha256, content }: BootFile): string {
+  const body = content.replace(BLOCK_TAG, "&lt;$1");
+  return `<tars-file label="${label}" sha256="${sha256}">\n${body}${body.endsWith("\n") ? "" : "\n"}</tars-file>\n`;
+}
+
+export function composeBootPrompt(boot: BootContext): string {
+  return boot.files.map(composeBootBlock).join("");
+}

@@ -1,7 +1,7 @@
 import { TarsError } from "../../core/exit.ts";
 import { libraryBase, scriptsLayout, type LibraryBase } from "./library.ts";
 import { parseLock, type PackageName, type Pin } from "./lock.ts";
-import { hostText, type Domain } from "./metadata.ts";
+import { domainText } from "./metadata.ts";
 import {
   readEvidence,
   type Evidence,
@@ -211,9 +211,6 @@ const gutter = (lines: readonly string[]) => lines.map((line) => `  | ${visible(
 /** Text that tars did not write, as lines behind the gutter. */
 export const quoted = (text: string) =>
   text === "" ? [] : gutter(text.replace(/\n$/, "").split("\n"));
-
-const domainText = (d: Domain) =>
-  d.kind === "any" ? "*" : d.kind === "secret-url" ? "secret:url" : hostText(d);
 
 function sourceSection({ submission, base }: Dossier): string[] {
   const whole = quoted(submission.source);

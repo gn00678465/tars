@@ -4,10 +4,16 @@ import { TarsError } from "./exit.ts";
 export interface Io {
   out(line: string): void;
   err(line: string): void;
+  /** Text on stdout as is, without a newline: a reply streamed in pieces. */
+  write(text: string): void;
+  /** stdout is a terminal, so control characters in what it prints act on the screen. */
+  readonly stdoutIsTty?: boolean;
 }
 
 export const processIo: Io = {
   out: (line) => void process.stdout.write(`${line}\n`),
+  write: (text) => void process.stdout.write(text),
+  stdoutIsTty: process.stdout.isTTY === true,
   err: (line) => void process.stderr.write(`${line}\n`),
 };
 

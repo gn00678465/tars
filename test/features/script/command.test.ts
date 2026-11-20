@@ -23,15 +23,16 @@ import {
   readEvidence,
   readSubmission,
 } from "../../../src/features/script/pending.ts";
+import { OUT_ROOT_ONLY_VAR } from "../../../src/features/script/out-dir.ts";
 import { approveCommand } from "../../../src/features/script/runtime.ts";
 import { draftDir, plainScript, submitted } from "./gates.ts";
-import { installSample, sampleScript } from "./sample.ts";
+import { approveSample, installSample, sampleScript } from "./sample.ts";
 
-function setup() {
+function setup(extra: Record<string, string> = {}) {
   const home = tempHome();
   const data = join(home, "data");
   const scripts = join(data, "scripts");
-  const deps = testDeps({ env: { HOME: home, TARS_DATA_DIR: data } });
+  const deps = testDeps({ env: { HOME: home, TARS_DATA_DIR: data, ...extra } });
   return { scripts, deps };
 }
 
@@ -479,5 +480,58 @@ describe("tars script show --pending", () => {
     expect(await tars(deps, "show", "bark-push", "--pending", "--source")).toBe(2);
     expect(await tars(deps, "show", "bark-push", "--pending", "--json")).toBe(2);
     expect(deps.io.stdout).toEqual([]);
+  });
+});
+
+describe("tars script run --expect-version", () => {
+  // A real run needs bwrap and a venv; the secret check that follows the version check is enough
+  // to show a matching version is let through.
+  const approved = (env: Record<string, string> = {}) => {
+    const { scripts, deps } = setup(env);
+    const dir = installSample(scripts, "bark-push");
+    approveSample(join(dir, "versions", "0123456789abcdef"), sampleScript({ name: "bark-push" }));
+    return deps;
+  };
+
+  test("a matching version goes on to the checks after it", async () => {
+    const deps = approved();
+    expect(await tars(deps, "run", "bark-push", "--expect-version", "0123456789abcdef")).toBe(1);
+    const err = deps.io.stderr.join("\n");
+    expect(err).toContain("tars secret set bark");
+    expect(err).not.toContain("不是預期的");
+  });
+
+  test("another version is refused with exit 1 before anything runs", async () => {
+    const deps = approved();
+    expect(await tars(deps, "run", "bark-push", "--expect-version", "fedcba9876543210")).toBe(1);
+    const err = deps.io.stderr.join("\n");
+    expect(err).toContain("腳本的版本是 0123456789abcdef，不是預期的 fedcba9876543210");
+    expect(err).not.toContain("tars secret set bark");
+  });
+
+  test("another version creates no --out directory", async () => {
+    const deps = approved();
+    const out = join(deps.env.TARS_DATA_DIR as string, "workspace/out/report");
+    expect(
+      await tars(deps, "run", "bark-push", "--expect-version", "fedcba9876543210", "--out", out),
+    ).toBe(1);
+    expect(deps.io.stderr.join("\n")).toContain("不是預期的");
+    expect(existsSync(out)).toBe(false);
+  });
+
+  test(`with ${OUT_ROOT_ONLY_VAR} set, --out under .evidence is refused before the run`, async () => {
+    const deps = approved({ [OUT_ROOT_ONLY_VAR]: "1" });
+    const evidence = join(deps.env.TARS_DATA_DIR as string, "workspace/.evidence/bark-push");
+    expect(await tars(deps, "run", "bark-push", "--out", evidence)).toBe(1);
+    const err = deps.io.stderr.join("\n");
+    expect(err).toContain("must be under");
+    expect(err).not.toContain("tars secret set bark");
+    expect(existsSync(evidence)).toBe(false);
+  });
+
+  test("--help lists the option", async () => {
+    const deps = approved();
+    await tars(deps, "run", "--help");
+    expect(deps.io.stdout.join("\n")).toContain("--expect-version <id>");
   });
 });

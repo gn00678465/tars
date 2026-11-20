@@ -4,6 +4,11 @@ import { processIo, readSecret } from "./core/io.ts";
 import { resolvePaths } from "./core/paths.ts";
 import { keyringStore, type SecretStore } from "./core/secrets.ts";
 import { openTty, type Terminal } from "./core/terminal.ts";
+import { registerChat, type ChatContext } from "./features/agent/chat.ts";
+import { registerCostCommands } from "./features/agent/cost-command.ts";
+import { registerModelsCommands } from "./features/agent/models-command.ts";
+import { adapterFor, type AdapterFor } from "./features/agent/provider.ts";
+import { registerSetupCommands } from "./features/agent/setup-command.ts";
 import { skillsFromBundle } from "./features/install/embedded.ts";
 import { registerInstall, type InstallDeps } from "./features/install/install.ts";
 import { registerMemoryCommands } from "./features/memory/command.ts";
@@ -19,7 +24,16 @@ export type Deps = InstallDeps &
     readSecret(prompt: string): Promise<string>;
     /** Throws a TarsError when the process has no controlling terminal. */
     openTerminal(): Terminal;
+    now(): Date;
+    /** How to run this tars again as a child: the loop's tars tool spawns it. */
+    readonly selfCommand: readonly string[];
+    readonly adapterFor: AdapterFor;
+    readonly signals: ChatContext["signals"];
   };
+
+/** A compiled tars runs its embedded entry point from /$bunfs; `bun src/main.ts` needs the path. */
+const selfCommand = () =>
+  Bun.main.startsWith("/$bunfs/") ? [process.execPath] : [process.execPath, Bun.main];
 
 export function defaultDeps(): Deps {
   return {
@@ -30,6 +44,10 @@ export function defaultDeps(): Deps {
     secrets: keyringStore,
     readSecret,
     openTerminal: openTty,
+    now: () => new Date(),
+    selfCommand: selfCommand(),
+    adapterFor,
+    signals: process,
     launch,
     embedded: () => skillsFromBundle(Bun.embeddedFiles),
   };
@@ -47,6 +65,7 @@ export function buildProgram(deps: Deps, exitWith: (code: number) => void): Comm
 Examples:
   dist/tars install --soul ./SOUL.md --memory ./MEMORY.md
   tars claude
+  tars chat
   tars agy
   tars memory remember --id pref-tone --section 偏好 --text "回覆先講結論。" --source user
   tars script search push notification`,
@@ -74,6 +93,27 @@ Examples:
     inSession: runtime.inSession,
     terminal: deps.openTerminal,
   });
+  const agent = {
+    env: deps.env,
+    io: deps.io,
+    secrets: deps.secrets,
+    openTerminal: deps.openTerminal,
+    adapterFor: deps.adapterFor,
+    now: deps.now,
+  };
+  registerSetupCommands(program, agent);
+  registerModelsCommands(program, agent);
+  registerCostCommands(program, agent);
+  registerChat(
+    program,
+    {
+      ...agent,
+      selfCommand: deps.selfCommand,
+      approveCommand: runtime.approveCommand,
+      signals: deps.signals,
+    },
+    exitWith,
+  );
   return program;
 }
 

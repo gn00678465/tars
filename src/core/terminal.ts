@@ -11,6 +11,11 @@ export interface Terminal {
   ask(prompt: string): Promise<string | undefined>;
   /** Like ask, with the terminal's echo off while the line is typed. */
   askHidden(prompt: string): Promise<string | undefined>;
+  /**
+   * Like ask, without blocking the event loop, so timers and the signal still work while it
+   * waits. Throws TarsError("cancelled") when the signal fires or on Ctrl-C.
+   */
+  askAbortable(prompt: string, signal: AbortSignal): Promise<string | undefined>;
   close(): void;
 }
 
@@ -79,8 +84,44 @@ export function openTty(): Terminal {
       process.off("SIGINT", keepAlive);
     }
   };
+  const stty = (...args: string[]) =>
+    Bun.spawnSync(["stty", ...args], { stdin: fd, stdout: "pipe", stderr: "ignore" });
   return {
     write,
+    askAbortable: async (prompt, signal) => {
+      if (signal.aborted) throw new TarsError("cancelled");
+      // A reader killed by the signal cannot put the terminal back itself.
+      const saved = stty("-g").stdout.toString().trim();
+      const keepAlive = () => {};
+      process.on("SIGINT", keepAlive);
+      try {
+        // Not detached: a reader outside the foreground group would be stopped by SIGTTIN.
+        const child = Bun.spawn(["bash", "-c", LINE_READ, "bash", prompt], {
+          stdin: fd,
+          stdout: "pipe",
+          stderr: "ignore",
+          signal,
+        });
+        const [line, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+        if (signal.aborted) {
+          if (saved !== "") stty(saved);
+          write("\n");
+          throw new TarsError("cancelled");
+        }
+        if (code === 0) return line;
+        if (code === 3) {
+          write("\n");
+          return undefined;
+        }
+        throw new TarsError(
+          code === 130 || child.signalCode === "SIGINT"
+            ? "cancelled"
+            : "cannot read from the terminal",
+        );
+      } finally {
+        process.off("SIGINT", keepAlive);
+      }
+    },
     ask: async (prompt) => {
       const line = read(["bash", "-c", LINE_READ, "bash", prompt], "cannot read from the terminal");
       if (line === undefined) write("\n");

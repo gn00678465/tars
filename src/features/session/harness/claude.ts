@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { TarsError } from "../../../core/exit.ts";
 import { ensureSymlink, writeFileAtomic } from "../../../core/fs.ts";
 import type { TarsPaths } from "../../../core/paths.ts";
-import type { BootContext } from "../boot.ts";
+import { composeBootPrompt } from "../boot.ts";
 import type { HarnessAdapter } from "./types.ts";
 
 // Linux MAX_ARG_STRLEN caps a single argv string at 32 pages.
@@ -73,15 +73,3 @@ export const claude: HarnessAdapter = {
     };
   },
 };
-
-const BLOCK_TAG = /<(\s*\/?\s*tars-file)/gi;
-
-export function composeBootPrompt(boot: BootContext): string {
-  return boot.files
-    .map(({ label, sha256, content }) => {
-      // Escaping "<" keeps file content from closing its block or opening a forged one.
-      const body = content.replace(BLOCK_TAG, "&lt;$1");
-      return `<tars-file label="${label}" sha256="${sha256}">\n${body}${body.endsWith("\n") ? "" : "\n"}</tars-file>\n`;
-    })
-    .join("");
-}

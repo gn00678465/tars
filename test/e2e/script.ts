@@ -4,16 +4,14 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import type { ApprovalRecord } from "../../src/features/script/library.ts";
-import { approveSample } from "../features/script/sample.ts";
 import { runDialog } from "./pty.ts";
-import { finishChecks, printChecks, type Check, type Host } from "./sandbox.ts";
-import { enterScriptNetns, lastJson, scriptHost } from "./script-host.ts";
+import { finishChecks, printChecks, type Check } from "./sandbox.ts";
+import { enterScriptNetns, install, lastJson, scriptHost } from "./script-host.ts";
 
 const INNER = "TARS_E2E_SCRIPT_INNER";
 
@@ -140,15 +138,6 @@ print(MARK, "pushed", status, "key", s["key"], "tty", tty(), "prefix", sys.prefi
 
 const denied = (value: unknown) =>
   Array.isArray(value) && value.length > 0 && value.every((r) => String(r).startsWith("DENIED"));
-
-function install(host: Host, name: string, source: string, lock = ""): string {
-  const version = join(host.fakeHome, ".local/share/tars/scripts/library", name, "versions", "v1");
-  mkdirSync(version, { recursive: true });
-  writeFileSync(join(version, "script.py"), source);
-  approveSample(version, source, lock);
-  symlinkSync(join("versions", "v1"), join(version, "..", "..", "current"));
-  return join(host.home, ".local/share/tars/scripts/library", name, "versions", "v1");
-}
 
 /** The lock `uv lock` writes for a script without dependencies; it needs no network. */
 function zeroDepLock(uv: string, work: string): string {

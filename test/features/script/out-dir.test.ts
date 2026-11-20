@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { prepareOutDir, type OutDirRules } from "../../../src/features/script/out-dir.ts";
 import { tempHome } from "../../helpers.ts";
@@ -127,5 +127,65 @@ describe("prepareOutDir", () => {
     symlinkSync(r.data, join(r.launchDir, "sneaky"));
     await expect(prepareOutDir(join(r.launchDir, "sneaky/scripts"), r)).rejects.toThrow("--out");
     expect(existsSync(join(r.data, "scripts"))).toBe(false);
+  });
+});
+
+describe("prepareOutDir with outRootOnly (tars chat's child)", () => {
+  const only = () => ({ ...rules(), outRootOnly: true });
+
+  test("a subdirectory of the workspace's out/ is allowed", async () => {
+    const r = only();
+    expect(await prepareOutDir("out/files", r)).toBe(join(r.data, "workspace/out/files"));
+  });
+
+  test.each([
+    ["the workspace's .evidence/<name>", (r: OutDirRules) => join(r.data, "workspace/.evidence/x")],
+    ["the launch dir", (r: OutDirRules) => join(r.launchDir, "dl")],
+    ["a dot directory under out/", (r: OutDirRules) => join(r.data, "workspace/out/.x/y")],
+  ])("%s is refused and not created", async (_, path) => {
+    const r = only();
+    await expect(prepareOutDir(path(r), r)).rejects.toThrow("--out");
+    expect(existsSync(path(r))).toBe(false);
+  });
+
+  test("a symlink under out/ swapped to point at .evidence is refused", async () => {
+    const r = only();
+    const evidence = join(r.data, "workspace/.evidence/trip");
+    mkdirSync(evidence, { recursive: true });
+    mkdirSync(join(r.data, "workspace/out"), { recursive: true });
+    symlinkSync(evidence, join(r.data, "workspace/out/files"));
+    await expect(prepareOutDir("out/files", r)).rejects.toThrow(
+      `must be under ${join(r.data, "workspace/out")}`,
+    );
+  });
+  test("a workspace that is a link elsewhere is refused before anything is created", async () => {
+    const r = only();
+    const elsewhere = join(r.home, "elsewhere");
+    mkdirSync(join(elsewhere, "out"), { recursive: true });
+    rmSync(join(r.data, "workspace"), { recursive: true, force: true });
+    symlinkSync(elsewhere, join(r.data, "workspace"));
+    await expect(prepareOutDir(join(r.data, "workspace/out/x"), r)).rejects.toThrow("not a link");
+    expect(existsSync(join(elsewhere, "out/x"))).toBe(false);
+    expect(existsSync(join(elsewhere, ".evidence"))).toBe(false);
+  });
+
+  test("an approved path that now resolves somewhere else is refused and not created", async () => {
+    // Approved as out/a/x; out/a was then made a link to out/b.
+    const r = only();
+    mkdirSync(join(r.data, "workspace/out/b"), { recursive: true });
+    symlinkSync(join(r.data, "workspace/out/b"), join(r.data, "workspace/out/a"));
+    await expect(prepareOutDir(join(r.data, "workspace/out/a/x"), r)).rejects.toThrow(
+      "not the approved path",
+    );
+    expect(existsSync(join(r.data, "workspace/out/b/x"))).toBe(false);
+  });
+
+  test("out/ itself swapped for a link to .evidence is refused", async () => {
+    const r = only();
+    const evidence = join(r.data, "workspace/.evidence");
+    mkdirSync(join(evidence, "trip"), { recursive: true });
+    symlinkSync(evidence, join(r.data, "workspace/out"));
+    await expect(prepareOutDir("out/trip/x", r)).rejects.toThrow("not a link");
+    expect(existsSync(join(evidence, "trip/x"))).toBe(false);
   });
 });

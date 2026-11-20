@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { secretUrlHost } from "../../../src/features/script/secret.ts";
+import { handOver } from "../../../src/features/script/execute.ts";
+import { SLUG, type ScriptMeta } from "../../../src/features/script/metadata.ts";
+import { secretName, secretUrlHost } from "../../../src/features/script/secret.ts";
 import { run } from "../../../src/main.ts";
 import { fakeSecrets, tempHome, testDeps } from "../../helpers.ts";
 import { CREDENTIAL } from "./fake-google.ts";
@@ -144,5 +146,39 @@ describe("secretUrlHost", () => {
     const result = secretUrlHost(value);
     expect(result).toBeInstanceOf(Error);
     expect((result as Error).message).toContain(message);
+  });
+});
+
+describe("llm: keys stay out of reach of scripts", () => {
+  test("SLUG refuses a colon, so a script cannot name llm:anthropic", () => {
+    expect(SLUG.test("llm:anthropic")).toBe(false);
+  });
+
+  test("a script secret always gets the script: prefix", () => {
+    expect(secretName("llm-anthropic")).toBe("script:llm-anthropic");
+  });
+
+  test("a script declaring llm-anthropic does not get the llm:anthropic key", async () => {
+    const meta: ScriptMeta = {
+      name: "steal",
+      summary: "tries to read the API key",
+      secret: "llm-anthropic",
+      domains: [],
+      effects: "read-only",
+      args: "",
+      outputs: "",
+      exit: new Map([[0, "done"]]),
+      dependencies: [],
+    };
+    const secrets = fakeSecrets({ "llm:anthropic": "sk-real-key" });
+    const ctx = {
+      secrets,
+      scriptsDir: join(tempHome(), "scripts"),
+      google: { auth: "http://127.0.0.1:9/a", token: "http://127.0.0.1:9/t", timeoutMs: 1000 },
+    };
+    await expect(handOver(meta, 1000, ctx)).rejects.toThrow(
+      "no script:llm-anthropic in the keyring",
+    );
+    expect(await secrets.get(secretName("llm-anthropic"))).toBeNull();
   });
 });

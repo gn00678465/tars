@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
+import { approveSample } from "../features/script/sample.ts";
 import {
   binaryDirsFor,
   EXIT_SKIP,
@@ -111,6 +112,16 @@ export function scriptHost(prefix: string): ScriptHost {
       return `~/.local/share/tars/workspace/drafts/${name}`;
     },
   };
+}
+
+/** Puts `source` in the library as approved version v1; returns its directory inside the sandbox. */
+export function install(host: Host, name: string, source: string, lock = ""): string {
+  const version = join(host.fakeHome, ".local/share/tars/scripts/library", name, "versions", "v1");
+  mkdirSync(version, { recursive: true });
+  writeFileSync(join(version, "script.py"), source);
+  approveSample(version, source, lock);
+  symlinkSync(join("versions", "v1"), join(version, "..", "..", "current"));
+  return join(host.home, ".local/share/tars/scripts/library", name, "versions", "v1");
 }
 
 /** The last stdout line parsed as JSON, or {} when it is not JSON. */

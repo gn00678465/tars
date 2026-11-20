@@ -1,11 +1,11 @@
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
-import { constants, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
-import { EXIT_TIMEOUT, OUTPUT_LIMIT } from "./metadata.ts";
+import { processStartTime, spawnAndWait, type SandboxResult } from "../../core/spawn.ts";
 
 export type Network =
   | { readonly kind: "none" }
@@ -31,15 +31,7 @@ export interface SandboxHost {
   readonly seccomp: string;
 }
 
-export interface SandboxResult {
-  readonly exit: number;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly truncated: boolean;
-  readonly ms: number;
-}
-
-const KILL_GRACE_MS = 2000;
+export type { SandboxResult } from "../../core/spawn.ts";
 
 // The proxy checks the addresses a name resolves to against these, but lets "localhost" reach
 // loopback and never checks an IP literal at all; openAsk refuses the literals.
@@ -121,7 +113,7 @@ export async function runSandboxed(job: SandboxJob, host: SandboxHost): Promise<
     await mkdir(runDir, { recursive: true });
     await writeFile(
       record,
-      JSON.stringify({ pid: process.pid, start: startTime(process.pid), socket }),
+      JSON.stringify({ pid: process.pid, start: processStartTime(process.pid), socket }),
     );
     // sandbox-runtime puts NO_PROXY with loopback and private ranges into the command it builds,
     // so clearing it in the spawn env has no effect; it must be cleared in the command itself.
@@ -153,83 +145,7 @@ function sandboxEnv(job: SandboxJob): Record<string, string> {
   };
 }
 
-async function spawnAndWait(
-  argv: readonly string[],
-  cwd: string,
-  env: Record<string, string>,
-  timeoutMs: number,
-): Promise<SandboxResult> {
-  const started = performance.now();
-  const proc = Bun.spawn([...argv], {
-    cwd,
-    env,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  let timedOut = false;
-  let forced: ReturnType<typeof setTimeout> | undefined;
-  const stop = () => {
-    proc.kill("SIGTERM");
-    forced ??= setTimeout(() => proc.kill("SIGKILL"), KILL_GRACE_MS);
-  };
-  const timer = setTimeout(() => {
-    timedOut = true;
-    stop();
-  }, timeoutMs);
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  try {
-    const [out, err, code] = await Promise.all([
-      keepHeadDrainRest(proc.stdout),
-      keepHeadDrainRest(proc.stderr),
-      proc.exited,
-    ]);
-    const sig = proc.signalCode;
-    const signal = sig == null ? undefined : typeof sig === "number" ? sig : constants.signals[sig];
-    return {
-      exit: timedOut ? EXIT_TIMEOUT : signal !== undefined ? 128 + signal : code,
-      stdout: out.text,
-      stderr: err.text,
-      truncated: out.truncated || err.truncated,
-      ms: Math.round(performance.now() - started),
-    };
-  } finally {
-    clearTimeout(timer);
-    clearTimeout(forced);
-    process.off("SIGINT", stop);
-    process.off("SIGTERM", stop);
-  }
-}
-
-async function keepHeadDrainRest(stream: ReadableStream<Uint8Array>) {
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  let truncated = false;
-  for await (const chunk of stream) {
-    if (size >= OUTPUT_LIMIT) {
-      truncated = true;
-      continue;
-    }
-    const room = OUTPUT_LIMIT - size;
-    if (chunk.length > room) truncated = true;
-    chunks.push(chunk.subarray(0, room));
-    size += Math.min(chunk.length, room);
-  }
-  return { text: new TextDecoder().decode(Buffer.concat(chunks)), truncated };
-}
-
 const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
-
-/** Field 22 of /proc/<pid>/stat; with the pid it names one process even after the pid is reused. */
-function startTime(pid: number): string | undefined {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-  } catch {
-    return undefined;
-  }
-}
 
 /** A tars killed with SIGKILL leaves sandbox-runtime's socat bridge and sockets behind. */
 async function removeStaleRuns(runDir: string): Promise<void> {
@@ -248,7 +164,7 @@ async function removeStaleRuns(runDir: string): Promise<void> {
       !rec.socket.startsWith("/")
     )
       continue;
-    const start = startTime(rec.pid);
+    const start = processStartTime(rec.pid);
     if (start !== undefined && start === rec.start) continue;
     for (const pid of await readdir("/proc").catch(() => [] as string[])) {
       if (!/^\d+$/.test(pid)) continue;

@@ -3,14 +3,14 @@ import { accountHome } from "../../core/account.ts";
 import { TarsError } from "../../core/exit.ts";
 import {
   DATA_DIR_VAR,
-  IN_SESSION_VAR,
+  inSession,
   LAUNCH_DIR_VAR,
   resolvePaths,
   type Env,
 } from "../../core/paths.ts";
 import type { GoogleEndpoints } from "./google.ts";
 import type { OsvEndpoint } from "./osv.ts";
-import type { OutDirRules } from "./out-dir.ts";
+import { OUT_ROOT_ONLY_VAR, type OutDirRules } from "./out-dir.ts";
 import type { SandboxHost } from "./sandbox.ts";
 import { seccompHelper } from "./seccomp.ts";
 import { parsePythonVersion, SYSTEM_PYTHON, type Toolchain } from "./supply.ts";
@@ -42,7 +42,7 @@ export function scriptRuntime(env: Env, cwd: string) {
   const realHome = () => (home ??= accountHome());
   const bins = () => [...new Set([resolvePaths(env).bin, join(realHome(), ".local", "bin")])];
   return {
-    inSession: () => (env[IN_SESSION_VAR] ?? "") !== "",
+    inSession: () => inSession(env),
     osv: () => OSV,
     google: () => GOOGLE,
     approveCommand: (name: string) => approveCommand(name, resolvePaths(env).data, realHome()),
@@ -63,6 +63,7 @@ export function scriptRuntime(env: Env, cwd: string) {
         realHome: realHome(),
         data: resolvePaths(env).data,
         bins: bins(),
+        outRootOnly: (env[OUT_ROOT_ONLY_VAR] ?? "") !== "",
       };
     },
     toolchain: (): Toolchain => {

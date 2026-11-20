@@ -1,6 +1,11 @@
 import { TarsError } from "./exit.ts";
 
-export type SecretName = `script:${string}`;
+export const PROVIDERS = ["anthropic", "gemini", "openrouter"] as const;
+export type Provider = (typeof PROVIDERS)[number];
+
+// Script secrets go through secretName(), which always adds "script:", and SLUG has no colon, so a
+// script can never declare a name that reaches an llm: key.
+export type SecretName = `script:${string}` | `llm:${Provider}`;
 
 /** Keyring access; tests use an in-memory fake so they never touch the real keyring. */
 export interface SecretStore {

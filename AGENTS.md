@@ -20,6 +20,8 @@ tars install ─ 複製 tars-skills/ 的每個 skill（外部的列在 upstream.
                               └ search 找到庫裡的腳本（使用者核可、不隨安裝）
 ```
 
+`tars chat` 是自建迴圈，工具只有 `skill_load`、`file_read` 與白名單內的 `tars` 子指令。白名單在 `src/features/agent/tars-tool.ts`；CLI 加新的子指令或選項時不會自動放行。
+
 ## 新增 playbook、skill、腳本
 
 | 要加的 | 放哪裡 | 怎麼接上 | 邊界 |

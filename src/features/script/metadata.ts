@@ -1,5 +1,6 @@
 import { InvalidArgumentError } from "commander";
 import { TarsError } from "../../core/exit.ts";
+import { EXIT_TIMEOUT } from "../../core/spawn.ts";
 
 export const EFFECTS = ["read-only", "external-write", "local-write"] as const;
 export type Effects = (typeof EFFECTS)[number];
@@ -30,9 +31,8 @@ export class ScriptMetaError extends Error {
 }
 
 export const SLUG = /^[a-z0-9][a-z0-9-]*$/;
-export const EXIT_TIMEOUT = 124;
+export { EXIT_TIMEOUT, OUTPUT_LIMIT } from "../../core/spawn.ts";
 export const MAX_SCRIPT_EXIT = EXIT_TIMEOUT - 1;
-export const OUTPUT_LIMIT = 1024 * 1024;
 
 export const parseSlug = (example: string) => (value: string) => {
   if (!SLUG.test(value))
@@ -42,6 +42,9 @@ export const parseSlug = (example: string) => (value: string) => {
 
 export const hostText = (d: { readonly host: string; readonly port?: number }) =>
   d.port === undefined ? d.host : `${d.host}:${d.port}`;
+
+export const domainText = (d: Domain) =>
+  d.kind === "any" ? "*" : d.kind === "secret-url" ? "secret:url" : hostText(d);
 
 // The reference regex from PEP 723.
 const BLOCK = /^# \/\/\/ (?<type>[a-zA-Z0-9-]+)$\s(?<content>(?:^#(?:| .*)$\s)+)^# \/\/\/$/gm;

@@ -17,9 +17,10 @@ import {
   type LibraryScript,
   type ScriptsLayout,
 } from "./library.ts";
+import { loadApprovedScript } from "./approved.ts";
 import { gatherDossier, renderDossier } from "./dossier.ts";
 import type { GoogleEndpoints } from "./google.ts";
-import { hostText, OUTPUT_LIMIT, parseSlug, type Domain, type ScriptMeta } from "./metadata.ts";
+import { domainText, OUTPUT_LIMIT, parseSlug, type ScriptMeta } from "./metadata.ts";
 import type { OsvEndpoint } from "./osv.ts";
 import { listPlaybooks } from "./playbooks.ts";
 import { evidenceDir, prepareOutDir, removeEvidence, type OutDirRules } from "./out-dir.ts";
@@ -58,29 +59,13 @@ export interface ScriptCommandContext {
 interface RunOptions {
   timeout: number;
   out?: string;
+  expectVersion?: string;
 }
 
 export function registerScriptCommands(program: Command, ctx: ScriptCommandContext): void {
   const layout = (): ScriptsLayout => scriptsLayout(ctx.scriptsDir());
-  /** A script that is only under review must not read as missing, or the agent writes another. */
-  const approvedScript = async (name: string): Promise<LibraryScript> => {
-    try {
-      return await loadScript(layout(), name);
-    } catch (err) {
-      const inLibrary = await lstat(join(layout().library, name)).then(
-        () => true,
-        () => false,
-      );
-      if (!(err instanceof TarsError) || inLibrary) throw err;
-      const state = await pendingState(ctx.scriptsDir(), name);
-      if (state === undefined) throw err;
-      throw new TarsError(
-        state === "awaiting-approve"
-          ? `${name} is not approved yet (awaiting-approve). Only the user approves it, in their own terminal: ${ctx.approveCommand(name)}`
-          : `${name} is not approved yet (awaiting-review): its adversarial review is not attached. Attach one with: tars script review ${name} --report <file>; then the user approves it`,
-      );
-    }
-  };
+  const approvedScript = (name: string) =>
+    loadApprovedScript(ctx.scriptsDir(), name, ctx.approveCommand);
   const script = program
     .command("script")
     .description("Find, read and look after the approved scripts in the script library.");
@@ -219,6 +204,10 @@ Examples:
     });
 
   addRunOptions(script.command("run"))
+    .option(
+      "--expect-version <id>",
+      "refuse to run unless the approved version is this one (tars chat pins what was approved)",
+    )
     .description("Run an approved script in the sandbox, with only the secret it declares.")
     .addHelpText(
       "after",
@@ -229,7 +218,8 @@ For a google-oauth secret the script gets a fresh access token, never the stored
 the session started in. A test run goes to <data>/workspace/.evidence/<name> instead, which
 approve and abandon remove.
 Exit codes: the script's own code (0 to 123, see tars script show <name>);
-1 when tars refuses or fails before the script starts; 2 usage error;
+1 when tars refuses or fails before the script starts (also when --expect-version does
+not match); 2 usage error;
 124 timed out; 128+n stopped by signal n.
 
 Examples:
@@ -238,6 +228,9 @@ Examples:
     )
     .action(async (name: string, args: string[], opts: RunOptions) => {
       const s = await approvedScript(name);
+      // Before executeOptions, which creates --out: a refused run leaves nothing behind.
+      if (opts.expectVersion !== undefined && opts.expectVersion !== s.version)
+        throw new TarsError(`腳本的版本是 ${s.version}，不是預期的 ${opts.expectVersion}`);
       const { runApproved } = await import("./execute.ts");
       const outcome = await runApproved(s, await executeOptions(args, opts), {
         secrets: ctx.secrets,
@@ -547,9 +540,6 @@ function parseLine(value: string): string {
     throw new InvalidArgumentError("text must be one non-empty line.");
   return line;
 }
-
-const domainText = (d: Domain) =>
-  d.kind === "any" ? "*" : d.kind === "secret-url" ? "secret:url" : hostText(d);
 
 interface ListEntry {
   readonly meta: ScriptMeta;

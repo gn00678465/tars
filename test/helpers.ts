@@ -1,6 +1,8 @@
+import { EventEmitter } from "node:events";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TarsError } from "../src/core/exit.ts";
 import type { Io } from "../src/core/io.ts";
 import type { SecretName, SecretStore } from "../src/core/secrets.ts";
 import type { Terminal } from "../src/core/terminal.ts";
@@ -14,7 +16,14 @@ export interface CapturedIo extends Io {
 export function captureIo(): CapturedIo {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  return { stdout, stderr, out: (l) => void stdout.push(l), err: (l) => void stderr.push(l) };
+  return {
+    stdout,
+    stderr,
+    out: (l) => void stdout.push(l),
+    err: (l) => void stderr.push(l),
+    // A streamed piece lands as its own entry; join("") gives the text as written.
+    write: (t) => void stdout.push(t),
+  };
 }
 
 export function tempHome(): string {
@@ -44,6 +53,9 @@ export function fakeSecrets(initial: Partial<Record<SecretName, string>> = {}): 
 
 export type TestDeps = Deps & { readonly io: CapturedIo };
 
+/** The fixed clock testDeps gives, as Unix milliseconds. */
+export const TEST_NOW = Date.parse("2026-11-19T12:00:00Z");
+
 /** Deps with no access to the real HOME, keyring, terminal, embedded files, or harness binaries. */
 export function testDeps(overrides: Partial<Deps> = {}): TestDeps {
   return {
@@ -57,6 +69,11 @@ export function testDeps(overrides: Partial<Deps> = {}): TestDeps {
       throw new Error("test did not provide a terminal");
     },
     launch: () => Promise.reject(new Error("test did not provide a launcher")),
+    now: () => new Date(TEST_NOW),
+    selfCommand: ["/bin/false"],
+    adapterFor: () => Promise.reject(new Error("test did not provide a provider adapter")),
+    // A test raises "SIGINT" or "SIGTERM" with emit(); the real process is never signalled.
+    signals: new EventEmitter(),
     ...overrides,
     io: captureIo(),
   };
@@ -91,6 +108,16 @@ export function scriptedTerminal(answers: readonly Answer[]): ScriptedTerminal {
     write: (text) => void transcript.push(text),
     ask,
     askHidden: ask,
+    askAbortable: (prompt, signal) => {
+      if (signal.aborted) return Promise.reject(new TarsError("cancelled"));
+      return new Promise((resolve, reject) => {
+        const cancel = () => reject(new TarsError("cancelled"));
+        signal.addEventListener("abort", cancel, { once: true });
+        ask(prompt)
+          .then(resolve, reject)
+          .finally(() => signal.removeEventListener("abort", cancel));
+      });
+    },
     close: () => {
       closed = true;
     },
