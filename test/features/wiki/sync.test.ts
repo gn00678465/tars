@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  chmodSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -819,6 +820,37 @@ describe("recovery", () => {
       state: "applied",
       attempts: 0,
     });
+  });
+
+  test("a read error at reconciliation keeps the journal and fails; once readable it settles", async () => {
+    const h = await harness();
+    await onePage(h);
+    const t2 = h.turn({ owner: "王小明其實沒有搬到台中西屯" });
+    h.fake.reply(
+      extracted({ source: t2.ref, quote: "沒有搬到台中西屯", text: "沒有搬到台中。" }),
+      json({
+        summary: { keep: true },
+        facts: [{ op: "retract", id: "i1", reason: "擁有者更正", from: ["c2"] }],
+        open: [],
+      }),
+    );
+    const w = await failAfterWrite(h);
+    await expect(h.sync()).rejects.toThrow("fault");
+    w.run("DROP TRIGGER fault");
+    const file = join(h.paths.wiki, "people", "wang-xiaoming.md");
+    chmodSync(file, 0o000);
+    const requests = h.fake.messages().length;
+    await expect(h.sync()).rejects.toThrow("讀不到 people/wang-xiaoming.md");
+    expect(one(w, "SELECT COUNT(*) AS n FROM page_commits")).toEqual({ n: 1 });
+    expect(one(w, "SELECT state FROM candidates WHERE id = 2")).toEqual({ state: "pending" });
+    chmodSync(file, 0o644);
+    expect(await h.sync()).toEqual({ state: "completed" });
+    expect(h.fake.messages()).toHaveLength(requests);
+    expect(one(w, "SELECT state, attempts FROM candidates WHERE id = 2")).toEqual({
+      state: "applied",
+      attempts: 0,
+    });
+    expect(one(w, "SELECT COUNT(*) AS n FROM page_commits")).toEqual({ n: 0 });
   });
 
   test("a journal whose file was never written: the candidates are done again", async () => {
