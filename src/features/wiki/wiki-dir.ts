@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { constants as C } from "node:fs";
-import { mkdir, open, readdir, rename, rm, type FileHandle } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from "node:fs/promises";
 import type { TarsPaths } from "../../core/paths.ts";
-import { uniqueTemp } from "../../core/fs.ts";
+import { CATEGORIES } from "./page.ts";
 
 /**
  * <data>/wiki or one of its category directories, held open by descriptor and reached without
@@ -89,9 +90,12 @@ export async function readIn(dir: WikiDir, name: string): Promise<string | undef
   }
 }
 
+/** writeIn's temp files: a name no page or index.md can have, so cleanup touches nothing else. */
+const TEMP_PREFIX = ".tars-wiki-tmp-";
+
 /** Written to a temp file in the directory, then renamed over `name` there. */
 export async function writeIn(dir: WikiDir, name: string, data: string): Promise<void> {
-  const tmp = uniqueTemp(name);
+  const tmp = `${TEMP_PREFIX}${randomUUID()}`;
   try {
     const h = await open(dir.at(tmp), C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o666);
     try {
@@ -103,4 +107,20 @@ export async function writeIn(dir: WikiDir, name: string, data: string): Promise
   } finally {
     await rm(dir.at(tmp), { force: true });
   }
+}
+
+/**
+ * Deletes writeIn temp files older than `maxAgeMs` from <data>/wiki and its categories: a sync
+ * killed between creating one and renaming it leaves it behind, holding page text.
+ */
+export async function removeStaleTemps(paths: TarsPaths, now: Date, maxAgeMs: number) {
+  for (const category of [undefined, ...CATEGORIES])
+    await withWikiDir(paths, category, false, async (dir) => {
+      for (const ent of await listDir(dir)) {
+        if (!ent.name.startsWith(TEMP_PREFIX) || !ent.isFile()) continue;
+        const info = await lstat(dir.at(ent.name)).catch(() => undefined);
+        if (info !== undefined && now.getTime() - info.mtimeMs > maxAgeMs)
+          await rm(dir.at(ent.name), { force: true });
+      }
+    });
 }

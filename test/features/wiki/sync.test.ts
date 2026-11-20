@@ -9,6 +9,7 @@ import {
   chmodSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -756,6 +757,37 @@ describe("budget", () => {
       attempts: 1,
       last_error: "too_large",
     });
+  });
+});
+
+describe("temp files a killed sync left", () => {
+  test("stale ones are removed after the lock; pages, fresh temps and other names stay", async () => {
+    const h = await harness();
+    await onePage(h);
+    const now = h.clock.now().getTime() / 1000;
+    const plant = (rel: string, ageSeconds: number) => {
+      const file = join(h.paths.wiki, rel);
+      writeFileSync(file, "x");
+      utimesSync(file, now - ageSeconds, now - ageSeconds);
+      return file;
+    };
+    const page = join(h.paths.wiki, "people", "wang-xiaoming.md");
+    utimesSync(page, now - 86400, now - 86400);
+    const stale = [plant("people/.tars-wiki-tmp-0a1b", 7200), plant(".tars-wiki-tmp-2c3d", 7200)];
+    const kept = [
+      plant("people/.tars-wiki-tmp-4e5f", 60),
+      plant("people/.wang-xiaoming.md.tmp-old", 86400),
+      plant("people/notes.txt", 86400),
+      page,
+    ];
+    mkdirSync(join(h.paths.wiki, "people", ".tars-wiki-tmp-dir"));
+    utimesSync(join(h.paths.wiki, "people", ".tars-wiki-tmp-dir"), now - 7200, now - 7200);
+    const before = h.page("people/wang-xiaoming");
+    expect(await h.sync()).toEqual({ state: "completed" });
+    for (const f of stale) expect(existsSync(f)).toBe(false);
+    for (const f of kept) expect(existsSync(f)).toBe(true);
+    expect(existsSync(join(h.paths.wiki, "people", ".tars-wiki-tmp-dir"))).toBe(true);
+    expect(h.page("people/wang-xiaoming")).toBe(before);
   });
 });
 

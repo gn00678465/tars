@@ -61,7 +61,14 @@ import {
   type Page,
   type PatchReason,
 } from "./page.ts";
-import { listDir, openWikiDir, readIn, withWikiDir, writeIn } from "./wiki-dir.ts";
+import {
+  listDir,
+  openWikiDir,
+  readIn,
+  removeStaleTemps,
+  withWikiDir,
+  writeIn,
+} from "./wiki-dir.ts";
 import { tokenize } from "./tokenize.ts";
 
 export const EXTRACT_SYSTEM = `You build a personal knowledge base for one person, the owner. You are given
@@ -791,6 +798,7 @@ export async function runSync(
       now.getTime(),
     ]);
     const warn = (line: string) => io.err(line);
+    await removeStaleTemps(paths, now, STALE_TEMP_MS);
     await settleCommits(wiki, paths);
     if (opts.reindex === true) return await runReindex(deps, wiki, agent, warn);
     return await runModel(deps, config, wiki, agent, warn, signal);
@@ -825,6 +833,9 @@ function endRun(
     id,
   ]);
 }
+
+/** Only sync writes the wiki, under the lock; the age is a margin against clock steps. */
+const STALE_TEMP_MS = 60 * 60 * 1000;
 
 const WIKI_SYMLINK = (paths: TarsPaths) =>
   `${paths.wiki} 是 symlink；要在 Obsidian 看，把 vault 指到這個目錄`;
