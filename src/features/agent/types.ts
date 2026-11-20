@@ -160,6 +160,17 @@ export interface CompactionBody {
   readonly usageId: number;
 }
 
+/** The wiki's page list as one context generation read it; replayed byte for byte after. */
+export interface WikiIndexBody {
+  /** The whole text sent to the model, its tags included. Never empty. */
+  readonly text: string;
+  /** sha256 of the index.md it was read from. */
+  readonly indexSha256: string;
+  /** Pages index.md listed, and pages this text lists. */
+  readonly pages: number;
+  readonly listed: number;
+}
+
 interface ItemOf<K extends string, B> {
   readonly seq: number;
   readonly turnId: string;
@@ -176,6 +187,7 @@ export type ToolResultItem = ItemOf<"tool_result", ToolResultBody>;
 export type UsageItem = ItemOf<"usage", UsageBody>;
 export type ErrorItem = ItemOf<"error", ErrorBody>;
 export type CompactionItem = ItemOf<"compaction", CompactionBody>;
+export type WikiIndexItem = ItemOf<"wiki_index", WikiIndexBody>;
 
 export type Item =
   | UserItem
@@ -184,7 +196,8 @@ export type Item =
   | ToolResultItem
   | UsageItem
   | ErrorItem
-  | CompactionItem;
+  | CompactionItem
+  | WikiIndexItem;
 export type ItemKind = Item["kind"];
 
 /** An item before the store gives it a seq. */

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { TarsError } from "../../core/exit.ts";
 import type { TarsPaths } from "../../core/paths.ts";
-import type { Provider } from "../../core/secrets.ts";
+import { PROVIDERS, type Provider } from "../../core/secrets.ts";
 import { isRecord } from "../script/metadata.ts";
 import { EFFORTS, type CacheTtl, type ChatConfig } from "./types.ts";
 
@@ -34,10 +34,19 @@ export interface Limits {
   readonly cache_ttl: CacheTtl;
 }
 
+export interface WikiConfig {
+  /** Sync's own caps, per UTC day and UTC month, on top of the provider's. */
+  readonly daily_cap_usd: number;
+  readonly monthly_cap_usd: number;
+  /** "" for the default Anthropic model, or "<provider>/<id>". */
+  readonly model: string;
+}
+
 export interface TarsConfig {
   readonly providers: Partial<Record<Provider, ProviderConfig>>;
   readonly limits: Limits;
   readonly chat: ChatConfig;
+  readonly wiki: WikiConfig;
 }
 
 export const DEFAULT_LIMITS: Limits = {
@@ -59,6 +68,8 @@ export const DEFAULT_LIMITS: Limits = {
 };
 
 export const DEFAULT_CHAT: ChatConfig = { effort: "medium" };
+
+export const DEFAULT_WIKI: WikiConfig = { daily_cap_usd: 1, monthly_cap_usd: 10, model: "" };
 
 export const CONFIG_TEMPLATE = `[providers.anthropic]
 enabled = true
@@ -88,6 +99,11 @@ cache_ttl = "5m"         # 或 "1h"
 
 [chat]
 effort = "medium"        # low | medium | high | xhigh | max
+
+[wiki]
+daily_cap_usd = 1        # 同步的每日上限（UTC 日）
+monthly_cap_usd = 10     # 同步的每月上限（UTC 月）
+model = ""               # 空字串：Anthropic 在 models.json 的預設模型。或 "<provider>/<id>"
 `;
 
 const KNOWN_PROVIDERS: readonly Provider[] = ["anthropic"];
@@ -124,7 +140,8 @@ export function parseConfig(toml: unknown): {
   const warnings: string[] = [];
   const top = isRecord(toml) ? toml : {};
   for (const key of Object.keys(top))
-    if (!["providers", "limits", "chat"].includes(key)) problems.push(`unknown section [${key}]`);
+    if (!["providers", "limits", "chat", "wiki"].includes(key))
+      problems.push(`unknown section [${key}]`);
 
   const providers: Partial<Record<Provider, ProviderConfig>> = {};
   const providerTables = section(top, "providers", problems);
@@ -144,7 +161,34 @@ export function parseConfig(toml: unknown): {
   const fields = new Fields("chat", chatTable, problems);
   const chat: ChatConfig = { effort: fields.oneOf("effort", EFFORTS, DEFAULT_CHAT.effort) };
   fields.rejectUnknown();
-  return { config: { providers, limits, chat }, warnings, problems };
+  const wiki = parseWiki(section(top, "wiki", problems), problems);
+  return { config: { providers, limits, chat, wiki }, warnings, problems };
+}
+
+/** A model reference checked without throwing, so the rest of the file is still checked. */
+const isModelRef = (v: string) => {
+  const slash = v.indexOf("/");
+  return (
+    v === "" ||
+    (slash > 0 &&
+      PROVIDERS.includes(v.slice(0, slash) as Provider) &&
+      v.slice(slash + 1).trim() !== "")
+  );
+};
+
+function parseWiki(table: Record<string, unknown>, problems: string[]): WikiConfig {
+  const before = problems.length;
+  const f = new Fields("wiki", table, problems);
+  const d = DEFAULT_WIKI;
+  const wiki: WikiConfig = {
+    daily_cap_usd: f.positive("daily_cap_usd", d.daily_cap_usd),
+    monthly_cap_usd: f.positive("monthly_cap_usd", d.monthly_cap_usd),
+    model: f.text("model", d.model, isModelRef, `"" or "<provider>/<id>"`),
+  };
+  f.rejectUnknown();
+  if (problems.length === before && wiki.daily_cap_usd > wiki.monthly_cap_usd)
+    problems.push("[wiki] needs daily_cap_usd ≤ monthly_cap_usd");
+  return wiki;
 }
 
 function section(top: Record<string, unknown>, key: string, problems: string[]) {
@@ -290,6 +334,10 @@ class Fields {
     return this.read(key, fallback, values[0], `one of ${values.join(", ")}`, (v) =>
       values.includes(v as T),
     );
+  }
+
+  text(key: string, fallback: string, accept: (v: string) => boolean, rule: string): string {
+    return this.read(key, fallback, fallback, rule, (v) => typeof v === "string" && accept(v));
   }
 
   rejectUnknown(): void {

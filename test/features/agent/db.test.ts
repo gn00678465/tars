@@ -102,11 +102,11 @@ describe("openSqlite", () => {
 });
 
 describe("openDb", () => {
-  test("an empty database migrates to version 2 with every table", async () => {
+  test("an empty database migrates to version 3 with every table", async () => {
     const { db } = await agentDb();
-    expect(MIGRATIONS.length).toBe(2);
+    expect(MIGRATIONS.length).toBe(3);
     expect(db.query("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
-      value: "2",
+      value: "3",
     });
     const tables = (
       db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as {
@@ -193,6 +193,27 @@ describe("openDb", () => {
       raw.close();
     },
   );
+
+  test("version 2 to 3 changes only the version", async () => {
+    const paths = isolatedPaths();
+    mkdirSync(paths.agent, { recursive: true });
+    const v2 = new Database(paths.agentDb, { create: true });
+    for (const sql of MIGRATIONS.slice(0, 2)) v2.exec(sql);
+    v2.run("INSERT INTO meta (key, value) VALUES ('schema_version', '2')");
+    seedTurn(v2);
+    const dump = (db: Database) =>
+      ["sqlite_master", "conversations", "turns"].map((t) =>
+        db.query(`SELECT * FROM ${t} ORDER BY 1, 2`).all(),
+      );
+    const before = dump(v2);
+    v2.close();
+    const db = await openDb(paths);
+    expect(dump(db)).toEqual(before);
+    expect(db.query("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
+      value: "3",
+    });
+    db.close();
+  });
 
   test("reopening does not migrate again", async () => {
     const { paths, db } = await agentDb();

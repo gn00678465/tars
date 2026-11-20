@@ -7,6 +7,7 @@ import {
   CONFIG_TEMPLATE,
   DEFAULT_CHAT,
   DEFAULT_LIMITS,
+  DEFAULT_WIKI,
   loadConfig,
 } from "../../../src/features/agent/config.ts";
 import { tempHome } from "../../helpers.ts";
@@ -55,6 +56,7 @@ describe("loadConfig", () => {
     expect(warnings).toEqual([]);
     expect(config.limits).toEqual(DEFAULT_LIMITS);
     expect(config.chat).toEqual(DEFAULT_CHAT);
+    expect(config.wiki).toEqual(DEFAULT_WIKI);
     expect(config.providers.anthropic).toEqual({
       enabled: true,
       quota_usd: 100,
@@ -191,6 +193,33 @@ describe("loadConfig", () => {
     expect(await problems(`${PROVIDER}[chat]\neffort = "extreme"\n`)).toContain("effort");
     const { config } = await loadConfig(pathsWith(`${PROVIDER}[chat]\neffort = "xhigh"\n`));
     expect(config.chat.effort).toBe("xhigh");
+  });
+
+  test("[wiki] may be left out entirely", async () => {
+    const { config } = await loadConfig(pathsWith(PROVIDER));
+    expect(config.wiki).toEqual({ daily_cap_usd: 1, monthly_cap_usd: 10, model: "" });
+  });
+
+  test("[wiki] caps are numbers above 0, the daily one at most the monthly one", async () => {
+    expect(await problems(`${PROVIDER}[wiki]\ndaily_cap_usd = 0\n`)).toContain(
+      "[wiki] daily_cap_usd must be a number above 0",
+    );
+    expect(await problems(`${PROVIDER}[wiki]\ndaily_cap_usd = 11\n`)).toContain(
+      "[wiki] needs daily_cap_usd ≤ monthly_cap_usd",
+    );
+  });
+
+  test("[wiki] model is empty or <provider>/<id> with a known provider", async () => {
+    for (const bad of ['"model-a"', '"acme/x"', '"anthropic/"', '"/x"', "3"])
+      expect(await problems(`${PROVIDER}[wiki]\nmodel = ${bad}\n`)).toContain("[wiki] model");
+    const { config } = await loadConfig(pathsWith(`${PROVIDER}[wiki]\nmodel = "gemini/x"\n`));
+    expect(config.wiki.model).toBe("gemini/x");
+  });
+
+  test("[wiki] with an unknown key is an error", async () => {
+    expect(await problems(`${PROVIDER}[wiki]\nbatch = 3\n`)).toContain(
+      "[wiki] has unknown key batch",
+    );
   });
 
   test("every problem is reported at once", async () => {

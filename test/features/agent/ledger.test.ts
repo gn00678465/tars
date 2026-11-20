@@ -12,15 +12,18 @@ import {
   recordEnd,
   recordFailure,
   recordStart,
+  reconcileLedger,
   reserve,
+  settleReserved,
   spent,
   spentToday,
   status,
   type ReserveInput,
 } from "../../../src/features/agent/ledger.ts";
 import { getConversation } from "../../../src/features/agent/store.ts";
-import type { Usage } from "../../../src/features/agent/types.ts";
-import { agentDb, MODEL, NOW, PROVIDER, seedTurn } from "./db-fixture.ts";
+import { ZERO_USAGE, type Usage } from "../../../src/features/agent/types.ts";
+import { openWikiDb } from "../../../src/features/wiki/db.ts";
+import { agentDb, isolatedPaths, MODEL, NOW, PROVIDER, seedTurn } from "./db-fixture.ts";
 
 type Turn = { convId: string; turnId: string };
 
@@ -530,6 +533,42 @@ describe("recording a request", () => {
     ).s;
     expect(turnCost(db, turn.turnId)).toBeCloseTo(sum, 12);
     expect(sum).toBeCloseTo(tableCost, 12);
+  });
+});
+
+describe("the recording functions on wiki.db", () => {
+  test("reserve, start, end, failure and settleReserved keep a sync job's total", async () => {
+    const db = await openWikiDb(isolatedPaths());
+    db.run("INSERT INTO runs (id, state, model, started_at) VALUES ('r1', 'running', 'm', ?)", [
+      NOW.getTime(),
+    ]);
+    db.run(
+      "INSERT INTO turns (id, conv_id, kind, state, started_at) VALUES ('j1', 'r1', 'extract', 'running', ?)",
+      [NOW.getTime()],
+    );
+    const job = { convId: "r1", turnId: "j1" };
+    const ended = inFlight(db, job, 2);
+    expect(turnCost(db, "j1")).toBe(2);
+    recordStart(db, ended, { uncachedInputTokens: 1000, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    expect(turnCost(db, "j1")).toBeCloseTo(0.003, 12);
+    recordEnd(db, {
+      usageId: ended,
+      usage: { ...ZERO_USAGE, uncachedInputTokens: 1000, outputTokens: 100 },
+      turnKind: "compaction",
+      prefixKey: "",
+    });
+    expect(row(db, ended).state).toBe("final");
+    const failed = inFlight(db, job, 5);
+    recordFailure(db, { usageId: failed, status: 500, receivedStart: false, textBytes: 0 });
+    expect(row(db, failed).state).toBe("voided");
+    inFlight(db, job, 1);
+    expect(settleReserved(db)).toEqual(["j1"]);
+    expect(turnCost(db, "j1")).toBeCloseTo(0.0045 + 1, 12);
+    expect(reconcileLedger(db, NOW)).toEqual({ usage: 0, turns: 1 });
+    expect(db.query("SELECT state FROM turns WHERE id = 'j1'").get()).toEqual({
+      state: "interrupted",
+    });
+    db.close();
   });
 });
 

@@ -246,6 +246,7 @@ function itemLine(item: Item): string | undefined {
     case "compaction":
       return "（這之前的內容已壓縮成摘要）";
     case "usage":
+    case "wiki_index":
       return undefined;
   }
 }

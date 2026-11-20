@@ -27,6 +27,13 @@ export interface TarsPaths {
   readonly agentLock: string;
   readonly agentLockInfo: string;
   readonly agentLog: string;
+  /** The owner's knowledge base, opened in Obsidian; only `tars wiki sync` writes it. */
+  readonly wiki: string;
+  readonly wikiIndex: string;
+  /** Sync's progress, its own usage and both search indexes; outside wiki/ so file_read cannot reach it. */
+  readonly wikiDb: string;
+  readonly wikiLock: string;
+  readonly wikiLockInfo: string;
   /** Where scripts write what they make for the user. */
   readonly outRoot: string;
 }
@@ -71,6 +78,11 @@ export function resolvePaths(env: Env): TarsPaths {
     agentLock: join(agent, "lock.db"),
     agentLockInfo: join(agent, "lock.json"),
     agentLog: join(agent, "log.jsonl"),
+    wiki: join(data, "wiki"),
+    wikiIndex: join(data, "wiki", "index.md"),
+    wikiDb: join(agent, "wiki.db"),
+    wikiLock: join(agent, "wiki-lock.db"),
+    wikiLockInfo: join(agent, "wiki-lock.json"),
     outRoot: join(data, "workspace", "out"),
   };
 }

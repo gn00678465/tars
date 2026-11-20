@@ -123,6 +123,9 @@ UPDATE adjustments SET
   usage_pending = (SELECT json_group_array(id) FROM usage
     WHERE usage.provider = adjustments.provider AND usage.at > adjustments.at);
 `,
+  // An older tars would skip a wiki_index item and send a history its thinking signatures no
+  // longer match, so the version alone keeps it out.
+  `-- 3: items.kind gains 'wiki_index'. No table changes; the version keeps older binaries out.`,
 ];
 
 export interface LockInfo {
@@ -266,7 +269,9 @@ async function openWritable(file: string, migrations: readonly string[]): Promis
   }
   db.transaction(() => {
     const version = schemaVersion(db);
-    for (const sql of migrations.slice(version)) db.exec(sql);
+    // bun:sqlite refuses a script with no statement; a version bump alone is such a script.
+    for (const sql of migrations.slice(version))
+      if (sql.replace(/--.*$/gm, "").trim() !== "") db.exec(sql);
     db.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", [
       String(migrations.length),
     ]);
