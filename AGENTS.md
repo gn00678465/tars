@@ -6,6 +6,7 @@
 
 - 安裝：`bun install --frozen-lockfile`。新套件要擁有者核可，不自己 `bun add`。
 - 交出改動前：`bun run check`，全部通過才交給審查。
+- `bun run check` 另外需要 Node（`apps/web` 的 Vite+）。
 
 ## tars 的請求怎麼走
 
@@ -21,6 +22,8 @@ tars install ─ 複製 tars-skills/ 的每個 skill（外部的列在 upstream.
 ```
 
 `tars chat` 是自建迴圈，工具只有 `skill_load`、`file_read` 與白名單內的 `tars` 子指令。白名單在 `src/features/agent/tars-tool.ts`；CLI 加新的子指令或選項時不會自動放行。白名單含 `wiki` 的五個唯讀子指令（`search`、`list`、`show`、`source`、`status`）；`wiki sync` 會寫入，只在擁有者自己的終端執行，不進白名單。
+
+遠端入口：`src/features/serve/` 是本機端，`apps/web/` 是網頁與 Worker，`packages/protocol/` 是兩邊共用的訊息定義。改訊息時三處一起改。
 
 ## 新增 playbook、skill、腳本
 
