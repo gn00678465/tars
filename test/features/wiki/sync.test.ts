@@ -799,7 +799,7 @@ describe("requests", () => {
     expect(JSON.stringify(body)).not.toContain("cache_control");
   });
 
-  test("extraction and consolidation both say the owner is written 使用者 (P6: 車主)", async () => {
+  test("the P6 rules: both prompts write the owner as 使用者; assistant-only goes to open", async () => {
     const h = await harness();
     await onePage(h);
     for (const kind of ["extract", "consolidate"] as const) {
@@ -807,6 +807,9 @@ describe("requests", () => {
       expect(prompt).toContain("refers to the owner, write 使用者. Never write 車主,");
       expect(prompt).toContain("主人 or 擁有者.");
     }
+    expect(messageText(sent(h, "consolidate")[0] as never)).toContain(
+      "Being stated only by the assistant is not a reason to drop a candidate.",
+    );
   });
 });
 

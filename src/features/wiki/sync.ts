@@ -70,6 +70,11 @@ import { tokenize } from "./tokenize.ts";
 export const OWNER_RULE = `When a text you write refers to the owner, write 使用者. Never write 車主,
   主人 or 擁有者.`;
 
+/** r77 Q6; P6: a model dropped such candidates as "not usable in facts". */
+export const ASSISTANT_RULE = `What only the assistant stated goes in "open" with an "add", never in "facts".
+  Being stated only by the assistant is not a reason to drop a candidate. The
+  program marks the entry as the assistant's.`;
+
 export const EXTRACT_SYSTEM = `You build a personal knowledge base for one person, the owner. You are given
 turns from the owner's conversations with an assistant.
 
@@ -132,6 +137,7 @@ Rules:
   speaker=assistant may only be used in "open". Any operation on "facts"
   (add, update, retract, merge), and a rewrite of "summary", needs at least one
   speaker=owner candidate in "from".
+- ${ASSISTANT_RULE}
 - When two sources disagree and you cannot tell which is right, keep both, each
   with its date.
 - "add" creates an entry. "update" replaces an entry's text; it keeps every
