@@ -366,8 +366,17 @@ export class Dispatch {
     );
   }
 
-  private ack(conn: string, re: string, turn?: string): void {
-    this.d.hub.send(conn, message(this.d.hub, "ack", turn === undefined ? {} : { turn }, { re }));
+  /** With the turn and its conversation once it exists: enough for a page that missed its start. */
+  private ack(conn: string, re: string, turn?: { id: string; convId: string }): void {
+    this.d.hub.send(
+      conn,
+      message(
+        this.d.hub,
+        "ack",
+        turn === undefined ? {} : { turn: turn.id },
+        turn === undefined ? { re } : { re, conv: turn.convId },
+      ),
+    );
   }
 
   private async submit(conn: string, m: Of<"turn.submit">): Promise<void> {
@@ -391,7 +400,7 @@ export class Dispatch {
         .readItems(this.d.db, turn.convId)
         .find((i) => i.turnId === turn.id && i.kind === "user" && i.body.carriedFrom === undefined);
       return sent?.kind === "user" && sent.body.text === text
-        ? this.ack(conn, m.id, turn.id)
+        ? this.ack(conn, m.id, turn)
         : this.reply(conn, "nack", "bad_message", m.id);
     }
     if (this.current !== undefined) return this.reply(conn, "nack", "busy", m.id);

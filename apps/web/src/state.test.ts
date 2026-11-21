@@ -139,6 +139,35 @@ describe("state: a conversation", () => {
     expect(refused.error).toContain("budget_stopped");
   });
 
+  test("an ack that names the turn finishes the submit; a plain ack does not", () => {
+    const s = run([
+      ...open,
+      { type: "open_conv", conv: undefined },
+      { type: "submitted", requestId: "r1" },
+    ]);
+    const plain = run([{ type: "submit_result", requestId: "r1", ok: true }], s);
+    expect(composerBlocked(plain)).toBe("送出中");
+    // The turn's started message was missed: the resend's ack is all the page hears.
+    const known = run(
+      [{ type: "submit_result", requestId: "r1", ok: true, turn: TURN, conv: "conv-new" }],
+      plain,
+    );
+    expect(known.submitting).toBeUndefined();
+    expect(known.conv).toBe("conv-new");
+    expect(known.load).toBe("conv-new");
+    // In a conversation already open, it stays there and loads nothing.
+    const inConv = run(
+      [
+        { type: "submitted", requestId: "r2" },
+        { type: "submit_result", requestId: "r2", ok: true, turn: TURN, conv: "conv-other" },
+      ],
+      run(open),
+    );
+    expect(inConv.submitting).toBeUndefined();
+    expect(inConv.conv).toBe(CONV);
+    expect(inConv.load).toBeUndefined();
+  });
+
   test("another epoch: everything held is dropped", () => {
     const s = run([
       ...open,

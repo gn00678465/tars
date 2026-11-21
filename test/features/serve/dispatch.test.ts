@@ -371,6 +371,24 @@ describe("Dispatch: turns", () => {
     expect(s.h.fake.messages()).toHaveLength(1);
   });
 
+  test("the resend's ack names the conversation too, for a page that missed the turn's start", async () => {
+    const s = await setup();
+    await s.ready(CONN_A);
+    s.h.fake.reply(text("一"));
+    await s.msg(CONN_A, "turn.submit", { requestId: "r-1", text: "嗨" });
+    await until(() => ended(s, CONN_A));
+    await s.d.running;
+    const turn = store.findTurnByRequest(s.db, "r-1");
+    await s.ready(CONN_B);
+    const again = await s.msg(CONN_B, "turn.submit", { requestId: "r-1", text: "嗨" });
+    expect(reply(s, CONN_B, again)).toMatchObject({
+      kind: "ack",
+      conv: turn?.convId,
+      p: { turn: turn?.id },
+    });
+    allValid(s);
+  });
+
   test("continuing a conversation uses its own model; an unknown conversation is not_found", async () => {
     const s = await setup();
     await s.ready(CONN_A);

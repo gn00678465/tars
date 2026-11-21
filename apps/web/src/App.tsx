@@ -33,6 +33,12 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection, socket]);
 
+  // A new conversation followed from an ack: its start and first items were missed.
+  const { load } = state;
+  useEffect(() => {
+    if (load !== undefined) socket.send("conv.open", {}, load);
+  }, [load, socket]);
+
   // A turn that ended may have made or renamed a conversation.
   const ended = state.turn !== undefined && state.turn.state !== "started";
   useEffect(() => {

@@ -130,7 +130,13 @@ export class Socket {
     s.timer = this.d.setTimeout(() => this.transmit(), RESEND_MS);
   }
 
-  private answered(re: string | undefined, ok: boolean, reason?: NackReason, turn?: string): void {
+  private answered(
+    re: string | undefined,
+    ok: boolean,
+    reason?: NackReason,
+    turn?: string,
+    conv?: string,
+  ): void {
     const s = this.submit_;
     if (s === undefined || re === undefined || !s.ids.has(re)) return;
     if (ok && turn === undefined) {
@@ -138,10 +144,14 @@ export class Socket {
       s.acked = true;
       return;
     }
-    this.settle(ok, reason);
+    this.settle(ok, reason, turn === undefined ? undefined : { turn, conv });
   }
 
-  private settle(ok: boolean, reason?: NackReason): void {
+  private settle(
+    ok: boolean,
+    reason?: NackReason,
+    known?: { turn: string; conv: string | undefined },
+  ): void {
     const s = this.submit_;
     if (s === undefined) return;
     this.d.clearTimeout(s.timer);
@@ -151,6 +161,8 @@ export class Socket {
       requestId: s.requestId,
       ok,
       ...(reason === undefined ? {} : { reason }),
+      ...(known === undefined ? {} : { turn: known.turn }),
+      ...(known?.conv === undefined ? {} : { conv: known.conv }),
     });
   }
 
@@ -185,7 +197,7 @@ export class Socket {
         this.transmit();
         return;
       }
-      if (m.kind === "ack") this.answered(m.re, true, undefined, m.p.turn);
+      if (m.kind === "ack") this.answered(m.re, true, undefined, m.p.turn, m.conv);
       if (m.kind === "turn" && m.p.requestId === this.submit_?.requestId) this.settle(true);
       if (m.kind === "nack") this.answered(m.re, false, m.p.reason);
       this.listener({ type: "message", m, at: this.d.now() });

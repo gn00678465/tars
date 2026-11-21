@@ -45,6 +45,8 @@ export interface State {
   readonly turn?: { readonly state: TurnState; readonly turn?: string; readonly reason?: string };
   /** Sent, not yet started or refused. */
   readonly submitting?: string;
+  /** A conversation followed without its items: the page asks for its snapshot. */
+  readonly load?: string;
   readonly cards: readonly Card[];
   readonly notices: readonly string[];
   readonly error?: string;
@@ -60,6 +62,9 @@ export type Event =
       readonly requestId: string;
       readonly ok: boolean;
       readonly reason?: NackReason;
+      /** The turn the local end has for it: the send is done, whatever else was missed. */
+      readonly turn?: string;
+      readonly conv?: string;
     }
   | { readonly type: "deciding"; readonly approvalId: string; readonly id: string };
 
@@ -140,7 +145,7 @@ function message(s: State, m: ServerMessage, at: number): State {
       const older =
         first !== undefined && m.p.items.length > 0 && m.p.items.every((i) => i.seq < first);
       if (older) return { ...s, items: [...m.p.items, ...s.items], more: m.p.more };
-      const base = withoutKeys({ ...s, items: m.p.items, more: m.p.more }, "running");
+      const base = withoutKeys({ ...s, items: m.p.items, more: m.p.more }, "running", "load");
       return m.p.running === undefined
         ? base
         : { ...base, running: { turn: m.p.running.turn, text: m.p.running.text } };
@@ -245,9 +250,18 @@ export function reduce(s: State, e: Event): State {
     }
     case "submitted":
       return { ...withoutKeys(s, "error"), submitting: e.requestId };
-    case "submit_result":
-      if (e.ok || s.submitting !== e.requestId) return s;
-      return { ...withoutKeys(s, "submitting"), error: nackText(e.reason) };
+    case "submit_result": {
+      if (s.submitting !== e.requestId) return s;
+      if (!e.ok) return { ...withoutKeys(s, "submitting"), error: nackText(e.reason) };
+      // A plain ack: the turn may not exist yet, and the turn message finishes it.
+      if (e.turn === undefined) return s;
+      // Its turn message was missed: a new conversation is followed and its items loaded.
+      const follow = s.conv === undefined && e.conv !== undefined;
+      return {
+        ...withoutKeys(s, "submitting"),
+        ...(follow ? { conv: e.conv as string, load: e.conv as string } : {}),
+      };
+    }
     case "deciding":
       return {
         ...s,
