@@ -94,7 +94,8 @@ export class Relay extends DurableObject<Env> {
   private async closed(ws: WebSocket): Promise<void> {
     const a = attachmentOf(ws);
     if (a === undefined) return;
-    // getWebSockets still lists a socket whose close handler is running.
+    // route matches a close against the state that still holds the socket, so it is put back in
+    // whether or not getWebSockets lists it during its own close handler.
     const state = await this.state(ws);
     await this.apply(
       state,
@@ -104,13 +105,10 @@ export class Relay extends DurableObject<Env> {
     );
   }
 
-  private sockets(except?: WebSocket) {
-    return this.ctx.getWebSockets().filter((ws) => ws !== except);
-  }
-
-  private async state(except?: WebSocket) {
+  private async state(closing?: WebSocket) {
     const stored = await this.ctx.storage.get<number>([...STORE_KEYS]);
-    const sockets = this.sockets(except).flatMap((ws) => {
+    const others = this.ctx.getWebSockets().filter((ws) => ws !== closing);
+    const sockets = (closing === undefined ? others : [...others, closing]).flatMap((ws) => {
       const attachment = attachmentOf(ws);
       return attachment === undefined
         ? []
