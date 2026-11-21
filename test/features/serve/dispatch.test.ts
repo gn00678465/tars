@@ -55,6 +55,8 @@ interface Setup {
   frames: FrameToRelay[];
   /** Finishes the checks waiting on jwt "held". */
   release(): void;
+  /** How many checks are waiting on jwt "held". */
+  checking(): number;
   log: RecordedLog;
   db: Database;
   reconciled: string[];
@@ -115,6 +117,7 @@ async function setup(): Promise<Setup> {
       for (const done of held.splice(0)) done();
     },
     log,
+    checking: () => held.length,
     db: h.db,
     reconciled,
     async msg(conn, kind, p, extra = {}) {
@@ -240,6 +243,46 @@ describe("Dispatch: connections", () => {
     // Another connection never waited on it.
     await s.ready(CONN_B);
     expect(s.hub.to(CONN_B).map((m) => m.kind)).toEqual(["hello", "status"]);
+  });
+
+  describe("dropped 4005 while its open is already being checked", () => {
+    async function floodWhileChecking(s: Setup) {
+      const waiting = [s.open(CONN_A, "held")];
+      await until(() => s.checking() === 1);
+      for (let i = 0; i < 30; i++) waiting.push(s.msg(CONN_A, "hello", {}).then(() => undefined));
+      waiting.push(
+        s
+          .msg(CONN_A, "turn.submit", { requestId: "r-flood", text: "不該執行" })
+          .then(() => undefined),
+      );
+      waiting.push(s.msg(CONN_A, "conv.list", {}).then(() => undefined));
+      expect(s.frames).toEqual([{ t: "drop", conn: CONN_A, code: DROP.flood }]);
+      return waiting;
+    }
+    const nothingRan = (s: Setup) => {
+      expect(s.hub.registry.get(CONN_A)).toBeUndefined();
+      expect(s.hub.sent).toEqual([]);
+      expect(s.d.current).toBeUndefined();
+      expect(store.findTurnByRequest(s.db, "r-flood")).toBeUndefined();
+      expect(s.frames).toHaveLength(1);
+    };
+
+    test("the check finishing afterwards does not register it again", async () => {
+      const s = await setup();
+      const waiting = await floodWhileChecking(s);
+      s.release();
+      await Promise.all(waiting);
+      nothingRan(s);
+    });
+
+    test("the relay's close arriving first does not bring its queue back", async () => {
+      const s = await setup();
+      const waiting = await floodWhileChecking(s);
+      await s.d.onFrame({ t: "close", conn: CONN_A });
+      s.release();
+      await Promise.all(waiting);
+      nothingRan(s);
+    });
   });
 
   test("a message right behind its open waits for the check, not refused", async () => {

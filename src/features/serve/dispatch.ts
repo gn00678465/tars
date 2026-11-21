@@ -67,6 +67,16 @@ interface Current {
 type Of<K extends ClientMessage["kind"]> = Extract<ClientMessage, { kind: K }>;
 
 /**
+ * One connection's frames waiting their turn. A cancelled queue never runs again: its frames
+ * hold this object, so a later close or a new queue under the same id cannot revive them.
+ */
+interface Queue {
+  tail: Promise<void>;
+  size: number;
+  cancelled: boolean;
+}
+
+/**
  * The browsers' requests, from the link's frames. One turn at a time on this machine (A6):
  * `current` is it, and it is always cleared, whatever the turn throws.
  */
@@ -76,12 +86,7 @@ export class Dispatch {
   running: Promise<void> = Promise.resolve();
   /** requestId → sha256 of its text, only between ack and the turn existing or being refused. */
   readonly pending = new Map<string, string>();
-  private readonly order = new Map<string, Promise<void>>();
-  private readonly queued = new Map<string, number>();
-  /** Dropped for too many frames: the rest of its frames do nothing until the relay's close. */
-  private readonly flooded = new Set<string>();
-  /** Which link connection the frames came over: a frame from an earlier one does nothing. */
-  private generation = 0;
+  private readonly queues = new Map<string, Queue>();
   private readonly epoch: string;
 
   constructor(private readonly d: DispatchDeps) {
@@ -99,32 +104,34 @@ export class Dispatch {
   onFrame(frame: FrameToLocal): Promise<void> {
     if (frame.t === "probe") return Promise.resolve();
     const { conn } = frame;
-    if (this.flooded.has(conn)) {
-      if (frame.t === "close") this.flooded.delete(conn);
+    let q = this.queues.get(conn);
+    if (q?.cancelled === true) {
+      // Dropped already: the relay's close only lets the id start a new queue.
+      if (frame.t === "close") this.queues.delete(conn);
       return Promise.resolve();
     }
-    const queued = (this.queued.get(conn) ?? 0) + 1;
-    if (queued > QUEUE_FRAMES) {
-      this.flood(conn);
+    if (q === undefined) {
+      q = { tail: Promise.resolve(), size: 0, cancelled: false };
+      this.queues.set(conn, q);
+    }
+    if (q.size >= QUEUE_FRAMES) {
+      this.flood(conn, q);
       return Promise.resolve();
     }
-    this.queued.set(conn, queued);
-    const gen = this.generation;
-    const next = (this.order.get(conn) ?? Promise.resolve()).then(() =>
-      gen === this.generation && !this.flooded.has(conn) ? this.handle(frame, gen) : undefined,
-    );
-    this.order.set(conn, next);
+    const queue = q;
+    queue.size++;
+    const next = queue.tail.then(() => (queue.cancelled ? undefined : this.handle(frame, queue)));
+    queue.tail = next;
     void next.then(() => {
-      const left = (this.queued.get(conn) ?? 1) - 1;
-      if (left > 0) this.queued.set(conn, left);
-      else this.queued.delete(conn);
-      if (this.order.get(conn) === next) this.order.delete(conn);
+      queue.size--;
+      if (queue.size === 0 && !queue.cancelled && this.queues.get(conn) === queue)
+        this.queues.delete(conn);
     });
     return next;
   }
 
-  private flood(conn: string): void {
-    this.flooded.add(conn);
+  private flood(conn: string, q: Queue): void {
+    q.cancelled = true;
     this.registry.remove(conn);
     this.d.log.log("conn", {
       state: "closed",
@@ -141,17 +148,15 @@ export class Dispatch {
    * including an open still being checked and the frames queued behind it.
    */
   reset(): void {
-    this.generation++;
-    this.order.clear();
-    this.queued.clear();
-    this.flooded.clear();
+    for (const q of this.queues.values()) q.cancelled = true;
+    this.queues.clear();
     this.registry.clear();
   }
 
   /** A malformed frame or a failing handler is logged, never the end of the process. */
-  private async handle(frame: Exclude<FrameToLocal, { t: "probe" }>, gen: number): Promise<void> {
+  private async handle(frame: Exclude<FrameToLocal, { t: "probe" }>, q: Queue): Promise<void> {
     try {
-      if (frame.t === "open") await this.open(frame, gen);
+      if (frame.t === "open") await this.open(frame, q);
       else if (frame.t === "close") {
         this.registry.remove(frame.conn);
         this.d.log.log("conn", { state: "closed", connId: store.shortId(frame.conn) });
@@ -168,9 +173,10 @@ export class Dispatch {
     }
   }
 
-  private async open(f: Extract<FrameToLocal, { t: "open" }>, gen: number): Promise<void> {
+  private async open(f: Extract<FrameToLocal, { t: "open" }>, q: Queue): Promise<void> {
     const verdict = await this.d.verifier.verify(f.jwt);
-    if (gen !== this.generation) return;
+    // Dropped or reset while the check ran: registering it now would bring it back.
+    if (q.cancelled) return;
     const connId = store.shortId(f.conn);
     this.d.changed();
     if (!verdict.ok) {
