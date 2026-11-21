@@ -15,18 +15,40 @@ const RESOLVED: Record<string, string> = {
 };
 
 // Everything that prints as nothing or as something else: control and format characters
-// (zero-width, bidi overrides), line and paragraph separators, and every space but U+0020.
-const UNSEEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/gu;
+// (zero-width, bidi overrides), line and paragraph separators, every space but U+0020, the
+// general-purpose combining marks (e + U+0301 looks like é) and variation selectors. Not all of
+// \p{M}: scripts such as Thai and the Indic ones need theirs to be read at all.
+const UNSEEN_CLASS = /^[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]$/u;
+const UNSEEN_RANGES: readonly (readonly [number, number])[] = [
+  [0x00a0, 0x00a0],
+  [0x1680, 0x1680],
+  [0x2000, 0x200a],
+  [0x202f, 0x202f],
+  [0x205f, 0x205f],
+  [0x3000, 0x3000],
+  [0x0300, 0x036f],
+  [0x1ab0, 0x1aff],
+  [0x1dc0, 0x1dff],
+  [0x20d0, 0x20ff],
+  [0xfe20, 0xfe2f],
+  [0xfe00, 0xfe0f],
+  [0xe0100, 0xe01ef],
+];
+
+function unseen(c: string, n: number): boolean {
+  return UNSEEN_CLASS.test(c) || UNSEEN_RANGES.some(([lo, hi]) => n >= lo && n <= hi);
+}
 
 /**
  * One argument as the script receives it: quoted, so its ends, an empty one and inner spaces
  * show, and anything unseen written as its \u code (A13: the card is what runs).
  */
 export function argText(arg: string): string {
-  return JSON.stringify(arg).replace(UNSEEN, (c) => {
+  return Array.from(JSON.stringify(arg), (c) => {
     const n = c.codePointAt(0) as number;
+    if (!unseen(c, n)) return c;
     return n > 0xffff ? `\\u{${n.toString(16)}}` : `\\u${n.toString(16).padStart(4, "0")}`;
-  });
+  }).join("");
 }
 
 export function ApprovalCard(props: {

@@ -164,3 +164,33 @@ test("empty, blank and invisible characters are spelled out", async () => {
     '"\\u{e0041}"',
   ]);
 });
+
+test("combining marks and variation selectors are spelled out, so look-alikes differ", async () => {
+  const { root } = await render(
+    <ApprovalCard
+      card={card({
+        approval: {
+          ...approval,
+          argv: [
+            "\u00e9",
+            "e\u0301",
+            "\u2764",
+            "\u2764\ufe0f",
+            "a\u1ab0\u1dc0\u20d0\ufe20",
+            "x\u{e0100}",
+          ],
+        },
+      })}
+      localNow={undefined}
+      onDecide={() => undefined}
+    />,
+  );
+  expect(args(root)).toEqual([
+    '"\u00e9"',
+    '"e\\u0301"',
+    '"\u2764"',
+    '"\u2764\\ufe0f"',
+    '"a\\u1ab0\\u1dc0\\u20d0\\ufe20"',
+    '"x\\u{e0100}"',
+  ]);
+});
