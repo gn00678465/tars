@@ -1,9 +1,36 @@
-import type { Effort, Item, NoticeCode, ApprovalRecord, TurnState, Usage } from "./types.ts";
+import type {
+  ApprovalRecord,
+  ApprovalState,
+  Effort,
+  Item,
+  NoticeCode,
+  TurnState,
+  Usage,
+  UserItem,
+} from "./types.ts";
 
 export type FrontendEvent =
   | { readonly type: "delta"; readonly text: string }
   | { readonly type: "thinking" }
   | { readonly type: "item"; readonly item: Item }
+  /**
+   * The turn's row and its user items are written. `items` is what that transaction wrote: the
+   * carried text when continuing, then the message; never the wiki index. The loop sends no item
+   * event for the message, since a terminal owner typed it, but another device has not seen it.
+   */
+  | {
+      readonly type: "turn_start";
+      readonly convId: string;
+      readonly turnId: string;
+      readonly items: readonly UserItem[];
+    }
+  /** After the transaction that settled the approval and its tool call. */
+  | {
+      readonly type: "approval_resolved";
+      readonly approvalId: string;
+      readonly state: Exclude<ApprovalState, "pending">;
+      readonly via: Frontend["via"] | "timeout" | "abort";
+    }
   | {
       readonly type: "notice";
       readonly code: NoticeCode;
@@ -23,6 +50,8 @@ export type FrontendEvent =
 
 /** What the loop talks to: the terminal in S1, the remote page in S3. */
 export interface Frontend {
+  /** Where an answer from askApproval came from; recorded as the approval's decided_via. */
+  readonly via: "tty" | "remote";
   emit(event: FrontendEvent): void;
   /** Shows the approval card and waits for the answer; "cancelled" when the signal fires. */
   askApproval(

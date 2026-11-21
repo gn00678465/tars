@@ -88,6 +88,7 @@ export function approvalCard(a: ApprovalRecord): string {
  * `tars chat --message … > reply.txt` keeps only the reply.
  */
 export class TtyFrontend implements Frontend {
+  readonly via = "tty";
   private thinkingShown = false;
   /** stdout has text not yet ended by a newline. */
   private openLine = false;
@@ -115,6 +116,8 @@ export class TtyFrontend implements Frontend {
       return;
     }
     if (e.type === "item") return this.item(e.item);
+    // The owner typed the message, and answered the approval here.
+    if (e.type === "turn_start" || e.type === "approval_resolved") return;
     if (e.type === "notice") return this.err(noticeText(e.code, e.data));
     this.endLine(true);
     const u = e.usage;

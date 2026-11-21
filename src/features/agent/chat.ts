@@ -13,6 +13,7 @@ import {
   findModel,
   loadCatalog,
   resolve,
+  type Catalog,
   type ResolvedModel,
 } from "./catalog.ts";
 import { parseModelRef, type AgentCommandContext, type ModelRef } from "./cli.ts";
@@ -294,6 +295,26 @@ async function startingPoint(
  * The provider enabled, its key, then the model (its default when none is named): what a new
  * conversation and /model both check.
  */
+export type DefaultStart =
+  | {
+      readonly ok: true;
+      readonly provider: Provider;
+      readonly model: string;
+      readonly effort: Effort;
+    }
+  | { readonly ok: false; readonly reason: "provider_disabled" | "unknown_model" };
+
+/** A new conversation with no model named: [chat] provider's default model, at [chat] effort. */
+export function defaultStart(config: TarsConfig, catalog: Catalog): DefaultStart {
+  const provider = config.chat.provider;
+  if (config.providers[provider]?.enabled !== true)
+    return { ok: false, reason: "provider_disabled" };
+  const model = defaultModel(catalog, provider)?.id;
+  return model === undefined
+    ? { ok: false, reason: "unknown_model" }
+    : { ok: true, provider, model, effort: config.chat.effort };
+}
+
 async function usableModel(
   provider: Provider,
   wanted: string | undefined,
@@ -311,7 +332,9 @@ async function usableModel(
   if (key === null || key === "")
     throw new TarsError(`沒有 ${provider} 的 API 金鑰。設定：tars llm key set ${provider}`);
   const catalog = await loadCatalog(paths);
-  const model = wanted ?? defaultModel(catalog, provider)?.id;
+  // Without a conversation or --model, provider is [chat] provider: the rule tars serve uses too.
+  const fallback = wanted === undefined ? defaultStart(config, catalog) : undefined;
+  const model = wanted ?? (fallback?.ok === true ? fallback.model : undefined);
   if (model === undefined) {
     const active = activeModels(catalog, provider).map((m) => `  ${provider}/${m.id}`);
     throw new TarsError(

@@ -1298,6 +1298,23 @@ describe("continuing with another model", () => {
     expect(readItems(h.db, old)).toEqual(before);
   });
 
+  test("turn_start carries the carried text and the message, not the index", async () => {
+    const h = await harness();
+    writeWikiIndex(h.paths, ["王小明"]);
+    const old = await earlier(h, [["第一個問題", "第一個回答"]]);
+    h.frontend.events.length = 0;
+    h.fake.reply(text("好"));
+    const out = ended(await carryOn(h, old, "繼續剛才的整理"));
+    const start = h.frontend.events.find((e) => e.type === "turn_start");
+    const [carried, , message] = readItems(h.db, out.convId);
+    expect(start as unknown).toEqual({
+      type: "turn_start",
+      convId: out.convId,
+      turnId: message?.turnId as string,
+      items: [carried, message],
+    });
+  });
+
   test.each([
     ["with", true],
     ["without", false],
@@ -1404,5 +1421,105 @@ describe("continuing with another model", () => {
     expect(body).toContain("│ third answer");
     expect(body).not.toContain("second question");
     expect(body).toContain("（這裡有 2 個回合沒有帶入）");
+  });
+});
+
+describe("the events a remote frontend needs", () => {
+  test("turn_start comes after the turn exists and before its first item", async () => {
+    const h = await harness();
+    writeWikiIndex(h.paths, ["王小明"]);
+    let seen: unknown;
+    const emit = h.frontend.emit;
+    h.frontend.emit = (e) => {
+      if (e.type === "turn_start")
+        seen = rows(h.db, "SELECT state FROM turns WHERE id = ?", e.turnId);
+      emit(e);
+    };
+    h.fake.reply(text("ok"));
+    const out = ended(await runTurn(h, "hi"));
+    const types = h.frontend.events.map((e) => e.type);
+    expect(types[0]).toBe("turn_start");
+    expect(types.indexOf("item")).toBe(1);
+    expect(seen).toEqual([{ state: "running" }]);
+    const start = h.frontend.events[0];
+    const items = readItems(h.db, out.convId);
+    expect(start as unknown).toEqual({
+      type: "turn_start",
+      convId: out.convId,
+      turnId: items[1]?.turnId as string,
+      items: [items[1]],
+    });
+    expect(items[0]?.kind).toBe("wiki_index");
+  });
+
+  test("a turn with a requestId stores it", async () => {
+    const h = await harness();
+    h.fake.reply(text("ok"));
+    const requestId = newId();
+    const out = ended(
+      await h.engine.runTurn(
+        { provider: "anthropic", model: MODEL_ID, effort: "medium", text: "hi", requestId },
+        h.frontend,
+        new AbortController().signal,
+      ),
+    );
+    expect(rows(h.db, "SELECT conv_id AS convId, request_id AS requestId FROM turns")).toEqual([
+      { convId: out.convId, requestId },
+    ]);
+  });
+
+  const resolved = (h: EngineHarness) =>
+    h.frontend.events.filter((e) => e.type === "approval_resolved");
+
+  test.each([
+    ["approved", "tty", "approved", "tty"],
+    ["denied", "tty", "denied", "tty"],
+    ["approved", "remote", "approved", "remote"],
+    ["denied", "remote", "denied", "remote"],
+  ] as const)(
+    "answered %s from %s: approval_resolved is %s via %s",
+    async (answer, via, state, expected) => {
+      const h = await harness({ selfCommand: [RAN] });
+      addScript(h, "push", "external-write");
+      Object.assign(h.frontend, { via });
+      h.frontend.answer = async () => answer;
+      h.fake.reply(tarsCall("tu1", runArgv("push")), text("好"));
+      ended(await runTurn(h, "推播"));
+      const [approval] = h.frontend.approvals;
+      expect(resolved(h)).toEqual([
+        { type: "approval_resolved", approvalId: approval?.id as string, state, via: expected },
+      ]);
+      expect(rows(h.db, "SELECT state, decided_via FROM approvals")).toEqual([
+        { state, decided_via: via },
+      ]);
+    },
+  );
+
+  test("an answer after expiry is resolved as expired, via timeout", async () => {
+    const h = await harness({ selfCommand: [RAN] });
+    addScript(h, "push", "external-write");
+    h.frontend.answer = async () => {
+      h.clock.advance(601_000);
+      return "approved";
+    };
+    h.fake.reply(tarsCall("tu1", runArgv("push")), text("過期了"));
+    ended(await runTurn(h, "推播"));
+    expect(resolved(h)).toMatchObject([{ state: "expired", via: "timeout" }]);
+  });
+
+  test("aborting while the approval waits is resolved as cancelled, via abort", async () => {
+    const h = await harness({ selfCommand: [RAN] });
+    addScript(h, "push", "external-write");
+    const controller = new AbortController();
+    h.frontend.answer = (_a, signal) =>
+      new Promise((done) => {
+        signal.addEventListener("abort", () => done("cancelled"), { once: true });
+        controller.abort();
+      });
+    h.fake.reply(tarsCall("tu1", runArgv("push")));
+    ended(await runTurn(h, "推播", { signal: controller.signal }));
+    expect(resolved(h)).toMatchObject([{ state: "cancelled", via: "abort" }]);
+    // The event comes after the transaction: the call is already settled.
+    expect(rows(h.db, "SELECT state FROM tool_calls")).toEqual([{ state: "cancelled" }]);
   });
 });

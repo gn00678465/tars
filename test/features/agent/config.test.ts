@@ -7,6 +7,7 @@ import {
   CONFIG_TEMPLATE,
   DEFAULT_CHAT,
   DEFAULT_LIMITS,
+  DEFAULT_NOTIFY,
   DEFAULT_WIKI,
   loadConfig,
   WIKI_NO_OPENROUTER,
@@ -268,6 +269,94 @@ describe("loadConfig", () => {
     expect(await problems(`${PROVIDER}[wiki]\nbatch = 3\n`)).toContain(
       "[wiki] has unknown key batch",
     );
+  });
+
+  test("the template, read as is, has no [link] and no [notify]", async () => {
+    const { config } = await loadConfig(pathsWith(CONFIG_TEMPLATE));
+    expect("link" in config).toBe(false);
+    expect("notify" in config).toBe(false);
+  });
+
+  test("[link] and [notify] may be left out entirely", async () => {
+    const { config } = await loadConfig(pathsWith(PROVIDER));
+    expect(config.link).toBeUndefined();
+    expect(config.notify).toBeUndefined();
+  });
+
+  test("[link]: four strings, each may be missing; url must be wss://", async () => {
+    const full = `${PROVIDER}[link]
+url = "wss://link.example.test/link"
+access_team_domain = "team.example.test"
+access_aud = "aud-value"
+owner_email = "owner@example.test"
+`;
+    expect((await loadConfig(pathsWith(full))).config.link).toEqual({
+      url: "wss://link.example.test/link",
+      access_team_domain: "team.example.test",
+      access_aud: "aud-value",
+      owner_email: "owner@example.test",
+    });
+    const partial = await loadConfig(
+      pathsWith(`${PROVIDER}[link]
+access_aud = "a"
+`),
+    );
+    expect(partial.config.link).toEqual({ access_aud: "a" });
+    for (const url of ['"ws://link.example.test/link"', '"https://link.example.test"', "3"])
+      expect(
+        await problems(`${PROVIDER}[link]
+url = ${url}
+`),
+      ).toContain("[link] url must be a wss:// URL");
+    expect(
+      await problems(`${PROVIDER}[link]
+owner_email = 1
+`),
+    ).toContain("[link] owner_email must be a string");
+    expect(
+      await problems(`${PROVIDER}[link]
+token = "x"
+`),
+    ).toContain("[link] has unknown key token");
+  });
+
+  test("[notify]: defaults for what is left out; values as written", async () => {
+    expect(
+      (
+        await loadConfig(
+          pathsWith(`${PROVIDER}[notify]
+`),
+        )
+      ).config.notify,
+    ).toEqual(DEFAULT_NOTIFY);
+    const { config } = await loadConfig(
+      pathsWith(
+        `${PROVIDER}[notify]
+script = "ntfy-push"
+args = ["{body}", "-t", "{title}"]
+on_connect = false
+`,
+      ),
+    );
+    expect(config.notify).toEqual({
+      script: "ntfy-push",
+      args: ["{body}", "-t", "{title}"],
+      on_connect: false,
+    });
+  });
+
+  test("[notify] args: a placeholder other than {title} and {body}, or inside an argument, is refused", async () => {
+    for (const args of ['["{user}"]', '["--title={title}"]', '["{title"]', "[1]", '"{title}"'])
+      expect(
+        await problems(`${PROVIDER}[notify]
+args = ${args}
+`),
+      ).toContain("[notify] args");
+    expect(
+      await problems(`${PROVIDER}[notify]
+script = "Not A Slug"
+`),
+    ).toContain("[notify] script");
   });
 
   test("every problem is reported at once", async () => {

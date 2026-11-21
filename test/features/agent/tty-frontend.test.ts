@@ -13,6 +13,7 @@ import {
   ZERO_USAGE,
   type ApprovalRecord,
   type Item,
+  type UserItem,
 } from "../../../src/features/agent/types.ts";
 import { captureIo, scriptedTerminal } from "../../helpers.ts";
 
@@ -139,6 +140,20 @@ describe("streams", () => {
 });
 
 describe("items and notices", () => {
+  test("turn_start and approval_resolved print nothing: the owner typed and answered here", () => {
+    const { io, fe } = frontend();
+    expect(fe.via).toBe("tty");
+    fe.emit({
+      type: "turn_start",
+      convId: "c",
+      turnId: "t",
+      items: [item({ step: 0, kind: "user", body: { text: "hi" } }) as UserItem],
+    });
+    fe.emit({ type: "approval_resolved", approvalId: APPROVAL.id, state: "approved", via: "tty" });
+    expect(io.stdout).toEqual([]);
+    expect(io.stderr).toEqual([]);
+  });
+
   test("thinking is shown once per request; a usage item starts the next request", () => {
     const { io, fe } = frontend();
     fe.emit({ type: "thinking" });

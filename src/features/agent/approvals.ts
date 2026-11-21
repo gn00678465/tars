@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { sha256 } from "../../core/hash.ts";
+import type { Frontend } from "./frontend.ts";
 import { newId } from "./store.ts";
 import type { ScriptFields } from "./tars-tool.ts";
 import type { ApprovalFields, ApprovalRecord, ApprovalState } from "./types.ts";
@@ -65,12 +66,46 @@ export function create(
   };
 }
 
+interface ApprovalRow {
+  id: string;
+  tool_call_id: string;
+  conv_id: string;
+  hash: string;
+  fields: string;
+  state: ApprovalState;
+  created_at: number;
+  expires_at: number;
+}
+
+/** Every approval still waiting, oldest first: a browser that connects late gets their cards. */
+export const listPending = (db: Database): ApprovalRecord[] =>
+  (
+    db
+      .query("SELECT * FROM approvals WHERE state = 'pending' ORDER BY created_at, id")
+      .all() as ApprovalRow[]
+  ).map((r) => ({
+    id: r.id,
+    toolCallId: r.tool_call_id,
+    convId: r.conv_id,
+    hash: r.hash,
+    fields: JSON.parse(r.fields) as ApprovalFields,
+    state: r.state,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+  }));
+
 export type DecideResult = "ok" | "already_decided" | "expired" | "hash_mismatch";
 
 /** One compare-and-set: only a pending, unexpired approval with the same hash changes. */
 export function decide(
   db: Database,
-  d: { id: string; decision: "approved" | "denied"; hash: string; via: "tty"; now: number },
+  d: {
+    id: string;
+    decision: "approved" | "denied";
+    hash: string;
+    via: Frontend["via"];
+    now: number;
+  },
 ): DecideResult {
   const changed = db.run(
     `UPDATE approvals SET state = ?, decided_at = ?, decided_via = ?

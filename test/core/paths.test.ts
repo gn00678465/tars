@@ -63,6 +63,7 @@ test("the agent's files live under <data>/agent and outputs under <data>/workspa
   expect(p.agentLock).toBe("/d/agent/lock.db");
   expect(p.agentLockInfo).toBe("/d/agent/lock.json");
   expect(p.agentLog).toBe("/d/agent/log.jsonl");
+  expect(p.serveStatus).toBe("/d/agent/serve.json");
   expect(p.wiki).toBe("/d/wiki");
   expect(p.wikiIndex).toBe("/d/wiki/index.md");
   expect(p.wikiDb).toBe("/d/agent/wiki.db");

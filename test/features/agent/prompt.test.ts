@@ -89,6 +89,13 @@ describe("loadSkillIndex", () => {
 });
 
 describe("PREAMBLE", () => {
+  test("its first sentence names no single entrance: the terminal and the web page share it", () => {
+    const first = PREAMBLE.split("\n")[0] as string;
+    expect(first).not.toContain("你在 tars chat 裡");
+    expect(first).toContain("終端的 tars chat");
+    expect(first).toContain("遠端網頁");
+  });
+
   test("names each local-only skill and points to tars claude", () => {
     for (const name of Object.keys(LOCAL_ONLY_SKILLS)) expect(PREAMBLE).toContain(`- ${name}（`);
     expect(Object.keys(LOCAL_ONLY_SKILLS).toSorted()).toEqual([

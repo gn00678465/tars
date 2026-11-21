@@ -3,7 +3,7 @@ import type { TarsPaths } from "../../core/paths.ts";
 import type { Provider } from "../../core/secrets.ts";
 import { utcDay } from "../agent/catalog.ts";
 import type { ProviderConfig } from "../agent/config.ts";
-import { openSqlite, type LockSpec } from "../agent/db.ts";
+import { heldSince, openSqlite, type LockSpec } from "../agent/db.ts";
 import { latestAdjustment } from "../agent/ledger.ts";
 
 /**
@@ -166,7 +166,8 @@ export const NEWER_WIKI_DB = "這個 wiki.db 由較新的 tars 建立，請更�
 export const wikiLockSpec = (paths: TarsPaths): LockSpec => ({
   file: paths.wikiLock,
   infoFile: paths.wikiLockInfo,
-  busy: "另一個 tars wiki sync 正在執行",
+  busy: (holder) =>
+    `另一個 tars wiki sync 正在執行${holder === undefined ? "" : heldSince(holder)}`,
   command: "wiki sync",
 });
 

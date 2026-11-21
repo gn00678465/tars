@@ -1,4 +1,10 @@
-import { getConversation } from "../../../src/features/agent/store.ts";
+import {
+  beginTurn,
+  findTurnByRequest,
+  getConversation,
+  newId,
+  readEpoch,
+} from "../../../src/features/agent/store.ts";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -38,19 +44,33 @@ describe("acquireLock", () => {
       const err = await refusal(acquireLock(paths, NOW));
       expect(err.exitCode).toBe(1);
       expect(err.message).toBe(
-        `另一個 tars chat 正在執行（pid ${process.pid}，${NOW.toISOString()} 開始）`,
+        `對話資料庫正由 tars chat 使用（pid ${process.pid}，${NOW.toISOString()} 開始）`,
       );
     } finally {
       first.release();
     }
   });
 
-  test("without a readable lock.json only the first half is printed", async () => {
+  test("tars serve holding it is named as serve", async () => {
+    const paths = isolatedPaths();
+    const first = await acquireLock(paths, NOW, "serve");
+    try {
+      expect((await refusal(acquireLock(paths, NOW))).message).toBe(
+        `對話資料庫正由 tars serve 使用（pid ${process.pid}，${NOW.toISOString()} 開始）`,
+      );
+    } finally {
+      first.release();
+    }
+  });
+
+  test("without a readable lock.json no holder is named", async () => {
     const paths = isolatedPaths();
     const first = await acquireLock(paths, NOW);
     try {
       writeFileSync(paths.agentLockInfo, "not json");
-      expect((await refusal(acquireLock(paths, NOW))).message).toBe("另一個 tars chat 正在執行");
+      expect((await refusal(acquireLock(paths, NOW))).message).toBe(
+        "對話資料庫正由另一個 tars 行程使用",
+      );
     } finally {
       first.release();
     }
@@ -70,17 +90,15 @@ describe("acquireLockAt", () => {
     const other = {
       file: join(paths.agent, "other-lock.db"),
       infoFile: join(paths.agent, "other-lock.json"),
-      busy: "另一個 other 正在執行",
+      busy: () => "另一個 other 正在執行",
       command: "other",
     };
     const chat = await acquireLock(paths, NOW);
     const held = await acquireLockAt(other, NOW);
     try {
-      expect((await refusal(acquireLockAt(other, NOW))).message).toStartWith(
-        "另一個 other 正在執行（pid",
-      );
+      expect((await refusal(acquireLockAt(other, NOW))).message).toBe("另一個 other 正在執行");
       expect((await refusal(acquireLock(paths, NOW))).message).toStartWith(
-        "另一個 tars chat 正在執行",
+        "對話資料庫正由 tars chat 使用",
       );
       expect(await readLockInfo(paths)).toMatchObject({ command: "chat" });
     } finally {
@@ -103,11 +121,11 @@ describe("openSqlite", () => {
 });
 
 describe("openDb", () => {
-  test("an empty database migrates to version 4 with every table", async () => {
+  test("an empty database migrates to version 5 with every table", async () => {
     const { db } = await agentDb();
-    expect(MIGRATIONS.length).toBe(4);
+    expect(MIGRATIONS.length).toBe(5);
     expect(db.query("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
-      value: "4",
+      value: "5",
     });
     const tables = (
       db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as {
@@ -195,7 +213,7 @@ describe("openDb", () => {
     },
   );
 
-  test("version 2 to 4 changes only the version and adds parent_id", async () => {
+  test("version 2 to 5 adds parent_id, request_id and its index, and the epoch", async () => {
     const paths = isolatedPaths();
     mkdirSync(paths.agent, { recursive: true });
     const v2 = new Database(paths.agentDb, { create: true });
@@ -207,26 +225,36 @@ describe("openDb", () => {
       db.query("SELECT type, name, sql FROM sqlite_master ORDER BY 1, 2").all() as Master[];
     const dump = (db: Database) =>
       ["conversations", "turns"].map((t) => db.query(`SELECT * FROM ${t} ORDER BY 1, 2`).all());
-    const isConversations = (m: Master) => m.type === "table" && m.name === "conversations";
+    const changed = (m: Master) =>
+      m.type === "table" && (m.name === "conversations" || m.name === "turns");
     const before = { master: master(v2), rows: dump(v2) };
     v2.close();
     const db = await openDb(paths);
     const after = master(db);
-    expect(after.filter((m) => !isConversations(m))).toEqual(
-      before.master.filter((m) => !isConversations(m)),
+    expect(after.filter((m) => !changed(m) && m.name !== "turns_request_id")).toEqual(
+      before.master.filter((m) => !changed(m)),
     );
-    const was = before.master.find(isConversations)?.sql as string;
-    expect(after.find(isConversations)?.sql).toBe(
-      `${was.slice(0, was.lastIndexOf(")"))}, parent_id TEXT REFERENCES conversations(id))`,
+    const sqlOf = (ms: Master[], name: string) =>
+      ms.find((m) => m.type === "table" && m.name === name)?.sql as string;
+    const plus = (sql: string, column: string) =>
+      `${sql.slice(0, sql.lastIndexOf(")"))}, ${column})`;
+    expect(sqlOf(after, "conversations")).toBe(
+      plus(sqlOf(before.master, "conversations"), "parent_id TEXT REFERENCES conversations(id)"),
     );
+    expect(sqlOf(after, "turns")).toBe(plus(sqlOf(before.master, "turns"), "request_id TEXT"));
+    expect(after.find((m) => m.name === "turns_request_id")?.type).toBe("index");
     expect(dump(db)).toEqual(
       before.rows.map((rows, i) =>
-        i === 0 ? rows.map((r) => ({ ...(r as object), parent_id: null })) : rows,
+        rows.map((r) => ({
+          ...(r as object),
+          ...(i === 0 ? { parent_id: null } : { request_id: null }),
+        })),
       ),
     );
     expect(db.query("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
-      value: "4",
+      value: "5",
     });
+    expect(readEpoch(db)).toMatch(/^[0-9a-f]{32}$/);
     db.close();
   });
 
@@ -243,6 +271,50 @@ describe("openDb", () => {
     const conv = getConversation(db, convId);
     expect(conv.parentId).toBeUndefined();
     expect("parentId" in conv).toBe(false);
+    db.close();
+  });
+
+  test("each new database gets its own epoch, kept across reopening", async () => {
+    const a = await agentDb();
+    const b = await agentDb();
+    const epoch = readEpoch(a.db);
+    expect(epoch).toMatch(/^[0-9a-f]{32}$/);
+    expect(readEpoch(b.db)).not.toBe(epoch);
+    a.db.close();
+    b.db.close();
+    const again = await openDb(a.paths);
+    expect(readEpoch(again)).toBe(epoch);
+    again.close();
+  });
+
+  test("a request_id is unique over the whole database; a second one rolls its turn back", async () => {
+    const { db } = await agentDb();
+    const first = seedTurn(db);
+    const requestId = newId();
+    beginTurn(db, {
+      id: newId(),
+      convId: first.convId,
+      kind: "chat",
+      effort: null,
+      now: NOW.getTime(),
+      requestId,
+    });
+    const other = seedTurn(db);
+    const turnId = newId();
+    expect(() =>
+      db.transaction(() =>
+        beginTurn(db, {
+          id: turnId,
+          convId: other.convId,
+          kind: "chat",
+          effort: null,
+          now: NOW.getTime(),
+          requestId,
+        }),
+      )(),
+    ).toThrow(/UNIQUE/);
+    expect(db.query("SELECT 1 FROM turns WHERE id = ?").get(turnId)).toBeNull();
+    expect(findTurnByRequest(db, requestId)?.convId).toBe(first.convId);
     db.close();
   });
 

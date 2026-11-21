@@ -63,6 +63,7 @@ import { classify, REFUSAL_TEXT, runSelf, toolText, type Classified } from "./ta
 import { runTool, type ToolOutcome } from "./tools.ts";
 import {
   ZERO_USAGE,
+  type ApprovalState,
   type CompactionItem,
   type ContextItem,
   type Effort,
@@ -112,6 +113,8 @@ export interface TurnInput {
   readonly continueFrom?: string;
   /** With continueFrom: carry only the last N turns, and no summary. */
   readonly keepLast?: number;
+  /** A browser's turn.submit id, unique over agent.db: a resent one finds this turn. */
+  readonly requestId?: string;
 }
 
 /** conv_too_long when continuing: none of them sends the owner back to /compact (S2-13). */
@@ -378,7 +381,7 @@ export function createEngine(deps: EngineDeps) {
     const turnId = store.newId();
     const now = deps.now().getTime();
     let usageId = 0;
-    let opening: Item[] = [];
+    let written: Item[] = [];
     db.transaction(() => {
       if (conv === undefined)
         store.createConversation(db, {
@@ -390,18 +393,31 @@ export function createEngine(deps: EngineDeps) {
           now,
           ...(carry === undefined ? {} : { parentId: input.continueFrom }),
         });
-      store.beginTurn(db, { id: turnId, convId, kind: "chat", effort: choice.effort ?? null, now });
+      store.beginTurn(db, {
+        id: turnId,
+        convId,
+        kind: "chat",
+        effort: choice.effort ?? null,
+        now,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      });
       // The order requestHistory sent them in: carried text, index, message.
-      opening = append(convId, turnId, [
+      written = append(convId, turnId, [
         ...(conv === undefined && carry !== undefined
           ? [{ kind: "user" as const, step: 0, body: carry.body }]
           : []),
         ...(fresh === undefined ? [] : [{ kind: "wiki_index" as const, step: 0, body: fresh }]),
         { kind: "user", step: 0, body: { text: input.text } },
-      ]).slice(0, -1);
+      ]);
       usageId = insertRequest(s, { turnId, convId, step: 1, attempt: 1 }, first);
     })();
-    for (const item of opening) frontend.emit({ type: "item", item });
+    frontend.emit({
+      type: "turn_start",
+      convId,
+      turnId,
+      items: written.filter((item): item is UserItem => item.kind === "user"),
+    });
+    for (const item of written.slice(0, -1)) frontend.emit({ type: "item", item });
     deps.log.log("turn_start", { turn: turnId, conv: convId, turnKind: "chat" });
 
     if (s.pricesWarn)
@@ -764,16 +780,23 @@ export function createEngine(deps: EngineDeps) {
           id: record.id,
           decision: answer,
           hash: record.hash,
-          via: "tty",
+          via: t.frontend.via,
           now: deps.now().getTime(),
         });
       else if (t.signal.aborted) approvals.cancel(db, record.id);
       if (approvals.stateOf(db, record.id) === "pending") approvals.expire(db, record.id);
-      const settled = approvals.stateOf(db, record.id);
+      // The expire above leaves nothing pending.
+      const settled = approvals.stateOf(db, record.id) as Exclude<ApprovalState, "pending">;
       if (settled === "approved") store.setToolCallState(db, call.body.callId, "approved");
-      else if (settled !== "pending") ended(t, call, settled, TEXT[settled]);
+      else ended(t, call, settled, TEXT[settled]);
       return settled;
     })();
+    t.frontend.emit({
+      type: "approval_resolved",
+      approvalId: record.id,
+      state,
+      via: state === "expired" ? "timeout" : state === "cancelled" ? "abort" : t.frontend.via,
+    });
     deps.log.log("approval", { turn: t.turnId, state });
     if (state === "approved") return undefined;
     return state === "cancelled" ? { end: { state: "aborted" } } : {};

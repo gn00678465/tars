@@ -48,6 +48,7 @@ export function recordingFrontend(): RecordingFrontend {
   const events: FrontendEvent[] = [];
   const approvals: ApprovalRecord[] = [];
   const fe: RecordingFrontend = {
+    via: "tty",
     events,
     approvals,
     notices: () => events.flatMap((e) => (e.type === "notice" ? [e.code] : [])),

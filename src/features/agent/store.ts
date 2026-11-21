@@ -114,12 +114,24 @@ export interface TurnRow {
   readonly startedAt: number;
 }
 
+const TURN_COLUMNS = "id, conv_id AS convId, kind, state, started_at AS startedAt";
+
+/** The turn a browser's turn.submit started, by the id the browser gave it. */
+export const findTurnByRequest = (db: Database, requestId: string): TurnRow | undefined =>
+  (db
+    .query(`SELECT ${TURN_COLUMNS} FROM turns WHERE request_id = ?`)
+    .get(requestId) as TurnRow | null) ?? undefined;
+
+/** Made once by migration 5: a different value means a different database. */
+export const readEpoch = (db: Database): string =>
+  (db.query("SELECT value FROM meta WHERE key = 'epoch'").get() as { value: string }).value;
+
 /** A full id, or a tail of at least 4 characters that names exactly one turn of `convId`. */
 export function findTurn(db: Database, convId: string, idOrSuffix: string): TurnRow {
   if (idOrSuffix.length < 4) throw new TarsError("回合編號至少要 4 碼");
   const rows = db
     .query(
-      `SELECT id, conv_id AS convId, kind, state, started_at AS startedAt FROM turns
+      `SELECT ${TURN_COLUMNS} FROM turns
        WHERE conv_id = ?2 AND (id = ?1 OR substr(id, -length(?1)) = ?1)`,
     )
     .all(idOrSuffix, convId) as TurnRow[];
@@ -181,12 +193,22 @@ export function setRequestState(
 
 export function beginTurn(
   db: Database,
-  t: { id: string; convId: string; kind: TurnKind; effort: Effort | null; now: number },
+  t: {
+    id: string;
+    convId: string;
+    kind: TurnKind;
+    effort: Effort | null;
+    now: number;
+    requestId?: string;
+  },
 ): void {
   db.run(
     "INSERT INTO turns (id, conv_id, kind, state, effort, started_at) VALUES (?, ?, ?, 'running', ?, ?)",
     [t.id, t.convId, t.kind, t.effort, t.now],
   );
+  // In the caller's transaction: a request_id already taken throws and nothing is kept.
+  if (t.requestId !== undefined)
+    db.run("UPDATE turns SET request_id = ? WHERE id = ?", [t.requestId, t.id]);
 }
 
 export function addTurnRequest(db: Database, turnId: string): void {
@@ -265,6 +287,24 @@ export function readItems(db: Database, convId: string): Item[] {
       .query("SELECT seq, turn_id, step, kind, body FROM items WHERE conv_id = ? ORDER BY seq")
       .all(convId) as ItemRow[]
   ).map(toItem);
+}
+
+/**
+ * Up to `limit` items before seq `before` (all of them without it), oldest first; `more` says
+ * whether there are earlier ones.
+ */
+export function readItemsPage(
+  db: Database,
+  convId: string,
+  page: { before?: number; limit: number },
+): { items: Item[]; more: boolean } {
+  const rows = db
+    .query(
+      `SELECT seq, turn_id, step, kind, body FROM items WHERE conv_id = ? AND seq < ?
+       ORDER BY seq DESC LIMIT ?`,
+    )
+    .all(convId, page.before ?? Number.MAX_SAFE_INTEGER, page.limit + 1) as ItemRow[];
+  return { items: rows.slice(0, page.limit).reverse().map(toItem), more: rows.length > page.limit };
 }
 
 /** The items a request can need: from the latest compaction's first kept item on. */

@@ -68,7 +68,7 @@ export function skillInvocationText(name: string, content: string): string {
   return content === "" ? head : `${head}\n\n${content}`;
 }
 
-export const PREAMBLE = `你在 tars chat 裡：這是 tars 自己的入口，不是 Claude Code。下面的 SOUL.md 是你的人格，MEMORY.md 是你對擁有者的記憶。
+export const PREAMBLE = `你在 tars 自己的入口裡（終端的 tars chat，或擁有者的遠端網頁），不是 Claude Code。下面的 SOUL.md 是你的人格，MEMORY.md 是你對擁有者的記憶。
 
 能用的工具只有三個：
 - skill_load：讀一個 skill 的 SKILL.md。

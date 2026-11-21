@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { TarsError } from "../../core/exit.ts";
 import type { TarsPaths } from "../../core/paths.ts";
 import { PROVIDERS, type Provider } from "../../core/secrets.ts";
-import { isRecord } from "../script/metadata.ts";
+import { isRecord, SLUG } from "../script/metadata.ts";
 import { EFFORTS, type CacheTtl, type ChatConfig } from "./types.ts";
 
 export interface ProviderConfig {
@@ -42,11 +42,45 @@ export interface WikiConfig {
   readonly model: string;
 }
 
+/**
+ * Where tars serve connects and whom it lets in. Each key may be missing here: tars serve and
+ * tars link status say which ones are, or still hold a template placeholder.
+ */
+export interface LinkConfig {
+  readonly url?: string;
+  readonly access_team_domain?: string;
+  readonly access_aud?: string;
+  readonly owner_email?: string;
+}
+
+export const LINK_KEYS = ["url", "access_team_domain", "access_aud", "owner_email"] as const;
+
+export interface NotifyConfig {
+  /** A library script's name; "" sends nothing. */
+  readonly script: string;
+  /** "{title}" and "{body}" are each replaced, as a whole argument, by fixed text. */
+  readonly args: readonly string[];
+  /** Also notify when a new browser connection passes the checks. */
+  readonly on_connect: boolean;
+}
+
+export const NOTIFY_PLACEHOLDERS = ["{title}", "{body}"] as const;
+
+export const DEFAULT_NOTIFY: NotifyConfig = {
+  script: "",
+  args: ["--title", "{title}", "--body", "{body}"],
+  on_connect: true,
+};
+
 export interface TarsConfig {
   readonly providers: Partial<Record<Provider, ProviderConfig>>;
   readonly limits: Limits;
   readonly chat: ChatConfig;
   readonly wiki: WikiConfig;
+  /** Absent without a [link] section. */
+  readonly link?: LinkConfig;
+  /** Absent without a [notify] section. */
+  readonly notify?: NotifyConfig;
 }
 
 export const DEFAULT_LIMITS: Limits = {
@@ -123,6 +157,18 @@ provider = "anthropic"   # 不帶 --model 時用哪一家
 daily_cap_usd = 1        # 同步的每日上限（UTC 日）
 monthly_cap_usd = 10     # 同步的每月上限（UTC 月）
 model = ""               # 空字串：Anthropic 在 models.json 的預設模型。或 "<provider>/<id>"
+
+# 遠端入口（tars serve）。拿掉每行開頭的 # 再填值；還有 < > 的值 tars serve 不接受。
+# [link]
+# url = "wss://link.<OWNER_DOMAIN>/link"
+# access_team_domain = "<TEAM>.cloudflareaccess.com"
+# access_aud = "<ACCESS_AUD>"
+# owner_email = "<OWNER_EMAIL>"
+
+# [notify]
+# script = ""                                    # 入庫腳本的名稱；空字串是不通知
+# args = ["--title", "{title}", "--body", "{body}"]
+# on_connect = true                              # 新的瀏覽器連線通過驗證時也推播
 `;
 
 /** Reads config.toml from disk on every call; a turn picks up the owner's edits. */
@@ -157,7 +203,7 @@ export function parseConfig(toml: unknown): {
   const warnings: string[] = [];
   const top = isRecord(toml) ? toml : {};
   for (const key of Object.keys(top))
-    if (!["providers", "limits", "chat", "wiki"].includes(key))
+    if (!["providers", "limits", "chat", "wiki", "link", "notify"].includes(key))
       problems.push(`unknown section [${key}]`);
 
   const providers: Partial<Record<Provider, ProviderConfig>> = {};
@@ -184,7 +230,58 @@ export function parseConfig(toml: unknown): {
   };
   fields.rejectUnknown();
   const wiki = parseWiki(section(top, "wiki", problems), problems);
-  return { config: { providers, limits, chat, wiki }, warnings, problems };
+  const link =
+    top.link === undefined ? undefined : parseLink(section(top, "link", problems), problems);
+  const notify =
+    top.notify === undefined ? undefined : parseNotify(section(top, "notify", problems), problems);
+  return {
+    config: {
+      providers,
+      limits,
+      chat,
+      wiki,
+      ...(link === undefined ? {} : { link }),
+      ...(notify === undefined ? {} : { notify }),
+    },
+    warnings,
+    problems,
+  };
+}
+
+function parseLink(table: Record<string, unknown>, problems: string[]): LinkConfig {
+  const f = new Fields("link", table, problems);
+  const link: Record<string, string> = {};
+  for (const key of LINK_KEYS) {
+    const value = f.optionalText(
+      key,
+      key === "url" ? (v) => v.startsWith("wss://") : () => true,
+      key === "url" ? "a wss:// URL" : "a string",
+    );
+    if (value !== undefined) link[key] = value;
+  }
+  f.rejectUnknown();
+  return link;
+}
+
+const isNotifyArg = (a: unknown) =>
+  typeof a === "string" &&
+  ((NOTIFY_PLACEHOLDERS as readonly string[]).includes(a) || !/[{}]/.test(a));
+
+function parseNotify(table: Record<string, unknown>, problems: string[]): NotifyConfig {
+  const f = new Fields("notify", table, problems);
+  const d = DEFAULT_NOTIFY;
+  const notify: NotifyConfig = {
+    script: f.text("script", d.script, (v) => v === "" || SLUG.test(v), `"" or a script's name`),
+    args: f.list(
+      "args",
+      d.args,
+      isNotifyArg,
+      "strings, with {title} and {body} only as a whole argument",
+    ),
+    on_connect: f.bool("on_connect", d.on_connect),
+  };
+  f.rejectUnknown();
+  return notify;
 }
 
 /** A model reference checked without throwing, so the rest of the file is still checked. */
@@ -368,6 +465,23 @@ class Fields {
 
   text(key: string, fallback: string, accept: (v: string) => boolean, rule: string): string {
     return this.read(key, fallback, fallback, rule, (v) => typeof v === "string" && accept(v));
+  }
+
+  optionalText(key: string, accept: (v: string) => boolean, rule: string): string | undefined {
+    this.seen.add(key);
+    const value = this.table[key];
+    if (value === undefined || (typeof value === "string" && accept(value))) return value;
+    this.problems.push(`[${this.name}] ${key} must be ${rule}`);
+    return undefined;
+  }
+
+  list(
+    key: string,
+    fallback: readonly string[],
+    accept: (v: unknown) => boolean,
+    rule: string,
+  ): readonly string[] {
+    return this.read(key, fallback, fallback, rule, (v) => Array.isArray(v) && v.every(accept));
   }
 
   rejectUnknown(): void {

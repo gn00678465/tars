@@ -20,7 +20,11 @@ export type LogEvent =
   | "tool"
   | "approval"
   | "reconcile"
-  | "warning";
+  | "warning"
+  /** tars serve: the link connection, a browser connection, a notification. */
+  | "link"
+  | "conn"
+  | "notify";
 
 /**
  * No field takes free text: message bodies, tool input and output, argv, keys and a provider's
@@ -38,7 +42,13 @@ export interface LogFields {
     | "reserved"
     | "final"
     | "estimated"
-    | "voided";
+    | "voided"
+    | LinkState
+    | "open"
+    | "rejected"
+    | "closed"
+    | "ok"
+    | "skipped";
   readonly reason?: ReasonCode;
   readonly turnKind?: TurnKind;
   readonly errorKind?: ProviderErrorKind;
@@ -54,7 +64,15 @@ export interface LogFields {
   readonly outputTokens?: number;
   readonly count?: number;
   readonly exit?: number;
+  /** A WebSocket close code. */
+  readonly code?: number;
+  readonly reconnects?: number;
+  /** The last 8 characters of a browser connection's id. */
+  readonly connId?: string;
+  readonly notifyKind?: "approval" | "connect" | "replaced";
 }
+
+export type LinkState = "connecting" | "connected" | "keyring" | "replaced";
 
 export interface Log {
   log(event: LogEvent, fields: LogFields): void;

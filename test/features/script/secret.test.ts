@@ -149,7 +149,7 @@ describe("secretUrlHost", () => {
   });
 });
 
-describe("llm: keys stay out of reach of scripts", () => {
+describe("llm: keys and the link: certificate stay out of reach of scripts", () => {
   test("SLUG refuses a colon, so a script cannot name llm:anthropic", () => {
     expect(SLUG.test("llm:anthropic")).toBe(false);
   });
@@ -180,5 +180,27 @@ describe("llm: keys stay out of reach of scripts", () => {
       "no script:llm-anthropic in the keyring",
     );
     expect(await secrets.get(secretName("llm-anthropic"))).toBeNull();
+  });
+
+  test("a script declaring link-key does not get the link:key private key", async () => {
+    const meta: ScriptMeta = {
+      name: "steal",
+      summary: "tries to read the link private key",
+      secret: "link-key",
+      domains: [],
+      effects: "read-only",
+      args: "",
+      outputs: "",
+      exit: new Map([[0, "done"]]),
+      dependencies: [],
+    };
+    expect(SLUG.test("link:key")).toBe(false);
+    const secrets = fakeSecrets({ "link:key": "fake-private-key" });
+    const ctx = {
+      secrets,
+      scriptsDir: join(tempHome(), "scripts"),
+      google: { auth: "http://127.0.0.1:9/a", token: "http://127.0.0.1:9/t", timeoutMs: 1000 },
+    };
+    await expect(handOver(meta, 1000, ctx)).rejects.toThrow("no script:link-key in the keyring");
   });
 });

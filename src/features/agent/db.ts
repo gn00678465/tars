@@ -127,6 +127,13 @@ UPDATE adjustments SET
   // longer match, so the version alone keeps it out.
   `-- 3: items.kind gains 'wiki_index'. No table changes; the version keeps older binaries out.`,
   `ALTER TABLE conversations ADD COLUMN parent_id TEXT REFERENCES conversations(id);`,
+  // A turn.submit sent before its conversation exists has no conv to scope to, so request_id is
+  // unique over the whole database. The epoch tells a browser its state is from another database.
+  `
+ALTER TABLE turns ADD COLUMN request_id TEXT;
+CREATE UNIQUE INDEX turns_request_id ON turns (request_id) WHERE request_id IS NOT NULL;
+INSERT INTO meta (key, value) VALUES ('epoch', lower(hex(randomblob(16))));
+`,
 ];
 
 export interface LockInfo {
@@ -142,21 +149,28 @@ export interface LockHandle {
 export interface LockSpec {
   readonly file: string;
   readonly infoFile: string;
-  /** The refusal's opening words, such as 另一個 tars chat 正在執行. */
-  readonly busy: string;
+  /** The refusal, from what the info file says about the holder (undefined: unreadable). */
+  busy(holder: LockInfo | undefined): string;
   readonly command: string;
 }
 
+export const heldSince = (info: LockInfo) =>
+  `（pid ${info.pid}，${new Date(info.startedAt).toISOString()} 開始）`;
+
 /**
- * The single-writer lock for tars chat: an exclusive lock on lock.db, held by a connection that
- * stays open. The OS drops it when the process ends, kill -9 included.
+ * The single-writer lock on agent.db, for tars chat, tars serve and cost adjust: an exclusive
+ * lock on lock.db, held by a connection that stays open. The OS drops it when the process ends,
+ * kill -9 included. The refusal names the holder's command, since more than one takes it.
  */
 export const acquireLock = (paths: TarsPaths, now: Date, command = "chat"): Promise<LockHandle> =>
   acquireLockAt(
     {
       file: paths.agentLock,
       infoFile: paths.agentLockInfo,
-      busy: "另一個 tars chat 正在執行",
+      busy: (holder) =>
+        holder === undefined
+          ? "對話資料庫正由另一個 tars 行程使用"
+          : `對話資料庫正由 tars ${holder.command} 使用${heldSince(holder)}`,
       command,
     },
     now,
@@ -177,12 +191,7 @@ export async function acquireLockAt(spec: LockSpec, now: Date): Promise<LockHand
   } catch (err) {
     db.close();
     if (!isBusy(err)) throw err;
-    const info = await readLockInfoAt(spec.infoFile);
-    throw new TarsError(
-      info === undefined
-        ? spec.busy
-        : `${spec.busy}（pid ${info.pid}，${new Date(info.startedAt).toISOString()} 開始）`,
-    );
+    throw new TarsError(spec.busy(await readLockInfoAt(spec.infoFile)));
   }
   await writeFileAtomic(
     spec.infoFile,
@@ -200,7 +209,11 @@ export const readLockInfo = (paths: TarsPaths) => readLockInfoAt(paths.agentLock
 async function readLockInfoAt(file: string): Promise<LockInfo | undefined> {
   try {
     const info = JSON.parse(await readFile(file, "utf8")) as LockInfo;
-    return typeof info.pid === "number" && typeof info.startedAt === "number" ? info : undefined;
+    return typeof info.pid === "number" &&
+      typeof info.startedAt === "number" &&
+      typeof info.command === "string"
+      ? info
+      : undefined;
   } catch {
     return undefined;
   }

@@ -8,12 +8,15 @@ import {
   createConversation,
   findConversation,
   findTurn,
+  findTurnByRequest,
   finishToolCall,
   getConversation,
   hasToolResult,
   lastFinalUsageSeq,
+  newId,
   readActiveItems,
   readItems,
+  readItemsPage,
   recordToolCalls,
   shortId,
 } from "../../../src/features/agent/store.ts";
@@ -181,6 +184,72 @@ describe("finishToolCall", () => {
       { callId: "call-1", status: "done", text: "first", truncated: false },
     ]);
     expect(state(db)).toBe("done");
+  });
+});
+
+describe("readItemsPage", () => {
+  const texts = (page: { items: { body: unknown }[] }) =>
+    page.items.map((i) => (i.body as { text: string }).text);
+
+  test("the newest `limit` items oldest first; more while earlier ones remain", async () => {
+    const { db } = await agentDb();
+    const { convId, turnId } = seedTurn(db);
+    appendItems(
+      db,
+      convId,
+      turnId,
+      ["1", "2", "3", "4", "5"].map((t) => user(t)),
+      T,
+    );
+    const latest = readItemsPage(db, convId, { limit: 2 });
+    expect(texts(latest)).toEqual(["4", "5"]);
+    expect(latest.more).toBe(true);
+    const next = readItemsPage(db, convId, { before: latest.items[0]?.seq, limit: 2 });
+    expect(texts(next)).toEqual(["2", "3"]);
+    expect(next.more).toBe(true);
+    // Exactly the rest: no more.
+    const last = readItemsPage(db, convId, { before: 2, limit: 1 });
+    expect(texts(last)).toEqual(["1"]);
+    expect(last.more).toBe(false);
+  });
+
+  test("a limit at or over the count gives everything; before 1 gives nothing", async () => {
+    const { db } = await agentDb();
+    const { convId, turnId } = seedTurn(db);
+    appendItems(db, convId, turnId, [user("1"), user("2")], T);
+    for (const limit of [2, 50]) {
+      const page = readItemsPage(db, convId, { limit });
+      expect(texts(page)).toEqual(["1", "2"]);
+      expect(page.more).toBe(false);
+    }
+    expect(readItemsPage(db, convId, { before: 1, limit: 50 })).toEqual({ items: [], more: false });
+  });
+
+  test("only the conversation asked for", async () => {
+    const { db } = await agentDb();
+    const a = seedTurn(db);
+    const b = seedTurn(db);
+    appendItems(db, a.convId, a.turnId, [user("a")], T);
+    appendItems(db, b.convId, b.turnId, [user("b")], T);
+    expect(texts(readItemsPage(db, b.convId, { limit: 50 }))).toEqual(["b"]);
+  });
+});
+
+describe("findTurnByRequest", () => {
+  test("finds the turn by its request id; another id finds nothing", async () => {
+    const { db } = await agentDb();
+    const { convId } = seedTurn(db);
+    const id = newId();
+    const requestId = newId();
+    beginTurn(db, { id, convId, kind: "chat", effort: null, now: T, requestId });
+    expect(findTurnByRequest(db, requestId)).toEqual({
+      id,
+      convId,
+      kind: "chat",
+      state: "running",
+      startedAt: T,
+    });
+    expect(findTurnByRequest(db, newId())).toBeUndefined();
   });
 });
 

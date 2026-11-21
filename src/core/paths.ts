@@ -27,6 +27,8 @@ export interface TarsPaths {
   readonly agentLock: string;
   readonly agentLockInfo: string;
   readonly agentLog: string;
+  /** What tars serve is doing, for `tars serve status`. */
+  readonly serveStatus: string;
   /** The owner's knowledge base, opened in Obsidian; only `tars wiki sync` writes it. */
   readonly wiki: string;
   readonly wikiIndex: string;
@@ -78,6 +80,7 @@ export function resolvePaths(env: Env): TarsPaths {
     agentLock: join(agent, "lock.db"),
     agentLockInfo: join(agent, "lock.json"),
     agentLog: join(agent, "log.jsonl"),
+    serveStatus: join(agent, "serve.json"),
     wiki: join(data, "wiki"),
     wikiIndex: join(data, "wiki", "index.md"),
     wikiDb: join(agent, "wiki.db"),
