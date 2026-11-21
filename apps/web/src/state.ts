@@ -160,9 +160,13 @@ function message(s: State, m: ServerMessage, at: number): State {
         ...(m.p.turn === undefined ? {} : { turn: m.p.turn }),
         ...(m.p.reason === undefined ? {} : { reason: m.p.reason }),
       };
+      // Still ours at its end: its start, and so its items, were missed. Only a turn the
+      // database has (named) is worth loading, and only in the conversation the page is on.
+      const missed = ours && m.p.state !== "started" && m.p.turn !== undefined && (follow || here);
       const next: State = {
         ...(ours ? withoutKeys(s, "submitting") : s),
         ...(follow ? { conv: m.conv as string } : {}),
+        ...(missed ? { load: m.conv as string } : {}),
         turn,
         ...(ours && m.p.state === "rejected" ? { error: `沒有開始：${m.p.reason ?? ""}` } : {}),
       };

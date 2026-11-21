@@ -179,6 +179,23 @@ describe("state: a conversation", () => {
     expect(known.load).toBe(CONV);
   });
 
+  test("a failure that names a turn whose start was missed loads its conversation", () => {
+    const fresh = run([...open.slice(0, 3), { type: "submitted", requestId: "r4" }]);
+    const failed = run(
+      [server("turn", { turn: TURN, requestId: "r4", state: "failed" }, { conv: CONV })],
+      fresh,
+    );
+    expect(failed.submitting).toBeUndefined();
+    expect(failed.conv).toBe(CONV);
+    expect(failed.load).toBe(CONV);
+    // Without a turn there is nothing to load.
+    const none = run(
+      [server("turn", { requestId: "r4", state: "failed" }, { conv: CONV })],
+      run([{ type: "submitted", requestId: "r4" }], run(open)),
+    );
+    expect(none.load).toBeUndefined();
+  });
+
   test("another epoch: everything held is dropped", () => {
     const s = run([
       ...open,

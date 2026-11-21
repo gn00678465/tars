@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -426,6 +426,63 @@ describe("Dispatch: turns", () => {
       const good = readFileSync(file, "utf8");
       writeFileSync(file, "[providers\n");
       await failsThenRuns(s, () => writeFileSync(file, good));
+    });
+  });
+
+  describe("a failure after the turn exists", () => {
+    test("between the commit and turn_start: the failure names the turn and its conversation", async () => {
+      const s = await setup();
+      await s.ready(CONN_A);
+      const run = s.h.engine.runTurn.bind(s.h.engine);
+      s.h.engine.runTurn = (input, frontend, signal) =>
+        run(
+          input,
+          {
+            ...frontend,
+            emit: (e) => {
+              if (e.type === "turn_start") throw new Error("after commit");
+              frontend.emit(e);
+            },
+          } as typeof frontend,
+          signal,
+        );
+      await s.msg(CONN_A, "turn.submit", { requestId: "r-y", text: "嗨" });
+      await s.d.running;
+      const row = store.findTurnByRequest(s.db, "r-y");
+      expect(row).toBeDefined();
+      const sent = s.hub.to(CONN_A, "turn");
+      expect(sent.map((m) => m.p)).toEqual([{ turn: row?.id, requestId: "r-y", state: "failed" }]);
+      expect(sent[0]?.conv).toBe(row?.convId);
+      expect(s.d.current).toBeUndefined();
+      // The request stays known: its resend is acked with the same turn, not run again.
+      const again = await s.msg(CONN_A, "turn.submit", { requestId: "r-y", text: "嗨" });
+      expect(reply(s, CONN_A, again)).toMatchObject({ kind: "ack", p: { turn: row?.id } });
+    });
+
+    test("the database lookup in the catch throws too: still forgotten, still failed", async () => {
+      const s = await setup();
+      await s.ready(CONN_A);
+      s.hub.notifier.idle = async () => {
+        throw new Error("notify");
+      };
+      const find = store.findTurnByRequest;
+      // The resend check before the run still works; the database is gone by the catch.
+      let calls = 0;
+      const spied = spyOn(store, "findTurnByRequest").mockImplementation((db, id) => {
+        if (++calls === 1) return find(db, id);
+        throw new Error("db gone");
+      });
+      try {
+        await s.msg(CONN_A, "turn.submit", { requestId: "r-z", text: "嗨" });
+        await s.d.running;
+      } finally {
+        spied.mockRestore();
+      }
+      expect(calls).toBe(2);
+      expect(s.hub.to(CONN_A, "turn").map((m) => m.p)).toEqual([
+        { requestId: "r-z", state: "failed" },
+      ]);
+      expect(s.d.current).toBeUndefined();
     });
   });
 

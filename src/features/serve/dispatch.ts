@@ -469,17 +469,24 @@ export class Dispatch {
       ]);
     } catch (err) {
       // From anywhere before the turn ended, waiting for a notification and reading config.toml
-      // included. Without a turn in the database the request is forgotten, so the page's resend
-      // runs it again instead of being acked from memory for ever.
-      if (store.findTurnByRequest(this.d.db, requestId) === undefined)
-        this.pending.delete(requestId);
+      // included. The request leaves memory either way, so a resend is answered by the database:
+      // run again when there is no turn, acked with it when there is. The failure names that
+      // turn as the database has it, since turn_start may not have gone out.
+      this.pending.delete(requestId);
+      let row: store.TurnRow | undefined;
+      try {
+        row = store.findTurnByRequest(this.d.db, requestId);
+      } catch {
+        row = undefined;
+      }
+      const conv = row?.convId ?? frontend.convId;
       this.d.hub.send(
         conn,
         message(
           this.d.hub,
           "turn",
-          { requestId, state: "failed" },
-          frontend.convId === undefined ? {} : { conv: frontend.convId },
+          { ...(row === undefined ? {} : { turn: row.id }), requestId, state: "failed" },
+          conv === undefined ? {} : { conv },
         ),
       );
       this.d.log.log("warning", {
