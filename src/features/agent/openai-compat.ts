@@ -259,7 +259,7 @@ async function* streamChat(
   req: ModelRequest,
   signal: AbortSignal,
 ): AsyncGenerator<ProviderEvent> {
-  const seen = { receivedStart: false, receivedContent: false, responded: false };
+  const seen = { receivedStart: false, receivedContent: false, responded: false, callBytes: 0 };
   try {
     const stream = (await client.chat.completions.create(
       requestBody(req, provider) as unknown as OpenAI.ChatCompletionCreateParamsStreaming,
@@ -272,7 +272,6 @@ async function* streamChat(
     let finish: string | undefined;
     let usage: RawUsage | undefined;
     const calls = new Map<number, PartialCall>();
-    let callBytes = 0;
     for await (const chunk of chunks) {
       if (!seen.receivedStart) {
         seen.receivedStart = true;
@@ -300,7 +299,8 @@ async function* streamChat(
         const call = calls.get(at) ?? { id: "", name: "", args: "" };
         calls.set(at, call);
         // Every call the model wrote is output, kept or not.
-        callBytes += utf8Bytes(tc.function?.name ?? "") + utf8Bytes(tc.function?.arguments ?? "");
+        seen.callBytes +=
+          utf8Bytes(tc.function?.name ?? "") + utf8Bytes(tc.function?.arguments ?? "");
         if (tc.id) call.id = tc.id;
         if (tc.function?.name) call.name = tc.function.name;
         if (tc.function?.arguments) call.args += tc.function.arguments;
@@ -353,7 +353,7 @@ async function* streamChat(
       stop,
       ...(settled === undefined ? {} : { usage: settled.usage }),
       ...(settled?.costUsd === undefined ? {} : { costUsd: settled.costUsd }),
-      ...(callBytes === 0 ? {} : { callBytes }),
+      ...(seen.callBytes === 0 ? {} : { callBytes: seen.callBytes }),
       native,
     };
   } catch (err) {
@@ -368,7 +368,7 @@ async function* streamChat(
  */
 async function* sdkChunks(
   stream: AsyncIterable<RawChunk>,
-  seen: { receivedStart: boolean; receivedContent: boolean },
+  seen: { receivedStart: boolean; receivedContent: boolean; callBytes: number },
 ): AsyncGenerator<RawChunk> {
   try {
     for await (const chunk of stream) yield chunk;
@@ -378,6 +378,7 @@ async function* sdkChunks(
       receivedStart: seen.receivedStart,
       receivedContent: seen.receivedContent,
       mayHaveRun: !seen.receivedStart,
+      callBytes: seen.callBytes,
     });
   }
 }
@@ -457,7 +458,12 @@ export function toProviderError(
   err: unknown,
   provider: CompatProvider,
   signal: AbortSignal,
-  seen: { receivedStart: boolean; receivedContent: boolean; responded?: boolean },
+  seen: {
+    receivedStart: boolean;
+    receivedContent: boolean;
+    responded?: boolean;
+    callBytes?: number;
+  },
   apiKey: string,
 ): unknown {
   const status = err instanceof APIError ? err.status : undefined;
@@ -468,6 +474,7 @@ export function toProviderError(
     new ProviderError(kind, {
       receivedStart: seen.receivedStart,
       receivedContent: seen.receivedContent,
+      callBytes: seen.callBytes ?? 0,
       ...(status === undefined ? {} : { status }),
       ...extra,
     });

@@ -27,6 +27,8 @@ export interface ProviderErrorInit {
   readonly detail?: string;
   /** See ProviderError.mayHaveRun. */
   readonly mayHaveRun?: boolean;
+  /** See ProviderError.callBytes. */
+  readonly callBytes?: number;
 }
 
 /**
@@ -45,6 +47,8 @@ export class ProviderError extends Error {
    * A reasoning model may think for minutes before that chunk.
    */
   readonly mayHaveRun?: boolean;
+  /** The compatible adapter's end-event callBytes so far: a broken stream's output too. */
+  readonly callBytes?: number;
 
   constructor(
     readonly kind: ProviderErrorKind,
@@ -58,6 +62,7 @@ export class ProviderError extends Error {
     if (init.retryAfterMs !== undefined) this.retryAfterMs = init.retryAfterMs;
     if (init.detail !== undefined) this.detail = init.detail;
     if (init.mayHaveRun === true) this.mayHaveRun = true;
+    if (init.callBytes !== undefined && init.callBytes > 0) this.callBytes = init.callBytes;
   }
 }
 

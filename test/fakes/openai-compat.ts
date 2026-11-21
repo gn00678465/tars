@@ -59,8 +59,8 @@ export type FakeCompatReply =
   | { readonly kind: "stream_error"; readonly text: string }
   /** Some text, then the connection closes without a finish_reason. */
   | { readonly kind: "disconnect"; readonly text: string }
-  /** One chunk, then nothing until the client gives up. */
-  | { readonly kind: "hang"; readonly text?: string }
+  /** One chunk, or the calls without a finish, then nothing until the client gives up. */
+  | { readonly kind: "hang"; readonly text?: string; readonly toolCalls?: readonly FakeToolCall[] }
   /**
    * 200 and the headers, then no chunk at all: the body ends, or waits for the client to give
    * up (a model thinking before its first chunk).
@@ -269,7 +269,16 @@ function streamReply(mode: CompatMode, reply: FakeCompatReply, signal: AbortSign
         return controller.close();
       }
       if (reply.kind === "hang") {
-        send([chunk({ role: "assistant", content: reply.text ?? "" })]);
+        send(
+          reply.toolCalls === undefined
+            ? [chunk({ role: "assistant", content: reply.text ?? "" })]
+            : messageChunks(mode, {
+                kind: "message",
+                toolCalls: reply.toolCalls,
+                finish: null,
+                usage: null,
+              }),
+        );
         await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()));
         return controller.close();
       }

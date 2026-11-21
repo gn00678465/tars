@@ -1171,6 +1171,35 @@ describe("compatible providers", () => {
     );
   });
 
+  describe("no reasoning, a call's arguments arrive and the stream breaks before its finish", () => {
+    const { effortLevels: _l, ...plain } = { ...OPENROUTER_ENTRY, id: "vendor/plain" };
+    const PLAIN: Ref = { provider: "openrouter", model: plain.id };
+    const args = `{"argv": ["script", "${"x".repeat(20000)}`;
+    const calls = [{ id: "p1", name: "tars", args }];
+    const received = estimateTokens(utf8Bytes("tars") + utf8Bytes(args));
+
+    test("the connection: the bytes received are the output", async () => {
+      const h = await compat({ extraModels: [plain] });
+      h.openrouter.reply({ kind: "message", toolCalls: calls, finish: null, usage: null });
+      expect(ended(await send(h, PLAIN, "go")).state).toBe("failed");
+      const rows = usageRows(h);
+      expect(rows.map((r) => r.state)).toEqual(["estimated"]);
+      expect(rows[0]?.output_tokens).toBe(received);
+    });
+
+    test("Ctrl+C: the same", async () => {
+      const h = await compat({ extraModels: [plain] });
+      h.openrouter.reply({ kind: "hang", toolCalls: calls });
+      const ctl = new AbortController();
+      const pending = send(h, PLAIN, "go", ctl.signal);
+      while (h.openrouter.chats().length === 0) await Bun.sleep(5);
+      await Bun.sleep(100); // the calls' chunks reach the adapter
+      ctl.abort();
+      await pending;
+      expect(usageRows(h)[0]?.output_tokens).toBe(received);
+    });
+  });
+
   test("usage that contradicts itself: estimated with a notice, not priced", async () => {
     const h = await compat();
     h.gemini.reply({

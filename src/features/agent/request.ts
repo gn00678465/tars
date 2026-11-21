@@ -211,8 +211,9 @@ export async function consume(
     if (!(err instanceof ProviderError) && !signal.aborted) throw err;
     const seen = { receivedStart, receivedContent: text !== "" || calls.length > 0 };
     const mayHaveRun = err instanceof ProviderError && err.mayHaveRun === true;
+    const callBytes = err instanceof ProviderError ? (err.callBytes ?? 0) : 0;
     const error = signal.aborted
-      ? new ProviderError("aborted", { ...seen, mayHaveRun })
+      ? new ProviderError("aborted", { ...seen, mayHaveRun, callBytes })
       : (err as ProviderError);
     return { ...read(), error };
   }
@@ -224,7 +225,8 @@ export function settleFailure(db: Database, usageId: number, got: Consumed): voi
     usageId,
     ...(e.kind === "aborted" || e.status === undefined ? {} : { status: e.status }),
     receivedStart: got.receivedStart,
-    textBytes: utf8Bytes(got.text),
+    // Tool arguments received before the break are output, as in settleEnd.
+    textBytes: utf8Bytes(got.text) + (e.callBytes ?? 0),
     inputKnown: got.inputKnown,
     reasoning: got.reasoning,
     mayHaveRun: e.mayHaveRun === true,
