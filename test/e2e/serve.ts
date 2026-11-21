@@ -362,6 +362,19 @@ async function inner(): Promise<number> {
     await open(F, jwt({ exp: -120 }));
     const dropE = await waitDrop(E);
     const dropF = await waitDrop(F);
+    const quietE = msgsTo(E).length;
+    const quietF = msgsTo(F).length;
+    // The relay closes a dropped browser; one that sends anyway gets one refusal and another drop.
+    const refused = async (c: string) => {
+      const from = relay.frames.length;
+      const nack = await reply(c, send(c, "hello"));
+      const drop = await relay.waitFor(
+        (f) => f.t === "drop" && f.conn === c && relay.frames.indexOf(f) >= from,
+      );
+      return { nack, drop, to: msgsTo(c, from) };
+    };
+    const refusedE = await refused(E);
+    const refusedF = await refused(F);
 
     // --- 8. A login that ends while connected: dropped at exp, and the next deltas skip it.
     const D = conn(6);
@@ -379,11 +392,22 @@ async function inner(): Promise<number> {
     check(
       "bad-logins",
       "an email that does not match and an expired JWT: drop 4003, and no message to either (S3 acceptance 4)",
-      dropE.code === 4003 &&
-        dropF.code === 4003 &&
-        msgsTo(E).length === 0 &&
-        msgsTo(F).length === 0,
-      `E ${JSON.stringify(dropE)}, F ${JSON.stringify(dropF)}; to E ${msgsTo(E).length}, to F ${msgsTo(F).length}`,
+      dropE.code === 4003 && dropF.code === 4003 && quietE === 0 && quietF === 0,
+      `E ${JSON.stringify(dropE)}, F ${JSON.stringify(dropF)}; to E ${quietE}, to F ${quietF}`,
+    );
+    check(
+      "refused-message",
+      "a message from a refused connection: one not_allowed, then drop 4003",
+      [refusedE, refusedF].every(
+        (r) =>
+          r.to.length === 1 &&
+          r.nack.kind === "nack" &&
+          (r.nack.p as { reason?: string }).reason === "not_allowed" &&
+          (r.drop as { code?: number }).code === 4003,
+      ),
+      JSON.stringify(
+        [refusedE, refusedF].map((r) => ({ to: r.to.length, nack: r.nack.p, drop: r.drop })),
+      ),
     );
     check(
       "login-expires",
