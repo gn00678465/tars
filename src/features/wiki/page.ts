@@ -421,7 +421,7 @@ function isSummary(v: unknown): v is SummaryPatch {
   );
 }
 
-/** The response's shape (check 1); undefined is bad_json. */
+/** The response's shape (check 1); undefined is bad_shape. */
 export function parsePatch(v: unknown): Patch | undefined {
   if (!isRecord(v) || !onlyKeys(v, ["summary", "facts", "open"], ["related", "aliases", "dropped"]))
     return undefined;
@@ -447,6 +447,7 @@ export function parsePatch(v: unknown): Patch | undefined {
 
 export type PatchReason =
   | "bad_json"
+  | "bad_shape"
   | "bad_id"
   | "bad_from"
   | "assistant_only"

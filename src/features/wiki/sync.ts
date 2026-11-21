@@ -183,6 +183,7 @@ export const REASON_LABEL: Readonly<Record<string, string>> = {
   bad_quote: "原文對不上",
   secret: "機密",
   bad_json: "回應不是 JSON",
+  bad_shape: "回應的欄位不合格式",
   truncated: "回應被截斷",
   too_large: "輸入太大",
   split: "分成兩批重送",
@@ -201,6 +202,7 @@ export const reasonLabel = (code: string) => REASON_LABEL[code] ?? code;
 
 const PATCH_REASONS: ReadonlySet<string> = new Set<PatchReason>([
   "bad_json",
+  "bad_shape",
   "bad_id",
   "bad_from",
   "assistant_only",
@@ -696,11 +698,18 @@ export function renderPageForModel(page: Page, candidates: readonly CandidateRow
   ].join("\n");
 }
 
-/** The reply's one JSON object, with an outer Markdown fence taken off first. */
+/**
+ * The reply's one JSON object: the text from its first "{" to its last "}". Told to output nothing
+ * else, a model still at times reasons in a line before it (P6: a candidate only the assistant
+ * stated) or wraps it in a Markdown fence. Two objects, or a brace in that prose, do not parse
+ * and stay bad_json; what parses still goes through the shape checks.
+ */
 export function parseJsonObject(text: string): Record<string, unknown> | undefined {
-  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/.exec(text.trim());
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end < start) return undefined;
   try {
-    const v: unknown = JSON.parse(fenced === null ? text : (fenced[1] as string));
+    const v: unknown = JSON.parse(text.slice(start, end + 1));
     return isRecord(v) ? v : undefined;
   } catch {
     return undefined;
@@ -710,7 +719,7 @@ export function parseJsonObject(text: string): Record<string, unknown> | undefin
 const CANDIDATE_KEYS = ["source", "page", "title", "section", "text", "speaker", "quote"] as const;
 type RawCandidate = Record<(typeof CANDIDATE_KEYS)[number], string>;
 
-/** {"candidates":[…]} with every field a string; anything else is bad_json for the batch. */
+/** {"candidates":[…]} with every field a string; anything else is bad_shape for the batch. */
 export function parseExtract(v: Record<string, unknown>): RawCandidate[] | undefined {
   const list = v.candidates;
   if (!Array.isArray(list)) return undefined;
@@ -1067,7 +1076,7 @@ async function runModel(
     }
     const parsed = out.kind === "ok" ? parseExtract(out.value) : undefined;
     if (out.kind === "failed" || parsed === undefined) {
-      const reason = out.kind === "failed" ? out.reason : "bad_json";
+      const reason = out.kind === "failed" ? out.reason : "bad_shape";
       endJob(out.jobId, "failed", reason);
       bumpSources(batch, reason);
       return [];
@@ -1311,7 +1320,8 @@ async function runModel(
           }
           continue;
         }
-        reason = result === undefined ? "bad_json" : result.reason;
+        reason =
+          out.kind === "failed" ? out.reason : result === undefined ? "bad_shape" : result.reason;
         endJob(out.jobId, "failed", reason);
       }
       bumpCandidates(batch, reason);

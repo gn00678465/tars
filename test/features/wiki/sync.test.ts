@@ -20,6 +20,7 @@ import { openWikiDb } from "../../../src/features/wiki/db.ts";
 import { sourceRef } from "../../../src/features/wiki/evidence.ts";
 import { renderPage, newPage } from "../../../src/features/wiki/page.ts";
 import {
+  parseJsonObject,
   renderWikiPages,
   runSync,
   type SyncDeps,
@@ -456,7 +457,7 @@ describe("extraction", () => {
     expect(attempts()).toEqual({ state: "pending", attempts: 2, last_error: "bad_request" });
     h.fake.reply(json({ candidates: "no" }));
     await h.sync();
-    expect(attempts()).toEqual({ state: "failed", attempts: 3, last_error: "bad_json" });
+    expect(attempts()).toEqual({ state: "failed", attempts: 3, last_error: "bad_shape" });
     const before = h.fake.messages().length;
     await h.sync();
     expect(h.fake.messages()).toHaveLength(before);
@@ -492,7 +493,79 @@ describe("extraction", () => {
   });
 });
 
+describe("the reply's JSON object", () => {
+  const obj = '{"summary":{"keep":true},"open":[{"text":"a } in a string"}]}';
+  test.each([
+    ["alone", obj],
+    ["after a line of reasoning (P6)", `The only candidate comes from the assistant.\n\n${obj}`],
+    ["before a closing remark", `${obj}\nDone.`],
+    ["in a fence", `\`\`\`json\n${obj}\n\`\`\``],
+    ["in a fence after prose", `Here it is:\n\`\`\`\n${obj}\n\`\`\`\n`],
+  ])("%s: parsed", (_, reply) => {
+    expect(parseJsonObject(reply)).toEqual(JSON.parse(obj));
+  });
+
+  test.each([
+    ["not JSON", "not json"],
+    ["two objects", `${obj}\n${obj}`],
+    ["a brace in the prose after it", `${obj}\nI kept {keep} as it was.`],
+    ["a brace in the prose before it", `Use {"x"} here: ${obj}`],
+    ["an array", "[1, 2]"],
+    ["cut off", obj.slice(0, -1)],
+  ])("%s: undefined", (_, reply) => {
+    expect(parseJsonObject(reply)).toBeUndefined();
+  });
+});
+
 describe("consolidation", () => {
+  test("a reply with a line of reasoning before its JSON is written (P6)", async () => {
+    const h = await harness();
+    const t = h.turn({ owner: OWNER, assistant: ["好的"] });
+    h.fake.reply(
+      extracted({ source: t.ref, quote: "搬到台中西屯" }),
+      text(
+        `The candidate is from the owner, so it goes in "facts".\n\n${JSON.stringify(keepAll([{ from: ["c1"] }]))}`,
+      ),
+    );
+    expect(await h.sync()).toEqual({ state: "completed" });
+    expect(h.page("people/wang-xiaoming")).toContain("- [i1] 搬到台中西屯。");
+  });
+
+  test.each([
+    ["not JSON", text("I cannot decide."), "bad_json", "回應不是 JSON"],
+    [
+      "JSON of the wrong shape",
+      json({ ...keepAll([{ from: ["c1"] }]), notes: "extra" }),
+      "bad_shape",
+      "回應的欄位不合格式",
+    ],
+  ])("a reply that is %s: told apart in the reason", async (_, reply, code, label) => {
+    const h = await harness();
+    const t = h.turn({ owner: OWNER, assistant: ["好的"] });
+    h.fake.reply(extracted({ source: t.ref, quote: "搬到台中西屯" }), reply);
+    await h.sync();
+    expect(one(h.wiki(), "SELECT state, last_error FROM candidates")).toEqual({
+      state: "pending",
+      last_error: code,
+    });
+    expect(h.io.stdout).toContain(`跳過 people/wang-xiaoming：修改不合格（${label}）`);
+  });
+
+  test("a refused consolidation request keeps its own reason", async () => {
+    const h = await harness();
+    const t = h.turn({ owner: OWNER, assistant: ["好的"] });
+    h.fake.reply(extracted({ source: t.ref, quote: "搬到台中西屯" }), {
+      kind: "http_error",
+      status: 400,
+      type: "invalid_request_error",
+    });
+    await h.sync();
+    expect(one(h.wiki(), "SELECT last_error FROM candidates")).toEqual({
+      last_error: "bad_request",
+    });
+    expect(h.io.stdout).toContain("跳過 people/wang-xiaoming：provider 拒絕了這個請求");
+  });
+
   test("a new page; a second sync keeps the first one's entries and sources", async () => {
     const h = await harness();
     const t1 = await onePage(h);
