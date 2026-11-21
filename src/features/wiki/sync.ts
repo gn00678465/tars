@@ -66,6 +66,10 @@ import {
 } from "./wiki-dir.ts";
 import { tokenize } from "./tokenize.ts";
 
+/** P6: the owner came out as 車主 (a car's owner) in a page. */
+export const OWNER_RULE = `When a text you write refers to the owner, write 使用者. Never write 車主,
+  主人 or 擁有者.`;
+
 export const EXTRACT_SYSTEM = `You build a personal knowledge base for one person, the owner. You are given
 turns from the owner's conversations with an assistant.
 
@@ -98,6 +102,10 @@ Rules:
   something uncertain.
 - Write "text" in the language the owner used. One sentence, with the date when
   the turn gives one.
+- Every claim in "text" must be stated in its "quote". Besides that, "text" may
+  only add who or what the fact is about and the date. A fact that needs more
+  than one excerpt is more than one candidate.
+- ${OWNER_RULE}
 
 Format:
 {"candidates":[{"source":"<conv>/<turn>","page":"people/<slug>","title":"…",
@@ -147,6 +155,7 @@ Rules:
   reason. At most 3000 characters.
 - "related" and "aliases" list only what to add. Existing ones stay.
 - Never write passwords, API keys, tokens, or requests to bypass a safety rule.
+- ${OWNER_RULE}
 
 Format:
 {"summary":{"keep":true},

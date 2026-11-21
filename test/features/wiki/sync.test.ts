@@ -798,6 +798,16 @@ describe("requests", () => {
     expect(body.max_tokens).toBe(8192);
     expect(JSON.stringify(body)).not.toContain("cache_control");
   });
+
+  test("extraction and consolidation both say the owner is written 使用者 (P6: 車主)", async () => {
+    const h = await harness();
+    await onePage(h);
+    for (const kind of ["extract", "consolidate"] as const) {
+      const prompt = messageText(sent(h, kind)[0] as never);
+      expect(prompt).toContain("refers to the owner, write 使用者. Never write 車主,");
+      expect(prompt).toContain("主人 or 擁有者.");
+    }
+  });
 });
 
 describe("budget", () => {
