@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { EventEmitter } from "node:events";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { exportJWK, generateKeyPair, SignJWT, type JWK } from "jose";
 import { PROTOCOL_VERSION } from "@tars/protocol";
@@ -137,6 +137,18 @@ describe("tars serve", () => {
     await s.relay.waitFor((f) => f.t === "probe.ok");
 
     expect(await stop()).toBe(0);
+  });
+
+  test("a clean stop removes serve.json: status says not running at once, not 15 s later", async () => {
+    const s = await setup();
+    const { stop } = serve(s);
+    const paths = resolvePaths(s.env);
+    await waitUntil(async () => (await readStatus(paths.serveStatus))?.link.state === "connected");
+    expect(await stop()).toBe(0);
+    expect(existsSync(paths.serveStatus)).toBe(false);
+    const status = testDeps({ env: s.env });
+    expect(await run(["serve", "status"], status)).toBe(1);
+    expect(status.io.stderr.join("\n")).toContain("tars serve 沒有在執行");
   });
 
   test("a browser whose login fails is dropped 4003 and gets nothing", async () => {

@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { rm } from "node:fs/promises";
 import { TarsError } from "../../core/exit.ts";
 import { resolvePaths, type Env, type TarsPaths } from "../../core/paths.ts";
 import { refuseInSession } from "../agent/cli.ts";
@@ -216,7 +217,9 @@ export async function serve(ctx: ServeContext): Promise<number> {
       accessKeys: verifier.available ? "ok" : "unavailable",
       notify: notifier.configured ? "ok" : "not_configured",
     });
+    let stopping = false;
     const changed = () => {
+      if (stopping) return;
       writing = writing.then(() => writeStatus(paths.serveStatus, status())).catch(() => undefined);
     };
 
@@ -311,6 +314,12 @@ export async function serve(ctx: ServeContext): Promise<number> {
       ctx.signals.on("SIGTERM", stop);
     });
     await d.stop(STOP_WAIT_MS);
+    // A file left behind reads as running for STATUS_FRESH_MS. Still under the lock, so it is
+    // this serve's file; the stops below must not write it again.
+    stopping = true;
+    for (const stop of stops.splice(0).toReversed()) stop();
+    await writing;
+    await rm(paths.serveStatus, { force: true });
     return 0;
   } finally {
     for (const stop of stops.toReversed()) stop();
