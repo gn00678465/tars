@@ -24,6 +24,8 @@ export interface CompatAdapterOptions {
 export { COMPAT_ENDPOINTS as ENDPOINTS } from "./provider.ts";
 
 const DETAIL_LIMIT = 500;
+const TOKEN_RUN = /[A-Za-z0-9+/=_%]{16,}/g;
+const TOKEN_MARK = /[0-9+/=%]/;
 const INVALID_ARGUMENTS_BYTES = 2000;
 /** D31: a Gemini signature above this fails the response rather than being dropped. */
 export const SIGNATURE_LIMIT = 16384;
@@ -512,24 +514,20 @@ export function toProviderError(
 /**
  * The detail is stored in the error item and shown on the terminal, and an upstream may echo the
  * request back. Only the body's error.message is kept: never metadata.raw, the rest of the body,
- * or a body that is not JSON. The key is taken out of it as sent and in the two encodings an echo
- * may carry, before the cut, so the cut cannot leave part of it. A key the upstream itself cut
- * short inside error.message is not found.
+ * or a body that is not JSON. Then, before the cut so it cannot leave part of one, the key as
+ * sent goes, and so does any token-shaped run, which covers the key in encodings no list could
+ * name: 16 or more of [A-Za-z0-9+/=_%] with a digit or one of +/=%. "." and "-" break a run so a
+ * model id survives; a word or an identifier like thought_signature has no mark. A path with a
+ * digit, as /v1beta/openai/chat/completions, goes too. A key the upstream itself cut short
+ * enough to leave no such run stays.
  */
 function detailOf(err: APIError, apiKey: string): string | undefined {
   const message = messageOf(err);
   if (message === undefined) return undefined;
-  const base64 = Buffer.from(apiKey).toString("base64");
-  const forms = [
-    apiKey,
-    encodeURIComponent(apiKey),
-    base64,
-    base64.replace(/=+$/, ""),
-    Buffer.from(apiKey).toString("base64url"),
-  ];
-  let out = message;
-  if (apiKey !== "") for (const form of forms) out = out.replaceAll(form, "[金鑰已遮蔽]");
-  return out.slice(0, DETAIL_LIMIT);
+  const out = apiKey === "" ? message : message.replaceAll(apiKey, "[金鑰已遮蔽]");
+  return out
+    .replace(TOKEN_RUN, (run) => (TOKEN_MARK.test(run) ? "[已遮蔽]" : run))
+    .slice(0, DETAIL_LIMIT);
 }
 
 /** The provider's own words: error.message of the body, when it is a string. */

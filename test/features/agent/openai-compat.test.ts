@@ -512,7 +512,7 @@ describe("errors", () => {
 
   test("a bad request's detail is cut to 500 characters", () => {
     const e = toProviderError(
-      apiError(400, "y".repeat(900)),
+      apiError(400, "word ".repeat(180)),
       "gemini",
       signal,
       seen,
@@ -536,9 +536,10 @@ describe("errors", () => {
     }
   });
 
-  test("the key as sent, URL-encoded or in Base64 is taken out; a cut-short echo outside the message is dropped", () => {
-    const key = "a+b/" + "secret";
-    const detail = (body: object) =>
+  describe("the key and anything shaped like a token are taken out", () => {
+    // Near a real key's length (39 to 73 characters), with the + and / an encoding changes.
+    const key = "ab+cd/ef" + "0123456789abcdefghijklmnop";
+    const detail = (message: string, body: object = { error: { message } }) =>
       (
         toProviderError(
           APIError.generate(400, body, undefined, new Headers()),
@@ -548,21 +549,49 @@ describe("errors", () => {
           key,
         ) as ProviderError
       ).detail;
-    for (const form of [key, "a%2Bb%2Fsecret", "YStiL3NlY3JldA==", "YStiL3NlY3JldA"])
-      expect(detail({ error: { message: `sent with ${form}.` } })).toBe("sent with [金鑰已遮蔽].");
-    expect(detail({ error: { message: "bad", metadata: { raw: "key=a+b/" } } })).toBe("bad");
-  });
 
-  test("the key is taken out before the cut", () => {
-    const atTheCut = toProviderError(
-      apiError(400, `${"y".repeat(495)}${SECRET}`),
-      "gemini",
-      signal,
-      seen,
-      SECRET,
-    ) as ProviderError;
-    expect(atTheCut.detail).toHaveLength(500);
-    expect(atTheCut.detail).not.toContain(SECRET.slice(0, 5));
+    test("the key as sent", () => {
+      expect(detail(`sent with ${key}.`)).toBe("sent with [金鑰已遮蔽].");
+    });
+
+    test("encodings no list names: lower-case percent, Base64 of the Bearer header, key=<Base64>", () => {
+      const lower = encodeURIComponent(key).toLowerCase();
+      expect(lower).not.toBe(encodeURIComponent(key));
+      expect(detail(`bad key ${lower} here`)).toBe("bad key [已遮蔽] here");
+      const bearer = Buffer.from(`Bearer ${key}`).toString("base64");
+      expect(detail(`header ${bearer} refused`)).toBe("header [已遮蔽] refused");
+      expect(detail(`got key=${Buffer.from(key).toString("base64")}`)).toBe("got [已遮蔽]");
+    });
+
+    test("not taken: a word, an identifier, a model id, a plain sentence, an HTTP status", () => {
+      for (const kept of [
+        "Function call is missing a thought_signature in functionCall parts.",
+        "model google/gemini-2.5-flash is not available in your region",
+        "internationalization of characteristically uncharacteristic responses",
+        "Provider returned error 400 (Bad Request): the model is unavailable, try later.",
+        "HTTP 503 Service Unavailable",
+      ])
+        expect(detail(kept)).toBe(kept);
+    });
+
+    test("a cut-short echo outside the message is dropped", () => {
+      expect(detail("", { error: { message: "bad", metadata: { raw: "key=a+b/" } } })).toBe("bad");
+    });
+
+    test("before the cut, so the cut cannot leave part of one", () => {
+      const shaped = ("01234567" + "89abcdef").repeat(2);
+      for (const tail of [SECRET, shaped]) {
+        const e = toProviderError(
+          apiError(400, `${"word ".repeat(99)}${tail}`),
+          "gemini",
+          signal,
+          seen,
+          SECRET,
+        ) as ProviderError;
+        expect(e.detail).toHaveLength(500);
+        expect(e.detail).not.toContain(tail.slice(0, 5));
+      }
+    });
   });
 });
 
