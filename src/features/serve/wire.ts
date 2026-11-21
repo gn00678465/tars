@@ -111,7 +111,7 @@ export const wireApproval = (a: ApprovalRecord): WireApproval => ({
   action: a.fields.action,
   script: a.fields.script,
   version: a.fields.version,
-  summary: a.fields.summary.slice(0, 500),
+  summary: a.fields.summary,
   effects: a.fields.effects,
   domains: [...a.fields.domains],
   secret: a.fields.secret,

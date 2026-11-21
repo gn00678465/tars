@@ -1,3 +1,4 @@
+import { approvalProblem } from "@tars/protocol";
 import { mkdir } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { processStartTime, spawnAndWait, type SandboxResult } from "../../core/spawn.ts";
@@ -276,21 +277,21 @@ async function run(rest: readonly string[], ctx: ClassifyContext): Promise<Class
     !only.host.startsWith("*.") &&
     realOut === undefined;
   if (free) return { kind: "allow", canonicalArgv, timeoutMs };
-  return {
-    kind: "approve",
-    canonicalArgv,
-    timeoutMs,
-    fields: {
-      action: "run_script",
-      script: script.name,
-      version: script.version,
-      summary: meta.summary,
-      effects: meta.effects,
-      domains: meta.domains.map(domainText),
-      secret: meta.secret ?? null,
-      argv: canonicalArgv,
-    },
-  };
+  const fields = {
+    action: "run_script",
+    script: script.name,
+    version: script.version,
+    summary: meta.summary,
+    effects: meta.effects,
+    domains: meta.domains.map(domainText),
+    secret: meta.secret ?? null,
+    argv: canonicalArgv,
+  } as const;
+  // The same rule from tars chat: the card is one shape whichever device decides it.
+  const problem = approvalProblem(fields);
+  if (problem !== undefined)
+    return refuse(`核准卡的 ${problem} 超出網頁的上限，沒有建立核准。請減少參數或縮短內容`);
+  return { kind: "approve", canonicalArgv, timeoutMs, fields };
 }
 
 /**

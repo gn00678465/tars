@@ -292,6 +292,38 @@ describe("classify: script run", () => {
     ).toBe("approve");
   });
 
+  describe("a card that a browser could not show whole is refused, not cut", () => {
+    const write = (domains = '["api.example.com"]') =>
+      withScript("weather", { effects: "external-write", domains }).ctx;
+    const runWith = (args: string[]) => ["script", "run", "weather", "--", ...args];
+
+    test("an argument of 4,096 characters fits; 4,097 does not", async () => {
+      expect((await classify(runWith(["x".repeat(4096)]), write())).kind).toBe("approve");
+      const r = await classify(runWith(["x".repeat(4097)]), write());
+      expect(r.kind).toBe("refuse");
+      expect(reasonOf(r)).toContain("argv");
+    });
+
+    test("more than 64 items in the card's argv", async () => {
+      // The card's argv has the 8 items tars puts in front of the script's own.
+      expect((await classify(runWith(Array(56).fill("a")), write())).kind).toBe("approve");
+      expect((await classify(runWith(Array(57).fill("a")), write())).kind).toBe("refuse");
+    });
+
+    test("more than 32 domains", async () => {
+      const hosts = (n: number) =>
+        JSON.stringify(Array.from({ length: n }, (_, i) => `h${i}.example.com`));
+      expect((await classify(runWith([]), write(hosts(32)))).kind).toBe("approve");
+      expect((await classify(runWith([]), write(hosts(33)))).kind).toBe("refuse");
+    });
+
+    test("every field within its limit, but the message over MESSAGE_BYTES", async () => {
+      // 30 arguments of 4,096 three-byte characters: about 368 KB.
+      const r = await classify(runWith(Array(30).fill("字".repeat(4096))), write());
+      expect(r.kind).toBe("refuse");
+    });
+  });
+
   test("the card's secret is null for a script without one", async () => {
     const r = await classify(
       ["script", "run", "weather"],

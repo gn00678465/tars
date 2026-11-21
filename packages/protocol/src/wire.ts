@@ -1,9 +1,13 @@
 import { z } from "zod";
+import { utf8Bytes } from "./bytes.ts";
 import { id } from "./envelope.ts";
 import {
   ARGV_CHARS,
   ARGV_ITEMS,
+  ID_CHARS,
   ITEM_TEXT_BYTES,
+  MESSAGE_BYTES,
+  PROTOCOL_VERSION,
   RUNNING_TEXT_BYTES,
   TOOL_TEXT_BYTES,
 } from "./limits.ts";
@@ -88,6 +92,29 @@ export const wireApproval = z.strictObject({
   argv: z.array(z.string().max(ARGV_CHARS)).max(ARGV_ITEMS),
   expiresAt: z.number(),
 });
+
+/**
+ * Why an approval card with these fields could not reach a browser whole, or undefined when it
+ * can. Checked before the approval exists: a card cut to fit would let the owner approve
+ * something other than what runs, and one over the limits never shows at all.
+ */
+export function approvalProblem(
+  fields: Omit<z.infer<typeof wireApproval>, "approvalId" | "conv" | "hash" | "expiresAt">,
+): string | undefined {
+  // The fields tars fills in later, at their largest.
+  const big = "0".repeat(ID_CHARS);
+  const card = {
+    approvalId: big,
+    conv: big,
+    hash: "0".repeat(64),
+    ...fields,
+    expiresAt: Number.MAX_SAFE_INTEGER,
+  };
+  const parsed = wireApproval.safeParse(card);
+  if (!parsed.success) return parsed.error.issues[0]?.path.join(".") || "approval";
+  const m = { v: PROTOCOL_VERSION, id: big, kind: "approval.request", p: { approval: card } };
+  return utf8Bytes(JSON.stringify(m)) > MESSAGE_BYTES ? "message" : undefined;
+}
 
 export const wireRunning = z.strictObject({
   turn: id,
