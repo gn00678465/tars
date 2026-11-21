@@ -1,7 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { DELTA_BYTES, parseServer, PROTOCOL_VERSION, type ServerMessage } from "@tars/protocol";
+import {
+  DELTA_BYTES,
+  MESSAGE_BYTES,
+  parseServer,
+  PROTOCOL_VERSION,
+  type FrameToRelay,
+  type ServerMessage,
+} from "@tars/protocol";
+import { Registry } from "../../../src/features/serve/access.ts";
 import type { Item } from "../../../src/features/agent/types.ts";
-import { RemoteFrontend } from "../../../src/features/serve/remote-frontend.ts";
+import {
+  broadcast,
+  linkSend,
+  RemoteFrontend,
+  type Hub,
+} from "../../../src/features/serve/remote-frontend.ts";
 import {
   APPROVAL_ID,
   approvalRecord,
@@ -249,5 +262,53 @@ describe("RemoteFrontend: approvals", () => {
     await done;
     await Promise.resolve();
     expect(settled).toBe("approved");
+  });
+});
+
+describe("linkSend: what leaves for a browser", () => {
+  const T = 1_800_000_000_000;
+  const m = (id: string): ServerMessage => ({
+    v: PROTOCOL_VERSION,
+    id,
+    kind: "ack",
+    p: {},
+  });
+
+  test("past exp but before the timer drops it: nothing goes out, alone or in a broadcast", () => {
+    let now = T;
+    // A busy event loop: the expiry timer has not run yet.
+    const never = { setTimeout: () => 0, clearTimeout: () => undefined };
+    const registry = new Registry(
+      never,
+      () => now,
+      () => undefined,
+    );
+    registry.add({ conn: CONN_A, exp: T + 1000 });
+    const reg = registry.get(CONN_A);
+    if (reg !== undefined) reg.hello = true;
+    const frames: FrameToRelay[] = [];
+    const send = linkSend(registry, (f) => void frames.push(f));
+    const hub = { registry, send, newId: () => "x" } as unknown as Hub;
+    send(CONN_A, m("before"));
+    expect(frames).toEqual([{ t: "msg", to: CONN_A, m: m("before") }]);
+    now = T + 1000;
+    send(CONN_A, m("after"));
+    broadcast(hub, () => m("all"));
+    expect(frames).toHaveLength(1);
+    expect(registry.ready()).toEqual([]);
+  });
+
+  test("a message over MESSAGE_BYTES is not sent", () => {
+    const never = { setTimeout: () => 0, clearTimeout: () => undefined };
+    const registry = new Registry(
+      never,
+      () => T,
+      () => undefined,
+    );
+    registry.add({ conn: CONN_A, exp: T + 1000 });
+    const frames: FrameToRelay[] = [];
+    const big = { ...m("big"), p: { text: "x".repeat(MESSAGE_BYTES) } } as unknown as ServerMessage;
+    linkSend(registry, (f) => void frames.push(f))(CONN_A, big);
+    expect(frames).toEqual([]);
   });
 });

@@ -1,7 +1,9 @@
 import {
   DELTA_BYTES,
+  MESSAGE_BYTES,
   PROTOCOL_VERSION,
   type ClientMessage,
+  type FrameToRelay,
   type ServerMessage,
 } from "@tars/protocol";
 import { cutUtf8, utf8Bytes } from "../agent/bytes.ts";
@@ -9,20 +11,32 @@ import type { Frontend, FrontendEvent } from "../agent/frontend.ts";
 import type { ApprovalRecord } from "../agent/types.ts";
 import type { Registry, Timers } from "./access.ts";
 import type { Notifier } from "./notify.ts";
-import { toWire, wireApproval, type UsageFigures } from "./wire.ts";
+import { toWire, wireApproval, wireBytes, type UsageFigures } from "./wire.ts";
 
 const DELTA_EVERY_MS = 80;
 
 /** What a frontend and dispatch share: who is connected, and how to reach them. */
 export interface Hub {
   readonly registry: Registry;
-  /** To one registered connection; nothing goes to a connection that is not registered. */
+  /** To one connection that is registered and within its login; to any other, nothing. */
   send(conn: string, m: ServerMessage): void;
   newId(): string;
   readonly timers: Timers;
   readonly notifier: Notifier;
   usageOf(usageId: number): UsageFigures | undefined;
 }
+
+/**
+ * Hub.send over the link. The login is checked on every send: the expiry timer may not have run
+ * yet on a busy event loop. Bytes over the message limit would be refused by the relay and the
+ * page, so they are not sent either.
+ */
+export const linkSend =
+  (registry: Registry, sendFrame: (f: FrameToRelay) => void): Hub["send"] =>
+  (conn, m) => {
+    if (!registry.valid(conn) || wireBytes(m) > MESSAGE_BYTES) return;
+    sendFrame({ t: "msg", to: conn, m });
+  };
 
 type Body<K extends ServerMessage["kind"]> = Extract<ServerMessage, { kind: K }>["p"];
 

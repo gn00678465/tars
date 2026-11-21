@@ -1,7 +1,7 @@
 import type { ServerMessage } from "@tars/protocol";
 import { Registry, type Timers } from "../../../src/features/serve/access.ts";
 import { Notifier, type NotifyDeps } from "../../../src/features/serve/notify.ts";
-import type { Hub } from "../../../src/features/serve/remote-frontend.ts";
+import { linkSend, type Hub } from "../../../src/features/serve/remote-frontend.ts";
 import type { Log, LogEvent, LogFields } from "../../../src/features/agent/log.ts";
 import type { ApprovalRecord } from "../../../src/features/agent/types.ts";
 
@@ -87,10 +87,9 @@ export function testHub(opts: {
     usageOf: () => ({ inputTokens: 10, outputTokens: 2, costUsd: 0.01, costSource: "table" }),
     sent,
     drops,
-    send(conn, m) {
-      if (registry.get(conn) === undefined) return;
-      sent.push({ conn, m });
-    },
+    send: linkSend(registry, (f) => {
+      if (f.t === "msg") sent.push({ conn: f.to, m: f.m as ServerMessage });
+    }),
     to: (conn, kind) =>
       sent
         .filter((s) => s.conn === conn && (kind === undefined || s.m.kind === kind))

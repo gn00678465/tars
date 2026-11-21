@@ -16,10 +16,10 @@ import { loadScript, scriptsLayout } from "../script/library.ts";
 import { secretName } from "../script/secret.ts";
 import { wikiSpend } from "../wiki/db.ts";
 import { AccessVerifier, realTimers, Registry, type Timers } from "./access.ts";
-import { Dispatch, DROP, fits } from "./dispatch.ts";
+import { Dispatch, DROP } from "./dispatch.ts";
 import { bunSocket, Link, type LinkInit, type LinkSocket } from "./link.ts";
 import { NOTIFY_TIMEOUT_MS, Notifier } from "./notify.ts";
-import type { Hub } from "./remote-frontend.ts";
+import { linkSend, type Hub } from "./remote-frontend.ts";
 import {
   readStatus,
   STATUS_EVERY_MS,
@@ -177,10 +177,7 @@ export async function serve(ctx: ServeContext): Promise<number> {
       notifier,
       newId: () => crypto.randomUUID(),
       usageOf: usageFigures(db),
-      send: (conn, m) => {
-        if (registry.get(conn) === undefined || !fits(m)) return;
-        link?.send({ t: "msg", to: conn, m });
-      },
+      send: linkSend(registry, (f) => link?.send(f)),
     };
     const verifier = new AccessVerifier(
       {

@@ -160,9 +160,10 @@ export class Registry {
     for (const conn of this.regs.keys()) this.remove(conn);
   }
 
-  /** Connections that said hello: the ones every broadcast goes to. */
+  /** Connections that said hello and are within their login: the ones a broadcast goes to. */
   ready(): Registration[] {
-    return [...this.regs.values()].filter((r) => r.hello);
+    const now = this.now();
+    return [...this.regs.values()].filter((r) => r.hello && now < r.exp);
   }
 
   get size(): number {

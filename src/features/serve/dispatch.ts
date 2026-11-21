@@ -2,7 +2,6 @@ import type { Database } from "bun:sqlite";
 import {
   checkClient,
   ID_CHARS,
-  MESSAGE_BYTES,
   PROTOCOL_VERSION,
   SNAPSHOT_BYTES,
   SNAPSHOT_ITEMS,
@@ -494,6 +493,3 @@ function idOf(raw: unknown): string | undefined {
   const id = (raw as { id?: unknown } | null)?.id;
   return typeof id === "string" && id.length > 0 && id.length <= ID_CHARS ? id : undefined;
 }
-
-/** Bytes over the message limit are not sent: the relay and the page would refuse them. */
-export const fits = (m: ServerMessage) => wireBytes(m) <= MESSAGE_BYTES;
