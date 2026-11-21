@@ -26,6 +26,8 @@ const approval: WireApproval = {
 };
 
 const card = (over: Partial<Card> = {}): Card => ({ approval, ...over });
+const args = (root: HTMLElement) =>
+  [...root.querySelectorAll("ol.argv li")].map((li) => li.textContent);
 
 test("the nine fields, as text", async () => {
   const { root } = await render(
@@ -46,7 +48,7 @@ test("the nine fields, as text", async () => {
   const values = [...root.querySelectorAll("dd")].map((d) => d.textContent);
   expect(values[0]).toBe("執行腳本");
   expect(values[1]).toBe("push（版本 v1）");
-  expect(values[2]).toBe("--text <script>alert(1)</script>");
+  expect(args(root)).toEqual(['"--text"', '"<script>alert(1)</script>"']);
   expect(values[3]).toBe("推播一則通知");
   expect(values[4]).toBe("寫外部");
   expect(values[5]).toBe("api.example.com、任意主機");
@@ -104,4 +106,61 @@ test("a click decides; once deciding or resolved, both buttons are off", async (
   );
   expect(button(root, "核准").disabled).toBe(true);
   expect(root.textContent).toContain("已核准（在別處決定）");
+});
+
+test("each argument on its own: where one ends is visible", async () => {
+  const one = await render(
+    <ApprovalCard
+      card={card({ approval: { ...approval, argv: ["send", "--to", "alice --amount 100"] } })}
+      localNow={undefined}
+      onDecide={() => undefined}
+    />,
+  );
+  const many = await render(
+    <ApprovalCard
+      card={card({
+        approval: { ...approval, argv: ["send", "--to", "alice", "--amount", "100"] },
+      })}
+      localNow={undefined}
+      onDecide={() => undefined}
+    />,
+  );
+  expect(args(one.root)).toEqual(['"send"', '"--to"', '"alice --amount 100"']);
+  expect(args(many.root)).toEqual(['"send"', '"--to"', '"alice"', '"--amount"', '"100"']);
+});
+
+test("empty, blank and invisible characters are spelled out", async () => {
+  const { root } = await render(
+    <ApprovalCard
+      card={card({
+        approval: {
+          ...approval,
+          argv: [
+            "",
+            " ",
+            "a\nb",
+            'say "hi"',
+            "x\u200by",
+            "\u202eevil",
+            "\u00a0",
+            "\u0085",
+            "\u{e0041}",
+          ],
+        },
+      })}
+      localNow={undefined}
+      onDecide={() => undefined}
+    />,
+  );
+  expect(args(root)).toEqual([
+    '""',
+    '" "',
+    '"a\\nb"',
+    '"say \\"hi\\""',
+    '"x\\u200by"',
+    '"\\u202eevil"',
+    '"\\u00a0"',
+    '"\\u0085"',
+    '"\\u{e0041}"',
+  ]);
 });

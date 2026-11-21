@@ -46,6 +46,11 @@ main {
   white-space: pre-wrap;
 }
 
+.approval ol.argv {
+  margin: 0;
+  padding-left: 2rem;
+}
+
 button {
   font: inherit;
   min-height: 2.75rem;

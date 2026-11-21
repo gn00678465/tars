@@ -14,6 +14,21 @@ const RESOLVED: Record<string, string> = {
   cancelled: "已取消",
 };
 
+// Everything that prints as nothing or as something else: control and format characters
+// (zero-width, bidi overrides), line and paragraph separators, and every space but U+0020.
+const UNSEEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/gu;
+
+/**
+ * One argument as the script receives it: quoted, so its ends, an empty one and inner spaces
+ * show, and anything unseen written as its \u code (A13: the card is what runs).
+ */
+export function argText(arg: string): string {
+  return JSON.stringify(arg).replace(UNSEEN, (c) => {
+    const n = c.codePointAt(0) as number;
+    return n > 0xffff ? `\\u{${n.toString(16)}}` : `\\u${n.toString(16).padStart(4, "0")}`;
+  });
+}
+
 export function ApprovalCard(props: {
   card: Card;
   /** The local end's clock now; undefined before its first status. */
@@ -23,10 +38,19 @@ export function ApprovalCard(props: {
   const { approval: a, resolved, deciding } = props.card;
   const done = resolved !== undefined || deciding !== undefined;
   const left = props.localNow === undefined ? undefined : a.expiresAt - props.localNow;
-  const rows: [string, string][] = [
+  const rows: [string, React.ReactNode][] = [
     ["動作", a.action === "run_script" ? "執行腳本" : a.action],
     ["對象", `${a.script}（版本 ${a.version}）`],
-    ["內容", a.argv.join(" ")],
+    [
+      "內容",
+      <ol className="argv">
+        {a.argv.map((arg, i) => (
+          <li key={i}>
+            <code>{argText(arg)}</code>
+          </li>
+        ))}
+      </ol>,
+    ],
     ["腳本說明", a.summary],
     ["影響", EFFECTS[a.effects] ?? a.effects],
     [
