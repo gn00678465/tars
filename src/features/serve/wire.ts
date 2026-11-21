@@ -8,7 +8,7 @@ import {
   type WireItem,
   type WireRunning,
 } from "@tars/protocol";
-import { cutUtf8, tailUtf8, utf8Bytes } from "../agent/bytes.ts";
+import { utf8Bytes } from "../agent/bytes.ts";
 import type { Conversation } from "../agent/store.ts";
 import type { ApprovalRecord, Item } from "../agent/types.ts";
 
@@ -31,8 +31,54 @@ export const usageFigures =
       )
       .get(usageId) as UsageFigures | null) ?? undefined;
 
+/** A character's bytes once JSON.stringify writes it inside a string. */
+function jsonCost(c: string): number {
+  const n = c.codePointAt(0) as number;
+  if (
+    n === 0x22 ||
+    n === 0x5c ||
+    n === 0x08 ||
+    n === 0x09 ||
+    n === 0x0a ||
+    n === 0x0c ||
+    n === 0x0d
+  )
+    return 2;
+  // Other control characters and a lone surrogate come out as \uXXXX.
+  if (n < 0x20 || (n >= 0xd800 && n <= 0xdfff)) return 6;
+  return n < 0x80 ? 1 : n < 0x800 ? 2 : n < 0x10000 ? 3 : 4;
+}
+
+/**
+ * The limits count bytes as the message carries them, escapes included: counted on the raw
+ * text, a run of control characters grows sixfold, and the newest item alone could outgrow a
+ * snapshot, which then has no seq to page back from. Cut on a character boundary.
+ */
+function jsonHead(text: string, max: number): string {
+  let used = 0;
+  let end = 0;
+  for (const c of text) {
+    used += jsonCost(c);
+    if (used > max) break;
+    end += c.length;
+  }
+  return text.slice(0, end);
+}
+
+function jsonTail(text: string, max: number): string {
+  const chars = Array.from(text);
+  let used = 0;
+  let start = chars.length;
+  while (start > 0) {
+    used += jsonCost(chars[start - 1] as string);
+    if (used > max) break;
+    start--;
+  }
+  return chars.slice(start).join("");
+}
+
 const cut = (text: string, max: number) => {
-  const kept = cutUtf8(text, max);
+  const kept = jsonHead(text, max);
   return { text: kept, truncated: kept.length < text.length };
 };
 
@@ -119,9 +165,9 @@ export const wireApproval = (a: ApprovalRecord): WireApproval => ({
   expiresAt: a.expiresAt,
 });
 
-/** The running text's last RUNNING_TEXT_BYTES, cut on a character boundary. */
+/** The running text's last RUNNING_TEXT_BYTES as JSON writes them. */
 export function wireRunning(turn: string, text: string): WireRunning {
-  const tail = tailUtf8(text, RUNNING_TEXT_BYTES);
+  const tail = jsonTail(text, RUNNING_TEXT_BYTES);
   return { turn, text: tail, truncated: tail.length < text.length };
 }
 

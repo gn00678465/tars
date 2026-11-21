@@ -128,6 +128,7 @@ async function setup(): Promise<Setup> {
   return s;
 }
 
+const wireBytesOf = (x: unknown) => Buffer.byteLength(JSON.stringify(x));
 const reply = (s: Setup, conn: string, re: string) => s.hub.to(conn).find((m) => m.re === re);
 const reason = (m: ServerMessage | undefined) => (m?.p as { reason?: string } | undefined)?.reason;
 const allValid = (s: Setup) => {
@@ -443,9 +444,13 @@ describe("Dispatch: approvals while a turn runs", () => {
 });
 
 describe("Dispatch: snapshots", () => {
-  async function withItems(n: number, size: number) {
+  const withItems = (n: number, size: number) =>
+    withReplies(Array.from({ length: n }, (_, i) => `${i}:${"字".repeat(size)}`));
+
+  async function withReplies(replies: string[]) {
     const s = await setup();
-    s.h.fake.reply(...Array.from({ length: n }, (_, i) => text(`${i}:${"字".repeat(size)}`)));
+    const n = replies.length;
+    s.h.fake.reply(...replies.map((r) => text(r)));
     let conv: string | undefined;
     for (let i = 0; i < n; i++) {
       const out = await s.h.engine.runTurn(
@@ -491,6 +496,21 @@ describe("Dispatch: snapshots", () => {
       Buffer.byteLength(JSON.stringify((snap.p as { items: unknown[] }).items)),
     ).toBeLessThanOrEqual(SNAPSHOT_BYTES);
     expect((snap.p as { more: boolean }).more).toBe(true);
+  });
+
+  test("a newest item that JSON escapes to over the budget still comes, so paging can go on", async () => {
+    const { s, conv } = await withReplies(["早的", "\u0001".repeat(60_000)]);
+    const id = await s.msg(CONN_A, "conv.open", {}, { conv });
+    const snap = reply(s, CONN_A, id)!;
+    const p = snap.p as {
+      items: { seq: number; kind: string; truncated?: boolean }[];
+      more: boolean;
+    };
+    expect(p.items.at(-1)).toMatchObject({ kind: "assistant", truncated: true });
+    expect(wireBytesOf(p.items)).toBeLessThanOrEqual(SNAPSHOT_BYTES);
+    const older = await s.msg(CONN_A, "conv.open", { before: p.items[0]!.seq }, { conv });
+    expect(reply(s, CONN_A, older)?.kind).toBe("conv.snapshot");
+    allValid(s);
   });
 
   test("an unknown conversation is not_found; conv.list lists them", async () => {

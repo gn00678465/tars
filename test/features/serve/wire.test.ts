@@ -173,6 +173,43 @@ describe("toWire: cutting by bytes", () => {
     expect(input.truncated).toBe(true);
   });
 
+  // JSON writes each of these as six bytes: a text within the byte limit can be six times it.
+  const encoded = (s: string) => Buffer.byteLength(JSON.stringify(s)) - 2;
+  const CTRL = "\u0001";
+
+  test("the limits count the text as JSON writes it, so escapes cannot blow it up", () => {
+    const item = checked(
+      it("assistant", { text: CTRL.repeat(60_000), state: "complete", native: null }),
+    );
+    expect(encoded(item.text as string)).toBeLessThanOrEqual(ITEM_TEXT_BYTES);
+    expect(item.truncated).toBe(true);
+    const out = checked(
+      it("tool_result", {
+        callId: "c",
+        status: "done",
+        text: CTRL.repeat(10_000),
+        truncated: false,
+      }),
+    );
+    expect(encoded(out.text as string)).toBeLessThanOrEqual(TOOL_TEXT_BYTES);
+    const input = checked(
+      it("tool_call", {
+        callId: "c",
+        providerCallId: "p",
+        name: "tars",
+        input: { a: CTRL.repeat(10_000) },
+      }),
+    );
+    expect(encoded(input.input as string)).toBeLessThanOrEqual(TOOL_TEXT_BYTES);
+    const run = wireRunning(T, `head${CTRL.repeat(60_000)}tail`);
+    expect(encoded(run.text)).toBeLessThanOrEqual(RUNNING_TEXT_BYTES);
+    expect(run.text.endsWith("tail")).toBe(true);
+    // Quotes, backslashes and newlines are two bytes each; a character is never split.
+    const mixed = checked(it("user", { text: `"\\\n${"中".repeat(30_000)}😀`.repeat(2) }));
+    expect(encoded(mixed.text as string)).toBeLessThanOrEqual(ITEM_TEXT_BYTES);
+    expect((mixed.text as string).isWellFormed()).toBe(true);
+  });
+
   test("the running text keeps only its tail", () => {
     const r = wireRunning(T, `${"a".repeat(10)}${"中".repeat(RUNNING_TEXT_BYTES)}`);
     expect(Buffer.byteLength(r.text)).toBeLessThanOrEqual(RUNNING_TEXT_BYTES);
