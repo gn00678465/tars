@@ -321,13 +321,18 @@ export interface Attachment {
  */
 export function rebuild(
   sockets: readonly { readonly attachment: Attachment; readonly autoResponseAt: number | null }[],
-  stored: { readonly lastSeenAt?: number; readonly localSince?: number },
+  stored: {
+    readonly lastSeenAt?: number;
+    readonly localSince?: number;
+    /** Sockets retired whose attachment could not be rewritten (see Relay.retire). */
+    readonly retired?: readonly string[];
+  },
 ): RelayState {
   let local: RelayState["local"];
   let challenger: RelayState["challenger"];
   const browsers: string[] = [];
   for (const { attachment: a, autoResponseAt } of sockets) {
-    if (a.role === "retired") continue;
+    if (a.role === "retired" || stored.retired?.includes(a.conn) === true) continue;
     if (a.role === "browser") browsers.push(a.conn);
     else if (a.role === "challenger")
       challenger = { sock: a.conn, deadline: a.connectedAt + PROBE_MS };

@@ -31,8 +31,15 @@ const B = "22222222-2222-4222-8222-222222222222";
 class FakeSocket {
   sent: unknown[] = [];
   closed: number | undefined;
-  constructor(private attachment: Attachment) {}
+  /** The peer closed it: from now on it refuses attachments, as workerd may. */
+  gone = false;
+  constructor(
+    private attachment: Attachment,
+    private readonly refusesWhenClosed = false,
+  ) {}
   serializeAttachment(a: Attachment) {
+    if (this.refusesWhenClosed && (this.gone || this.closed !== undefined))
+      throw new TypeError("WebSocket is closed");
     this.attachment = a;
   }
   deserializeAttachment() {
@@ -54,10 +61,16 @@ function relay(sockets: FakeSocket[]) {
     getWebSockets: () => sockets,
     getWebSocketAutoResponseTimestamp: () => null,
     storage: {
-      get: (keys: string[]) =>
-        Promise.resolve(new Map(keys.filter((k) => stored.has(k)).map((k) => [k, stored.get(k)]))),
-      put: (o: Record<string, unknown>) => {
-        for (const [k, v] of Object.entries(o)) stored.set(k, v);
+      // Like DurableObjectStorage: one key gives its value, an array of keys a Map.
+      get: (keys: string | string[]) =>
+        Promise.resolve(
+          typeof keys === "string"
+            ? stored.get(keys)
+            : new Map(keys.filter((k) => stored.has(k)).map((k) => [k, stored.get(k)])),
+        ),
+      put: (o: string | Record<string, unknown>, value?: unknown) => {
+        if (typeof o === "string") stored.set(o, value);
+        else for (const [k, v] of Object.entries(o)) stored.set(k, v);
         return Promise.resolve();
       },
       setAlarm: () => Promise.resolve(),
@@ -171,5 +184,65 @@ describe("a socket already handled or replaced: its late close or error does not
     await error(l);
     expect(stored.get("lastSeenAt")).toBe(seen);
     expect(offline(b)).toHaveLength(1);
+  });
+});
+
+describe("a closed socket that refuses its attachment", () => {
+  const refusing = (conn: string, role: Attachment["role"], connectedAt = Date.now()) =>
+    new FakeSocket({ role, conn, connectedAt }, true);
+
+  test("its close still lets the waiting challenger in, all the way", async () => {
+    const l1 = refusing("L1", "local");
+    const l2 = refusing("L2", "challenger");
+    const a = browser(A);
+    const { close, error, stored } = relay([l1, l2, a]);
+    l1.gone = true;
+    await close(l1);
+    expect(l2.deserializeAttachment()).toMatchObject({ role: "local" });
+    expect(typeof stored.get("localSince")).toBe("number");
+    expect(a.closed).toBe(4000);
+    // The mark it refused is kept in storage instead: the error after it changes nothing.
+    const since = stored.get("localSince");
+    await error(l1);
+    expect(stored.get("localSince")).toBe(since);
+    expect(stored.has("lastSeenAt")).toBe(false);
+    expect(l2.deserializeAttachment()).toMatchObject({ role: "local" });
+  });
+
+  test("the alarm's hand-over closes the old one first and still completes; its late close does nothing", async () => {
+    const l1 = refusing("L1", "local");
+    const l2 = refusing("L2", "challenger", Date.now() - 60_000);
+    const a = browser(A);
+    const { r, close, stored } = relay([l1, l2, a]);
+    await r.alarm();
+    expect(l1.closed).toBe(4001);
+    expect(l2.deserializeAttachment()).toMatchObject({ role: "local" });
+    expect(typeof stored.get("localSince")).toBe("number");
+    expect(a.closed).toBe(4000);
+    const since = stored.get("localSince");
+    await close(l1);
+    expect(stored.get("localSince")).toBe(since);
+    expect(stored.has("lastSeenAt")).toBe(false);
+    expect(l2.deserializeAttachment()).toMatchObject({ role: "local" });
+  });
+
+  test("a browser's close then error: the local end hears of it once", async () => {
+    const l = local("L1");
+    const a = refusing(A, "browser");
+    const { close, error } = relay([l, a]);
+    a.gone = true;
+    await close(a);
+    await error(a);
+    expect(l.sent).toEqual([{ t: "close", conn: A }]);
+  });
+
+  test("anything else that throws is not swallowed", async () => {
+    const l = local("L1");
+    const c = local("L2", "challenger");
+    c.serializeAttachment = () => {
+      throw new Error("storage broke");
+    };
+    const { close } = relay([l, c]);
+    await expect(close(l)).rejects.toThrow("storage broke");
   });
 });

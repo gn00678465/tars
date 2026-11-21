@@ -98,6 +98,7 @@ export class Relay extends DurableObject<Env> {
   private async closed(ws: WebSocket): Promise<void> {
     const a = attachmentOf(ws);
     if (a === undefined || a.role === "retired") return;
+    if ((await this.retiredIds()).includes(a.conn)) return;
     // route matches a close against the state that still holds the socket, so it is put back in
     // whether or not getWebSockets lists it during its own close handler.
     const state = await this.state(ws);
@@ -107,16 +108,33 @@ export class Relay extends DurableObject<Env> {
         ? { type: "browser.close", conn: a.conn }
         : { type: "local.close", sock: a.conn, now: Date.now() },
     );
+    await this.retire(ws, a);
+  }
+
+  /**
+   * Marks a socket as done with. Its attachment is the first place; workerd may refuse to write
+   * one on a closed socket (unverified), and then its id goes to storage, which rebuild and
+   * closed() read as well. Only this write is allowed to fail: a hand-over must not stop half
+   * way because the socket it replaces is already gone.
+   */
+  private async retire(ws: WebSocket, a: Attachment): Promise<void> {
     try {
       ws.serializeAttachment({ ...a, role: "retired" } satisfies Attachment);
     } catch {
-      // Unverified whether workerd accepts this on a closed socket; if not, a second event for
-      // it may repeat this close's effects.
+      // Only ids still among the sockets are kept, so the list does not grow.
+      const listed = new Set(this.ctx.getWebSockets().map((s) => attachmentOf(s)?.conn));
+      const kept = (await this.retiredIds()).filter((id) => listed.has(id));
+      await this.ctx.storage.put("retired", [...kept, a.conn]);
     }
+  }
+
+  private async retiredIds(): Promise<string[]> {
+    return (await this.ctx.storage.get<string[]>("retired")) ?? [];
   }
 
   private async state(closing?: WebSocket) {
     const stored = await this.ctx.storage.get<number>([...STORE_KEYS]);
+    const retired = await this.retiredIds();
     const others = this.ctx.getWebSockets().filter((ws) => ws !== closing);
     const sockets = (closing === undefined ? others : [...others, closing]).flatMap((ws) => {
       const attachment = attachmentOf(ws);
@@ -134,6 +152,7 @@ export class Relay extends DurableObject<Env> {
     return rebuild(sockets, {
       ...(lastSeenAt === undefined ? {} : { lastSeenAt }),
       ...(localSince === undefined ? {} : { localSince }),
+      retired,
     });
   }
 
@@ -166,8 +185,9 @@ export class Relay extends DurableObject<Env> {
         case "tag": {
           const ws = find(action.sock);
           const a = ws === undefined ? undefined : attachmentOf(ws);
-          if (ws !== undefined && a !== undefined)
-            ws.serializeAttachment({ ...a, role: action.role, stale: action.stale });
+          if (ws === undefined || a === undefined) break;
+          if (action.role === "retired") await this.retire(ws, a);
+          else ws.serializeAttachment({ ...a, role: action.role, stale: action.stale });
           break;
         }
         case "alarm":
