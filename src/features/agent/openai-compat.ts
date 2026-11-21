@@ -382,16 +382,18 @@ function parseArguments(args: string): unknown {
 }
 
 const amount = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
+const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 /** An optional field: undefined when absent (undefined or null), null when present but invalid. */
-const optional = (v: unknown): number | undefined | null =>
-  v === undefined || v === null ? undefined : amount(v) ? v : null;
+const optional = (v: unknown, valid: (v: unknown) => v is number): number | undefined | null =>
+  v === undefined || v === null ? undefined : valid(v) ? v : null;
 
 /**
  * undefined when the usage cannot price the request: the caller then settles it as an estimate
- * that keeps its reservation, rather than at zero. Output tokens include thinking for every
- * provider. Gemini's completion_tokens leaves its thinking out and total − prompt puts it back
- * (P2 item 4), so without total_tokens Gemini's thinking is unknown. OpenRouter's reasoning
- * tokens are already inside completion_tokens.
+ * that keeps its reservation, rather than at zero. Token counts are non-negative safe integers
+ * that agree with each other: the cache counts are parts of the prompt, OpenRouter's reasoning a
+ * part of the completion. Output tokens include thinking for every provider. Gemini's
+ * completion_tokens leaves its thinking out and total − prompt puts it back (P2 item 4), so
+ * without a total that holds both, Gemini's thinking is unknown.
  */
 export function usageOf(
   provider: CompatProvider,
@@ -399,21 +401,21 @@ export function usageOf(
 ): { usage: Usage; costUsd?: number } | undefined {
   const prompt = u.prompt_tokens;
   const completion = u.completion_tokens;
-  const total = optional(u.total_tokens);
-  const cached = optional(u.prompt_tokens_details?.cached_tokens);
-  const written = optional(u.prompt_tokens_details?.cache_write_tokens);
-  const reasoning = optional(u.completion_tokens_details?.reasoning_tokens);
-  const cost = provider === "openrouter" ? optional(u.cost) : undefined;
-  if (!amount(prompt) || !amount(completion)) return undefined;
+  const total = optional(u.total_tokens, count);
+  const cached = optional(u.prompt_tokens_details?.cached_tokens, count);
+  const written = optional(u.prompt_tokens_details?.cache_write_tokens, count);
+  const reasoning = optional(u.completion_tokens_details?.reasoning_tokens, count);
+  const cost = provider === "openrouter" ? optional(u.cost, amount) : undefined;
+  if (!count(prompt) || !count(completion)) return undefined;
   if (total === null || cached === null || written === null || reasoning === null || cost === null)
     return undefined;
-  if (provider === "gemini" && total === undefined) return undefined;
-  const outputTokens =
-    provider === "gemini" && total !== undefined
-      ? Math.max(completion, total - prompt)
-      : completion;
+  if ((cached ?? 0) + (written ?? 0) > prompt) return undefined;
+  if (provider === "openrouter" && (reasoning ?? 0) > completion) return undefined;
+  if (provider === "gemini" && (total === undefined || total < prompt + completion))
+    return undefined;
+  const outputTokens = provider === "gemini" && total !== undefined ? total - prompt : completion;
   const usage: Usage = {
-    uncachedInputTokens: Math.max(0, prompt - (cached ?? 0) - (written ?? 0)),
+    uncachedInputTokens: prompt - (cached ?? 0) - (written ?? 0),
     cacheReadTokens: cached ?? 0,
     cacheWriteTokens: written ?? 0,
     outputTokens,

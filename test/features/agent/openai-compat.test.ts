@@ -350,6 +350,68 @@ describe("usage", () => {
     expect(usageOf("openrouter", raw)).toBeUndefined();
   });
 
+  const MAX = Number.MAX_SAFE_INTEGER;
+  test.each([
+    ["openrouter", "a fractional count", { prompt_tokens: 0.1, completion_tokens: 0.2 }],
+    ["openrouter", "a count past the safe range", { prompt_tokens: MAX + 1, completion_tokens: 1 }],
+    ["openrouter", "a huge float", { prompt_tokens: 1e308, completion_tokens: 1 }],
+    [
+      "openrouter",
+      "cached above the prompt",
+      { prompt_tokens: 10, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 11 } },
+    ],
+    [
+      "openrouter",
+      "cached and written together above the prompt",
+      {
+        prompt_tokens: 10,
+        completion_tokens: 1,
+        prompt_tokens_details: { cached_tokens: 6, cache_write_tokens: 5 },
+      },
+    ],
+    [
+      "openrouter",
+      "reasoning above the completion",
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        completion_tokens_details: { reasoning_tokens: 6 },
+      },
+    ],
+    [
+      "openrouter",
+      "a fractional reasoning count",
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        completion_tokens_details: { reasoning_tokens: 1.5 },
+      },
+    ],
+    [
+      "gemini",
+      "total below the prompt",
+      { prompt_tokens: 100, completion_tokens: 1, total_tokens: 1 },
+    ],
+    [
+      "gemini",
+      "total below prompt + completion",
+      { prompt_tokens: 100, completion_tokens: 20, total_tokens: 110 },
+    ],
+    ["gemini", "a fractional total", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2.5 }],
+  ] as const)("%s, %s: inconsistent, no usage", (provider, _, raw) => {
+    expect(usageOf(provider, raw)).toBeUndefined();
+  });
+
+  test("the largest safe counts that agree are still priced", () => {
+    expect(
+      usageOf("openrouter", { prompt_tokens: MAX, completion_tokens: 0 })?.usage
+        .uncachedInputTokens,
+    ).toBe(MAX);
+    expect(
+      usageOf("gemini", { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 })?.usage,
+    ).toMatchObject({ outputTokens: 20, thinkingTokens: 0 });
+  });
+
   test("null details and a null cost count as absent", () => {
     expect(
       usageOf("openrouter", {

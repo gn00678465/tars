@@ -1136,6 +1136,24 @@ describe("compatible providers", () => {
     });
   });
 
+  test("usage that contradicts itself: estimated with a notice, not priced", async () => {
+    const h = await compat();
+    h.gemini.reply({
+      kind: "message",
+      text: "x",
+      rawUsage: { prompt_tokens: 100, completion_tokens: 1, total_tokens: 1 },
+    });
+    h.openrouter.reply({
+      kind: "message",
+      text: "y",
+      rawUsage: { prompt_tokens: 0.1, completion_tokens: 0.2 },
+    });
+    for (const ref of [GEMINI, OPENROUTER])
+      expect(ended(await send(h, ref, "hi")).state).toBe("completed");
+    expect(usageRows(h).map((r) => r.state)).toEqual(["estimated", "estimated"]);
+    expect(h.frontend.notices().filter((n) => n === "usage_missing")).toHaveLength(2);
+  });
+
   test("the answer's items and its estimated row are written in one transaction", async () => {
     const h = await compat();
     const writer = await openDb(h.paths);
