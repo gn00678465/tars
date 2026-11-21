@@ -266,13 +266,14 @@ async function* streamChat(
       { signal },
     )) as unknown as AsyncIterable<RawChunk>;
     seen.responded = true;
+    const chunks = sdkChunks(stream, seen);
     let text = "";
     let thinking = false;
     let finish: string | undefined;
     let usage: RawUsage | undefined;
     const calls = new Map<number, PartialCall>();
     let callBytes = 0;
-    for await (const chunk of stream) {
+    for await (const chunk of chunks) {
       if (!seen.receivedStart) {
         seen.receivedStart = true;
         yield { type: "start" };
@@ -357,6 +358,27 @@ async function* streamChat(
     };
   } catch (err) {
     throw toProviderError(err, provider, signal, seen, apiKey);
+  }
+}
+
+/**
+ * The SDK's stream may throw what is not an OpenAIError: a SyntaxError for an event that is not
+ * JSON, or a body read error. Caught here, where it can only come from the SDK and not from this
+ * file, it is a broken stream like any other and goes through the failure settlement.
+ */
+async function* sdkChunks(
+  stream: AsyncIterable<RawChunk>,
+  seen: { receivedStart: boolean; receivedContent: boolean },
+): AsyncGenerator<RawChunk> {
+  try {
+    for await (const chunk of stream) yield chunk;
+  } catch (err) {
+    if (err instanceof OpenAIError) throw err;
+    throw new ProviderError("connection", {
+      receivedStart: seen.receivedStart,
+      receivedContent: seen.receivedContent,
+      mayHaveRun: !seen.receivedStart,
+    });
   }
 }
 

@@ -1117,6 +1117,19 @@ describe("compatible providers", () => {
       if (row !== undefined) wholeReservation(row);
     });
 
+    test.each([false, true])(
+      "reasoning, an event that is not JSON (after a chunk: %p): a failed turn, the reservation kept",
+      async (afterChunk) => {
+        const h = await compat();
+        const bad = { kind: "bad_sse", afterChunk } as const;
+        h.openrouter.reply(bad, bad, bad);
+        expect(ended(await send(h, OPENROUTER, "hi")).state).toBe("failed");
+        const settled = usageRows(h);
+        expect(settled.map((r) => r.state)).toEqual(["estimated", "estimated", "estimated"]);
+        for (const r of settled) wholeReservation(r);
+      },
+    );
+
     test("not reasoning: the input only, as before", async () => {
       const h = await compat({ extraModels: [plain] });
       h.openrouter.reply(silent, silent, silent);

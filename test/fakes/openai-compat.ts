@@ -65,7 +65,9 @@ export type FakeCompatReply =
    * 200 and the headers, then no chunk at all: the body ends, or waits for the client to give
    * up (a model thinking before its first chunk).
    */
-  | { readonly kind: "silent"; readonly after: "close" | "wait" };
+  | { readonly kind: "silent"; readonly after: "close" | "wait" }
+  /** An event whose data is not JSON, first or after one good chunk. */
+  | { readonly kind: "bad_sse"; readonly afterChunk: boolean };
 
 export interface CompatRequest {
   readonly method: string;
@@ -256,6 +258,11 @@ function streamReply(mode: CompatMode, reply: FakeCompatReply, signal: AbortSign
       const send = (chunks: readonly Record<string, unknown>[]) => {
         for (const c of chunks) controller.enqueue(data(c));
       };
+      if (reply.kind === "bad_sse") {
+        if (reply.afterChunk) send([chunk({ role: "assistant", content: "" })]);
+        controller.enqueue(encoder.encode("data: {not json\n\n"));
+        return controller.close();
+      }
       if (reply.kind === "silent") {
         if (reply.after === "wait")
           await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()));

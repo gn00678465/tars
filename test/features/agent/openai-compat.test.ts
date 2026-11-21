@@ -833,6 +833,14 @@ describe("stream", () => {
     expect(evs.filter((e) => e.type === "thinking")).toHaveLength(1);
   });
 
+  test("an event that is not JSON is a broken stream, before the first chunk and after", async () => {
+    const before = await failure("openrouter", { kind: "bad_sse", afterChunk: false });
+    expect(before).toMatchObject({ kind: "connection", receivedStart: false, mayHaveRun: true });
+    const after = await failure("gemini", { kind: "bad_sse", afterChunk: true });
+    expect(after).toMatchObject({ kind: "connection", receivedStart: true });
+    expect(after.mayHaveRun).toBeUndefined();
+  });
+
   test("an error chunk mid-stream is a ProviderError", async () => {
     const err = await failure("openrouter", { kind: "stream_error", text: "half" });
     expect(err.receivedContent).toBe(true);
