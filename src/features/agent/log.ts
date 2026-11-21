@@ -1,3 +1,4 @@
+import type { ClientKind } from "@tars/protocol";
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ProviderErrorKind } from "./provider.ts";
@@ -70,6 +71,11 @@ export interface LogFields {
   /** The last 8 characters of a browser connection's id. */
   readonly connId?: string;
   readonly notifyKind?: "approval" | "connect" | "replaced";
+  /** Where a tars serve handler failed: the link frame, and the browser message's kind. */
+  readonly frame?: "open" | "close" | "msg";
+  readonly kind?: ClientKind;
+  /** An Error's name, word characters only: never its message, which may hold anything. */
+  readonly errorName?: string;
 }
 
 export type LinkState = "connecting" | "connected" | "keyring" | "replaced";

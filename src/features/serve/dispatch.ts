@@ -28,7 +28,12 @@ import { broadcast, message, RemoteFrontend, type Hub } from "./remote-frontend.
 import { toWire, wireApproval, wireBytes, wireConv, wireRunning } from "./wire.ts";
 
 /** Close codes the local end gives a browser connection. */
-export const DROP = { auth: 4003, keys: 4004 } as const;
+export const DROP = { auth: 4003, keys: 4004, flood: 4005 } as const;
+/**
+ * Frames one connection may have waiting. A page sends a few before its hello is answered;
+ * more is a page gone wrong, and an unbounded queue would hold its frames in memory.
+ */
+const QUEUE_FRAMES = 32;
 const RECONCILE_WAIT_MS = 5_000;
 const CONV_LIST = 500;
 
@@ -72,6 +77,9 @@ export class Dispatch {
   /** requestId → sha256 of its text, only between ack and the turn existing or being refused. */
   readonly pending = new Map<string, string>();
   private readonly order = new Map<string, Promise<void>>();
+  private readonly queued = new Map<string, number>();
+  /** Dropped for too many frames: the rest of its frames do nothing until the relay's close. */
+  private readonly flooded = new Set<string>();
   /** Which link connection the frames came over: a frame from an earlier one does nothing. */
   private generation = 0;
   private readonly epoch: string;
@@ -91,15 +99,41 @@ export class Dispatch {
   onFrame(frame: FrameToLocal): Promise<void> {
     if (frame.t === "probe") return Promise.resolve();
     const { conn } = frame;
+    if (this.flooded.has(conn)) {
+      if (frame.t === "close") this.flooded.delete(conn);
+      return Promise.resolve();
+    }
+    const queued = (this.queued.get(conn) ?? 0) + 1;
+    if (queued > QUEUE_FRAMES) {
+      this.flood(conn);
+      return Promise.resolve();
+    }
+    this.queued.set(conn, queued);
     const gen = this.generation;
     const next = (this.order.get(conn) ?? Promise.resolve()).then(() =>
-      gen === this.generation ? this.handle(frame, gen) : undefined,
+      gen === this.generation && !this.flooded.has(conn) ? this.handle(frame, gen) : undefined,
     );
     this.order.set(conn, next);
     void next.then(() => {
+      const left = (this.queued.get(conn) ?? 1) - 1;
+      if (left > 0) this.queued.set(conn, left);
+      else this.queued.delete(conn);
       if (this.order.get(conn) === next) this.order.delete(conn);
     });
     return next;
+  }
+
+  private flood(conn: string): void {
+    this.flooded.add(conn);
+    this.registry.remove(conn);
+    this.d.log.log("conn", {
+      state: "closed",
+      connId: store.shortId(conn),
+      code: DROP.flood,
+      count: QUEUE_FRAMES,
+    });
+    this.d.sendFrame({ t: "drop", conn, code: DROP.flood });
+    this.d.changed();
   }
 
   /**
@@ -109,6 +143,8 @@ export class Dispatch {
   reset(): void {
     this.generation++;
     this.order.clear();
+    this.queued.clear();
+    this.flooded.clear();
     this.registry.clear();
   }
 
@@ -121,8 +157,14 @@ export class Dispatch {
         this.d.log.log("conn", { state: "closed", connId: store.shortId(frame.conn) });
         this.d.changed();
       } else await this.message(frame.conn, frame.m);
-    } catch {
-      this.d.log.log("warning", {});
+    } catch (err) {
+      const kind = frame.t === "msg" ? checkClient(frame.m) : undefined;
+      this.d.log.log("warning", {
+        connId: store.shortId(frame.conn),
+        frame: frame.t,
+        ...(kind?.ok === true ? { kind: kind.value.kind } : {}),
+        ...errorName(err),
+      });
     }
   }
 
@@ -358,7 +400,13 @@ export class Dispatch {
     this.d.changed();
     this.ack(conn, m.id);
     // In the background: the next message (an approval, an abort) must not wait for this turn.
-    this.running = this.run(conn, current, text, conv).catch(() => this.d.log.log("warning", {}));
+    this.running = this.run(conn, current, text, conv).catch((err) =>
+      this.d.log.log("warning", {
+        connId: store.shortId(conn),
+        kind: "turn.submit",
+        ...errorName(err),
+      }),
+    );
   }
 
   private async run(
@@ -487,6 +535,11 @@ export class Dispatch {
     await Promise.race([this.running, this.d.sleep(ms)]);
   }
 }
+
+const errorName = (err: unknown) => {
+  const name = err instanceof Error ? err.name.slice(0, 32) : undefined;
+  return name !== undefined && /^\w+$/.test(name) ? { errorName: name } : {};
+};
 
 /** A refused message's id, to answer it with, when it has a usable one. */
 function idOf(raw: unknown): string | undefined {

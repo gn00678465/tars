@@ -23,6 +23,7 @@ import {
   manualTimers,
   recordedLog,
   testHub,
+  type RecordedLog,
   type ManualTimers,
   type TestHub,
 } from "./fixture.ts";
@@ -54,6 +55,7 @@ interface Setup {
   frames: FrameToRelay[];
   /** Finishes the checks waiting on jwt "held". */
   release(): void;
+  log: RecordedLog;
   db: Database;
   reconciled: string[];
   /** Sends a client message from `conn`. */
@@ -112,6 +114,7 @@ async function setup(): Promise<Setup> {
     release: () => {
       for (const done of held.splice(0)) done();
     },
+    log,
     db: h.db,
     reconciled,
     async msg(conn, kind, p, extra = {}) {
@@ -205,10 +208,38 @@ describe("Dispatch: connections", () => {
     expect(s.d.current).toBeUndefined();
   });
 
-  test("a failing handler is logged, not thrown", async () => {
+  test("a failing handler is logged, not thrown, with where it failed and nothing personal", async () => {
     const s = await setup();
     await s.open(CONN_A, "throw");
     expect(s.hub.registry.size).toBe(0);
+    expect(s.log.lines.filter((l) => l.event === "warning")).toEqual([
+      {
+        event: "warning",
+        fields: { connId: store.shortId(CONN_A), frame: "open", errorName: "Error" },
+      },
+    ]);
+  });
+
+  test("a connection with 32 frames waiting is dropped 4005; what it queued does nothing", async () => {
+    const s = await setup();
+    const waiting = [s.open(CONN_A, "held")];
+    for (let i = 0; i < 31; i++) waiting.push(s.msg(CONN_A, "hello", {}).then(() => undefined));
+    expect(s.frames).toEqual([]);
+    waiting.push(s.msg(CONN_A, "conv.list", {}).then(() => undefined));
+    waiting.push(s.msg(CONN_A, "conv.list", {}).then(() => undefined));
+    expect(s.frames).toEqual([{ t: "drop", conn: CONN_A, code: DROP.flood }]);
+    s.release();
+    await Promise.all(waiting);
+    expect(s.hub.registry.get(CONN_A)).toBeUndefined();
+    expect(s.hub.sent).toEqual([]);
+    expect(s.frames).toHaveLength(1);
+    expect(s.log.lines).toContainEqual({
+      event: "conn",
+      fields: { state: "closed", connId: store.shortId(CONN_A), code: DROP.flood, count: 32 },
+    });
+    // Another connection never waited on it.
+    await s.ready(CONN_B);
+    expect(s.hub.to(CONN_B).map((m) => m.kind)).toEqual(["hello", "status"]);
   });
 
   test("a message right behind its open waits for the check, not refused", async () => {
