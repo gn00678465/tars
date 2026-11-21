@@ -17,6 +17,8 @@ import { registerSecretCommands } from "./features/script/secret.ts";
 import { scriptRuntime } from "./features/script/runtime.ts";
 import { launch } from "./features/session/launch.ts";
 import { registerSessions, type SessionDeps } from "./features/session/session.ts";
+import { registerServe } from "./features/serve/command.ts";
+import { registerLink } from "./features/serve/link-command.ts";
 import { registerWikiCommands } from "./features/wiki/command.ts";
 
 export type Deps = InstallDeps &
@@ -105,16 +107,15 @@ Examples:
   registerSetupCommands(program, agent);
   registerModelsCommands(program, agent);
   registerCostCommands(program, agent);
-  registerChat(
-    program,
-    {
-      ...agent,
-      selfCommand: deps.selfCommand,
-      approveCommand: runtime.approveCommand,
-      signals: deps.signals,
-    },
-    exitWith,
-  );
+  const chat = {
+    ...agent,
+    selfCommand: deps.selfCommand,
+    approveCommand: runtime.approveCommand,
+    signals: deps.signals,
+  };
+  registerChat(program, chat, exitWith);
+  registerServe(program, chat, exitWith);
+  registerLink(program, chat, exitWith);
   registerWikiCommands(program, { ...agent, signals: deps.signals }, exitWith);
   return program;
 }
