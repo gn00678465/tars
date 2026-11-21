@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   parseServer,
@@ -387,6 +387,46 @@ describe("Dispatch: turns", () => {
       p: { turn: turn?.id },
     });
     allValid(s);
+  });
+
+  describe("a failure before the turn exists", () => {
+    async function failsThenRuns(s: Setup, fix: () => void) {
+      await s.msg(CONN_A, "turn.submit", { requestId: "r-x", text: "嗨" });
+      await s.d.running;
+      expect(s.hub.to(CONN_A, "turn").map((m) => m.p)).toEqual([
+        { requestId: "r-x", state: "failed" },
+      ]);
+      expect(s.d.current).toBeUndefined();
+      fix();
+      // The page's resend of the same request is taken as new, not answered from memory.
+      s.h.fake.reply(text("好"));
+      const again = await s.msg(CONN_A, "turn.submit", { requestId: "r-x", text: "嗨" });
+      expect(reply(s, CONN_A, again)).toMatchObject({ kind: "ack", p: {} });
+      await s.d.running;
+      expect(store.findTurnByRequest(s.db, "r-x")).toBeDefined();
+      allValid(s);
+    }
+
+    test("the notification it waits for throws", async () => {
+      const s = await setup();
+      await s.ready(CONN_A);
+      const idle = s.hub.notifier.idle.bind(s.hub.notifier);
+      let fail = true;
+      s.hub.notifier.idle = async () => {
+        if (fail) throw new Error("notify");
+        return idle();
+      };
+      await failsThenRuns(s, () => (fail = false));
+    });
+
+    test("config.toml cannot be read", async () => {
+      const s = await setup();
+      await s.ready(CONN_A);
+      const file = s.h.paths.configFile;
+      const good = readFileSync(file, "utf8");
+      writeFileSync(file, "[providers\n");
+      await failsThenRuns(s, () => writeFileSync(file, good));
+    });
   });
 
   test("continuing a conversation uses its own model; an unknown conversation is not_found", async () => {

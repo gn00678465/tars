@@ -458,22 +458,7 @@ export class Dispatch {
           requestId,
         };
       }
-      let out;
-      try {
-        out = await this.d.engine.runTurn(input, frontend, controller.signal);
-      } catch {
-        if (frontend.turnId === undefined) this.pending.delete(requestId);
-        this.d.hub.send(
-          conn,
-          message(
-            this.d.hub,
-            "turn",
-            { requestId, state: "failed" },
-            frontend.convId === undefined ? {} : { conv: frontend.convId },
-          ),
-        );
-        return;
-      }
+      const out = await this.d.engine.runTurn(input, frontend, controller.signal);
       if (out.kind === "rejected") {
         this.pending.delete(requestId);
         return this.rejected(conn, requestId, out.reason, conv?.id);
@@ -482,6 +467,26 @@ export class Dispatch {
         this.d.reconcile(input.provider).catch(() => undefined),
         this.d.sleep(RECONCILE_WAIT_MS),
       ]);
+    } catch (err) {
+      // From anywhere before the turn ended, waiting for a notification and reading config.toml
+      // included. Without a turn in the database the request is forgotten, so the page's resend
+      // runs it again instead of being acked from memory for ever.
+      if (store.findTurnByRequest(this.d.db, requestId) === undefined)
+        this.pending.delete(requestId);
+      this.d.hub.send(
+        conn,
+        message(
+          this.d.hub,
+          "turn",
+          { requestId, state: "failed" },
+          frontend.convId === undefined ? {} : { conv: frontend.convId },
+        ),
+      );
+      this.d.log.log("warning", {
+        connId: store.shortId(conn),
+        kind: "turn.submit",
+        ...errorName(err),
+      });
     } finally {
       frontend.dispose();
       if (this.current === current) this.current = undefined;
