@@ -26,6 +26,8 @@ export type Verdict =
 export class AccessVerifier {
   private keys: { set: ReturnType<typeof createLocalJWKSet>; at: number } | undefined;
   private lastFetch = -Infinity;
+  /** The download under way: checks that come while it runs wait for it, not for the next one. */
+  private fetching: Promise<boolean> | undefined;
 
   constructor(
     private readonly s: AccessSettings,
@@ -39,15 +41,21 @@ export class AccessVerifier {
 
   /** Fetches unless it did in the last minute; false when there are still no usable keys. */
   async refresh(): Promise<boolean> {
+    if (this.fetching !== undefined) return this.fetching;
     if (this.now() - this.lastFetch < FETCH_EVERY_MS) return this.available;
     this.lastFetch = this.now();
-    try {
-      const jwks = await this.fetchJson(this.s.certsUrl);
-      this.keys = { set: createLocalJWKSet(jwks as JSONWebKeySet), at: this.now() };
-    } catch {
-      // Kept as they were: still usable until they are a day old.
-    }
-    return this.available;
+    this.fetching = (async () => {
+      try {
+        const jwks = await this.fetchJson(this.s.certsUrl);
+        this.keys = { set: createLocalJWKSet(jwks as JSONWebKeySet), at: this.now() };
+      } catch {
+        // Kept as they were: still usable until they are a day old.
+      }
+      return this.available;
+    })().finally(() => {
+      this.fetching = undefined;
+    });
+    return this.fetching;
   }
 
   async verify(jwt: string): Promise<Verdict> {

@@ -57,6 +57,29 @@ describe("AccessVerifier", () => {
     });
   });
 
+  test("two checks while the first download of the keys runs: both wait for it, one fetch", async () => {
+    const a = await keyPair("k1");
+    let fetches = 0;
+    let arrive: () => void = () => undefined;
+    const v = new AccessVerifier(
+      { teamDomain: TEAM, aud: AUD, ownerEmail: OWNER, certsUrl: `https://${TEAM}/certs` },
+      async () => {
+        fetches++;
+        await new Promise<void>((done) => (arrive = done));
+        return { keys: [a.jwk] };
+      },
+      () => NOW,
+    );
+    const jwt = await sign(a);
+    const first = v.verify(jwt);
+    while (fetches === 0) await Bun.sleep(1);
+    const second = v.verify(jwt);
+    arrive();
+    expect((await first).ok).toBe(true);
+    expect((await second).ok).toBe(true);
+    expect(fetches).toBe(1);
+  });
+
   test("the email compares without case", async () => {
     const a = await keyPair("k1");
     const { v } = verifier(() => [a.jwk]);
