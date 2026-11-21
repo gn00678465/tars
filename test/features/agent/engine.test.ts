@@ -1136,6 +1136,28 @@ describe("compatible providers", () => {
     });
   });
 
+  test.each([
+    ["invalid JSON, far past the cut", `{"argv": ["script", "${"x".repeat(30000)}`],
+    ["a lot of whitespace", `{ "argv" : [ "cost" ]${" ".repeat(5000)}}`],
+    [
+      "escapes",
+      JSON.stringify({ argv: ["script", "run", "x"] }).replace("x", "\\u00e9".repeat(800)),
+    ],
+  ])("no usage, no reasoning, a call with %s: the bytes as received", async (_, args) => {
+    const { effortLevels: _l, ...plain } = { ...OPENROUTER_ENTRY, id: "vendor/plain" };
+    const h = await compat({ extraModels: [plain] });
+    h.openrouter.reply(
+      { kind: "message", toolCalls: [{ id: "p1", name: "tars", args }], usage: null },
+      compatText("done"),
+    );
+    expect(ended(await send(h, { provider: "openrouter", model: plain.id }, "go")).state).toBe(
+      "completed",
+    );
+    expect(usageRows(h)[0]?.output_tokens).toBe(
+      estimateTokens(utf8Bytes("tars") + utf8Bytes(args)),
+    );
+  });
+
   test("usage that contradicts itself: estimated with a notice, not priced", async () => {
     const h = await compat();
     h.gemini.reply({

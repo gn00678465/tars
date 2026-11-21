@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { APIConnectionError, APIConnectionTimeoutError, APIError, OpenAIError } from "openai";
+import { utf8Bytes } from "../../../src/features/agent/bytes.ts";
 import {
   createCompatAdapter,
   listGemini,
@@ -777,6 +778,19 @@ describe("stream", () => {
     expect(err).toMatchObject({ kind: "connection", receivedStart: true, receivedContent: true });
     const cut = await failure("gemini", { kind: "disconnect", text: "half" });
     expect(cut.kind).toBe("connection");
+  });
+
+  test("end carries the call bytes as received, dropped calls included", async () => {
+    const args = `{"argv": [${" ".repeat(100)}"cost"]}`;
+    const kept = await events("openrouter", compatCall("p1", "tars", args));
+    expect(endOf(kept).callBytes).toBe(utf8Bytes("tars") + utf8Bytes(args));
+    const cut = await events("openrouter", {
+      kind: "message",
+      toolCalls: [{ id: "p1", name: "tars", args: "{" }],
+      finish: "length",
+    });
+    expect(endOf(cut).callBytes).toBe(utf8Bytes("tars") + 1);
+    expect(endOf(await events("openrouter", compatText("x")))).not.toHaveProperty("callBytes");
   });
 
   test("arguments that are not JSON reach the tool as _invalid_arguments", async () => {

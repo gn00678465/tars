@@ -88,6 +88,12 @@ export type ProviderEvent =
       /** Absent: the response ended without reporting usage; the cost is estimated. */
       readonly usage?: Usage;
       readonly costUsd?: number;
+      /**
+       * UTF-8 bytes of the tool call names and arguments as received, for the estimate when there
+       * is no usage; the parsed input may be cut or re-encoded. Absent: none, or an adapter (as
+       * Anthropic's) that always reports usage.
+       */
+      readonly callBytes?: number;
       /** The blocks to replay as the assistant message; empty when there is nothing to replay. */
       readonly native: readonly unknown[];
     };

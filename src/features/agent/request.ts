@@ -232,16 +232,6 @@ export function settleFailure(db: Database, usageId: number, got: Consumed): voi
 }
 
 /**
- * The output that arrived: the text, and each tool call's name and input, which the model wrote
- * as output too. Calls come only with the end, so a failed request has none.
- */
-const outputBytes = (got: Consumed) =>
-  got.calls.reduce(
-    (n, c) => n + utf8Bytes(c.name) + utf8Bytes(JSON.stringify(c.input) ?? ""),
-    utf8Bytes(got.text),
-  );
-
-/**
  * Settles a request that reached its end, in the caller's transaction. No usage in the result:
  * the response reported none and its row is an estimate; the caller tells the owner.
  */
@@ -253,7 +243,9 @@ export function settleEnd(
 ): { readonly usage?: Usage } {
   const end = got.end as NonNullable<Consumed["end"]>;
   if (end.usage === undefined) {
-    recordEstimatedEnd(db, { usageId, textBytes: outputBytes(got), reasoning: got.reasoning });
+    // The tool calls are output too: the bytes the adapter received, not the parsed input.
+    const textBytes = utf8Bytes(got.text) + (end.callBytes ?? 0);
+    recordEstimatedEnd(db, { usageId, textBytes, reasoning: got.reasoning });
     return {};
   }
   recordEnd(db, {

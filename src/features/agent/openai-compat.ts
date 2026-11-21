@@ -271,6 +271,7 @@ async function* streamChat(
     let finish: string | undefined;
     let usage: RawUsage | undefined;
     const calls = new Map<number, PartialCall>();
+    let callBytes = 0;
     for await (const chunk of stream) {
       if (!seen.receivedStart) {
         seen.receivedStart = true;
@@ -297,6 +298,8 @@ async function* streamChat(
         const at = tc.index ?? 0;
         const call = calls.get(at) ?? { id: "", name: "", args: "" };
         calls.set(at, call);
+        // Every call the model wrote is output, kept or not.
+        callBytes += utf8Bytes(tc.function?.name ?? "") + utf8Bytes(tc.function?.arguments ?? "");
         if (tc.id) call.id = tc.id;
         if (tc.function?.name) call.name = tc.function.name;
         if (tc.function?.arguments) call.args += tc.function.arguments;
@@ -349,6 +352,7 @@ async function* streamChat(
       stop,
       ...(settled === undefined ? {} : { usage: settled.usage }),
       ...(settled?.costUsd === undefined ? {} : { costUsd: settled.costUsd }),
+      ...(callBytes === 0 ? {} : { callBytes }),
       native,
     };
   } catch (err) {
