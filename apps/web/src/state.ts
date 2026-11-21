@@ -255,11 +255,15 @@ export function reduce(s: State, e: Event): State {
       if (!e.ok) return { ...withoutKeys(s, "submitting"), error: nackText(e.reason) };
       // A plain ack: the turn may not exist yet, and the turn message finishes it.
       if (e.turn === undefined) return s;
-      // Its turn message was missed: a new conversation is followed and its items loaded.
+      // Its turn message was missed, and maybe its items: a new conversation is followed, and
+      // the one it went to is loaded again if the page is still on it. One moved away from is
+      // left alone.
       const follow = s.conv === undefined && e.conv !== undefined;
+      const here = e.conv !== undefined && (follow || e.conv === s.conv);
       return {
         ...withoutKeys(s, "submitting"),
-        ...(follow ? { conv: e.conv as string, load: e.conv as string } : {}),
+        ...(follow ? { conv: e.conv as string } : {}),
+        ...(here ? { load: e.conv as string } : {}),
       };
     }
     case "deciding":

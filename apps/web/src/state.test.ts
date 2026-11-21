@@ -168,6 +168,17 @@ describe("state: a conversation", () => {
     expect(inConv.load).toBeUndefined();
   });
 
+  test("an ack that names the turn in the conversation open now loads its snapshot again", () => {
+    const s = run([{ type: "submitted", requestId: "r3" }], run(open));
+    const known = run(
+      [{ type: "submit_result", requestId: "r3", ok: true, turn: TURN, conv: CONV }],
+      s,
+    );
+    expect(known.submitting).toBeUndefined();
+    expect(known.conv).toBe(CONV);
+    expect(known.load).toBe(CONV);
+  });
+
   test("another epoch: everything held is dropped", () => {
     const s = run([
       ...open,
