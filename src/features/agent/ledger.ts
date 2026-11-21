@@ -94,17 +94,54 @@ function readSpent(db: Database, provider: Provider, cfg: ProviderConfig, now: D
   const adj = latestAdjustment(db, provider, cfg, now);
   if (adj === null)
     return sum(db, scope, ...params) + (cfg.period === "utc-month" ? 0 : cfg.prior_spend_usd);
-  const n = params.length;
   return adj.usageUpto === null
-    ? adj.spentUsd + sum(db, `${scope} AND at > ?${n + 1}`, ...params, adj.at)
+    ? adj.spentUsd + sum(db, `${scope} AND at > ?${params.length + 1}`, ...params, adj.at)
     : adj.spentUsd +
-        sum(
-          db,
-          `${scope} AND (id > ?${n + 1} OR id IN (SELECT value FROM json_each(?${n + 2})))`,
-          ...params,
-          adj.usageUpto,
-          JSON.stringify(adj.usagePending),
-        );
+        uncovered(db, scope, params, { upto: adj.usageUpto, pending: adj.usagePending });
+}
+
+/** What an adjustment covers: every usage row up to `upto` except those in `pending`. */
+export interface UsageBoundary {
+  readonly upto: number;
+  readonly pending: readonly number[];
+}
+
+/** The rows recorded so far, less those still reserved: a request in flight is on no bill yet. */
+export function usageBoundary(db: Database, provider: Provider): UsageBoundary {
+  return db
+    .transaction(() => {
+      const { upto } = db.query("SELECT COALESCE(MAX(id), 0) AS upto FROM usage").get() as {
+        upto: number;
+      };
+      const pending = db
+        .query("SELECT id FROM usage WHERE provider = ? AND state = 'reserved'")
+        .all(provider) as { id: number }[];
+      return { upto, pending: pending.map((r) => r.id) };
+    })
+    .deferred();
+}
+
+/** The cost of the period's rows a boundary does not cover; they count on top of its figure. */
+const uncovered = (db: Database, scope: string, params: (string | number)[], b: UsageBoundary) =>
+  sum(
+    db,
+    `${scope} AND (id > ?${params.length + 1} OR id IN (SELECT value FROM json_each(?${params.length + 2})))`,
+    ...params,
+    b.upto,
+    JSON.stringify(b.pending),
+  );
+
+/** The period's spend once an adjustment to `spentUsd` with boundary `b` is written. */
+export function spentAfterAdjust(
+  db: Database,
+  provider: Provider,
+  cfg: ProviderConfig,
+  now: Date,
+  spentUsd: number,
+  b: UsageBoundary,
+): number {
+  const { scope, params } = scopeOf(provider, cfg, now);
+  return spentUsd + uncovered(db, scope, params, b);
 }
 
 /** Today's (UTC) usage; an adjustment corrects the period's total, not any one day. */
@@ -561,9 +598,10 @@ export function status(
 }
 
 /**
- * "Up to now, this period's spend is `spentUsd`", from the provider's own bill. It covers every
- * usage row recorded so far except those still reserved: a request in flight is not on the bill
- * yet, so its cost keeps counting on top of the figure.
+ * "Up to now, this period's spend is `spentUsd`", from the provider's own bill. It covers the
+ * rows inside `boundary`, by default every row recorded so far except those still reserved; the
+ * rest keep counting on top of the figure. A caller whose figure was read earlier passes the
+ * boundary it took before reading it.
  */
 export function adjust(
   db: Database,
@@ -571,26 +609,14 @@ export function adjust(
   spentUsd: number,
   note: string | undefined,
   now: Date,
+  boundary?: UsageBoundary,
 ): void {
   db.transaction(() => {
-    const { upto } = db.query("SELECT COALESCE(MAX(id), 0) AS upto FROM usage").get() as {
-      upto: number;
-    };
-    const pending = db
-      .query("SELECT id FROM usage WHERE provider = ? AND state = 'reserved'")
-      .all(provider) as { id: number }[];
+    const { upto, pending } = boundary ?? usageBoundary(db, provider);
     db.run(
       `INSERT INTO adjustments (provider, at, month, spent_usd, note, usage_upto, usage_pending)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        provider,
-        now.getTime(),
-        month(now),
-        spentUsd,
-        note ?? null,
-        upto,
-        JSON.stringify(pending.map((r) => r.id)),
-      ],
+      [provider, now.getTime(), month(now), spentUsd, note ?? null, upto, JSON.stringify(pending)],
     );
   }).immediate();
 }

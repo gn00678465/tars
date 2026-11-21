@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { Env, TarsPaths } from "../../core/paths.ts";
 import type { Provider, SecretStore } from "../../core/secrets.ts";
 import { loadConfig, type ProviderConfig } from "./config.ts";
-import { adjust, spent } from "./ledger.ts";
+import { adjust, spent, spentAfterAdjust, usageBoundary, type UsageBoundary } from "./ledger.ts";
 import type { Log } from "./log.ts";
 import { COMPAT_ENDPOINTS, E2E_BASE_URL_VARS, loopbackUrl } from "./provider.ts";
 
@@ -49,14 +49,17 @@ export type ReconcileResult =
   | { readonly kind: "skip" };
 
 /**
- * Bookkeeping only: no request, no output. Only upward (E5): a lagging or reset key limit
- * lowering the books would let a provider past its stop line send again.
+ * Bookkeeping only: no request, no output. `boundary` was taken before /key was read: a request
+ * still running then, or begun since, may be missing from the key's figure, so it counts on top
+ * of it. Only upward (E5): written only when the books end higher, since a lagging or reset key
+ * limit lowering them would let a provider past its stop line send again.
  */
 export function reconcileOpenRouter(
   db: Database,
   cfg: ProviderConfig,
   key: KeyLimit,
   now: Date,
+  boundary: UsageBoundary,
 ): ReconcileResult {
   if (key.limit === null || key.remaining === null) return { kind: "no_limit" };
   const used = key.limit - key.remaining;
@@ -66,11 +69,12 @@ export function reconcileOpenRouter(
   return db
     .transaction((): ReconcileResult => {
       const local = spent(db, "openrouter", cfg, now);
-      if (used - local >= MIN_GAP_USD) {
-        adjust(db, "openrouter", used, "auto: /key", now);
+      const after = spentAfterAdjust(db, "openrouter", cfg, now, used, boundary);
+      if (after - local >= MIN_GAP_USD) {
+        adjust(db, "openrouter", used, "auto: /key", now, boundary);
         return { kind: "raised", to: used };
       }
-      if (local - used >= MIN_GAP_USD) return { kind: "lower", gapUsd: local - used };
+      if (local - after >= MIN_GAP_USD) return { kind: "lower", gapUsd: local - after };
       return { kind: "skip" };
     })
     .immediate();
@@ -108,9 +112,10 @@ export async function reconcileAfterTurn(
     if (apiKey === null) return;
     const name = E2E_BASE_URL_VARS.openrouter;
     const baseURL = loopbackUrl(name, deps.env[name], "http") ?? COMPAT_ENDPOINTS.openrouter;
+    const boundary = usageBoundary(deps.db, "openrouter");
     const key = await fetchKeyLimit(apiKey, baseURL, signal);
     if (key === undefined) return deps.log.log("warning", {});
-    const result = reconcileOpenRouter(deps.db, cfg, key, deps.now());
+    const result = reconcileOpenRouter(deps.db, cfg, key, deps.now(), boundary);
     if (result.kind === "raised") deps.log.log("warning", { costUsd: result.to });
     else if (result.kind === "no_limit" && !warned.has("no_limit")) {
       warned.add("no_limit");

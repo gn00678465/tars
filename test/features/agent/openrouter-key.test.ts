@@ -2,7 +2,12 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { CONFIG_TEMPLATE, loadConfig } from "../../../src/features/agent/config.ts";
-import { adjust, spent } from "../../../src/features/agent/ledger.ts";
+import {
+  adjust,
+  insertReserved,
+  spent,
+  usageBoundary,
+} from "../../../src/features/agent/ledger.ts";
 import type { Log, LogEvent, LogFields } from "../../../src/features/agent/log.ts";
 import {
   fetchKeyLimit,
@@ -12,7 +17,8 @@ import {
   type ReconcileDeps,
 } from "../../../src/features/agent/openrouter-key.ts";
 import { E2E_BASE_URL_VARS } from "../../../src/features/agent/provider.ts";
-import { compatHarness, type CompatHarness } from "./compat-fixture.ts";
+import { compatHarness, OPENROUTER_ENTRY, type CompatHarness } from "./compat-fixture.ts";
+import { MODEL, seedTurn } from "./db-fixture.ts";
 
 let h: CompatHarness | undefined;
 beforeEach(() => resetReconcileWarnings());
@@ -142,6 +148,7 @@ describe("a cost adjust from another terminal", () => {
     adjust(x.db, "openrouter", 1, undefined, now);
     const cfg = (await loadConfig(x.paths)).config.providers.openrouter;
     if (cfg === undefined) throw new Error("no [providers.openrouter]");
+    const boundary = usageBoundary(x.db, "openrouter");
     const other = new Database(x.paths.agentDb);
     other.exec("PRAGMA busy_timeout=0");
     let fired = false;
@@ -178,7 +185,7 @@ describe("a cost adjust from another terminal", () => {
         return typeof v === "function" ? v.bind(target) : v;
       },
     });
-    const result = reconcileOpenRouter(db, cfg, { limit: 10, remaining: 8 }, now);
+    const result = reconcileOpenRouter(db, cfg, { limit: 10, remaining: 8 }, now, boundary);
     if (refused) adjust(other, "openrouter", 9, "other terminal, again", now);
     other.close();
     return { result, refused, books: spent(x.db, "openrouter", cfg, now) };
@@ -195,6 +202,69 @@ describe("a cost adjust from another terminal", () => {
     expect(r.refused).toBe(true);
     expect(r.result).toEqual({ kind: "raised", to: 2 });
     expect(r.books).toBe(9);
+  });
+});
+
+describe("the boundary taken before /key", () => {
+  /** A chat request on OpenRouter, still reserved; `settle` ends it at `usd`. */
+  function inFlight(x: CompatHarness) {
+    const turn = seedTurn(x.db, { now: x.clock.now() });
+    const id = insertReserved(x.db, {
+      ...turn,
+      step: 1,
+      attempt: 1,
+      model: { ...MODEL, provider: "openrouter", id: OPENROUTER_ENTRY.id },
+      cacheTtl: "5m",
+      maxTokens: 0,
+      inputUsd: 0.5,
+      now: x.clock.now(),
+    });
+    return {
+      settle: (usd: number) =>
+        x.db.run("UPDATE usage SET state = 'final', cost_usd = ? WHERE id = ?", [usd, id]),
+    };
+  }
+
+  test("/key says 2 without a request then running, which ends at 1: the books end at 3", async () => {
+    const x = await setup();
+    const req = inFlight(x);
+    const cfg = (await loadConfig(x.paths)).config.providers.openrouter;
+    if (cfg === undefined) throw new Error("no [providers.openrouter]");
+    const boundary = usageBoundary(x.db, "openrouter");
+    req.settle(1);
+    const now = x.clock.now();
+    expect(reconcileOpenRouter(x.db, cfg, { limit: 10, remaining: 8 }, now, boundary)).toEqual({
+      kind: "raised",
+      to: 2,
+    });
+    expect(spent(x.db, "openrouter", cfg, now)).toBeCloseTo(3, 10);
+  });
+
+  test("after a turn: the boundary is taken before the request to /key", async () => {
+    const x = await setup();
+    const req = inFlight(x);
+    Object.defineProperty(x.openrouter, "key", {
+      get: () => {
+        req.settle(1);
+        return { limit: 10, limit_remaining: 8 };
+      },
+    });
+    await reconcileAfterTurn(x.run().deps, OPENROUTER);
+    const cfg = (await loadConfig(x.paths)).config.providers.openrouter;
+    if (cfg === undefined) throw new Error("no [providers.openrouter]");
+    expect(adjustments(x)).toHaveLength(1);
+    expect(spent(x.db, "openrouter", cfg, x.clock.now())).toBeCloseTo(3, 10);
+  });
+
+  test("a request begun after the boundary also counts on top", async () => {
+    const x = await setup();
+    const cfg = (await loadConfig(x.paths)).config.providers.openrouter;
+    if (cfg === undefined) throw new Error("no [providers.openrouter]");
+    const boundary = usageBoundary(x.db, "openrouter");
+    inFlight(x).settle(1);
+    const now = x.clock.now();
+    reconcileOpenRouter(x.db, cfg, { limit: 10, remaining: 8 }, now, boundary);
+    expect(spent(x.db, "openrouter", cfg, now)).toBeCloseTo(3, 10);
   });
 });
 
