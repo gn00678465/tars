@@ -54,7 +54,9 @@ async function missingLinkKeys(ctx: ServeContext): Promise<string[]> {
 
 /**
  * The keyring has no transaction: a new certificate next to the old key cannot connect, so a
- * key that fails to be written puts the certificate back the way it was.
+ * key that fails to be written puts the certificate back the way it was. A known limit: setup
+ * killed between the two writes, or two setups at once, can still leave a mismatched pair;
+ * running setup again fixes it.
  */
 async function storePair(ctx: ServeContext, cert: string, key: string): Promise<void> {
   const before = await ctx.secrets.get("link:cert");

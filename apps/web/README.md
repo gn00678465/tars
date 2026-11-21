@@ -161,6 +161,10 @@ npx wrangler deploy \
 - `tars serve` 不會結束，每 5 分鐘重試一次。對方的連線被撤銷擋下之後，下一次重試就會連上。
 - 網頁的狀態列也會一直顯示「本機端在 <時間> 重新連上」。那個時間不是你自己重啟的時候，就是被換過。
 
+## 疑難排解
+
+- `tars link setup` 執行到一半被中斷，或同時執行兩次時，keyring 裡的憑證與私鑰可能不成對：`tars serve` 連不上 `<LINK_HOST>`，`tars serve status` 顯示連線失敗。重新執行一次 `tars link setup` 即可恢復。
+
 ## 常駐
 
 只支援已登入的桌面 session：keyring 要已解鎖，要有 D-Bus。`systemd --user` 的 unit 範本，放在 `~/.config/systemd/user/tars-serve.service`：
