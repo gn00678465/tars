@@ -37,6 +37,7 @@ interface Submit {
   readonly conv: string | undefined;
   /** Every turn.submit sent for it: an ack to an earlier one counts as well. */
   readonly ids: Set<string>;
+  acked?: boolean;
   timer?: unknown;
 }
 
@@ -99,7 +100,12 @@ export class Socket {
     return id;
   }
 
-  /** One message at a time: resent with the same requestId until the local end answers. */
+  /**
+   * One message at a time, resent with the same requestId until the turn is known (an ack that
+   * names it, or a turn message for this requestId) or refused. A plain ack is only the local
+   * end's memory: tars serve stopping before the turn exists would lose it, and the resend is
+   * what reaches the next one.
+   */
   submit(text: string, conv?: string): string {
     this.d.clearTimeout(this.submit_?.timer);
     const requestId = this.d.newId();
@@ -119,9 +125,20 @@ export class Socket {
     s.timer = this.d.setTimeout(() => this.transmit(), RESEND_MS);
   }
 
-  private answered(re: string | undefined, ok: boolean, reason?: NackReason): void {
+  private answered(re: string | undefined, ok: boolean, reason?: NackReason, turn?: string): void {
     const s = this.submit_;
     if (s === undefined || re === undefined || !s.ids.has(re)) return;
+    if (ok && turn === undefined) {
+      if (s.acked !== true) this.listener({ type: "submit_result", requestId: s.requestId, ok });
+      s.acked = true;
+      return;
+    }
+    this.settle(ok, reason);
+  }
+
+  private settle(ok: boolean, reason?: NackReason): void {
+    const s = this.submit_;
+    if (s === undefined) return;
     this.d.clearTimeout(s.timer);
     this.submit_ = undefined;
     this.listener({
@@ -163,7 +180,8 @@ export class Socket {
         this.transmit();
         return;
       }
-      if (m.kind === "ack") this.answered(m.re, true);
+      if (m.kind === "ack") this.answered(m.re, true, undefined, m.p.turn);
+      if (m.kind === "turn" && m.p.requestId === this.submit_?.requestId) this.settle(true);
       if (m.kind === "nack") this.answered(m.re, false, m.p.reason);
       this.listener({ type: "message", m, at: this.d.now() });
     };

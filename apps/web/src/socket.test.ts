@@ -145,8 +145,14 @@ describe("Socket: heartbeat and resend", () => {
     expect(subs.map((m) => m.p.requestId)).toEqual([requestId, requestId]);
     expect(subs[0]?.conv).toBe("conv-1");
     expect(subs[0]?.id).not.toBe(subs[1]?.id);
-    // An ack to the first send counts.
-    h.last().receive({ v: PROTOCOL_VERSION, id: "s-a", kind: "ack", re: subs[0]?.id, p: {} });
+    // An ack to the first send counts; one that names the turn ends the resend.
+    h.last().receive({
+      v: PROTOCOL_VERSION,
+      id: "s-a",
+      kind: "ack",
+      re: subs[0]?.id,
+      p: { turn: "t-1" },
+    });
     await h.advance(30_000);
     expect(
       h
@@ -155,6 +161,32 @@ describe("Socket: heartbeat and resend", () => {
         .filter((m) => m.kind === "turn.submit"),
     ).toHaveLength(2);
     expect(h.events.find((e) => e.type === "submit_result")).toMatchObject({ requestId, ok: true });
+  });
+
+  test("a plain ack is only held in the local end's memory: resent until the turn is known", async () => {
+    const h = await opened();
+    const requestId = h.socket.submit("你好");
+    const subs = () =>
+      h
+        .last()
+        .messages()
+        .filter((m) => m.kind === "turn.submit");
+    h.last().receive({ v: PROTOCOL_VERSION, id: "s-a", kind: "ack", re: subs()[0]?.id, p: {} });
+    expect(h.events.filter((e) => e.type === "submit_result")).toEqual([
+      { type: "submit_result", requestId, ok: true },
+    ]);
+    // tars serve restarted before the turn existed: the resend is what reaches the new one.
+    await h.advance(10_000);
+    expect(subs().map((m) => m.p.requestId)).toEqual([requestId, requestId]);
+    h.last().receive({
+      v: PROTOCOL_VERSION,
+      id: "s-t",
+      kind: "turn",
+      conv: "conv-1",
+      p: { turn: "t-1", requestId, state: "started" },
+    });
+    await h.advance(30_000);
+    expect(subs()).toHaveLength(2);
   });
 
   test("a submit made offline goes after the next hello; a nack ends it", async () => {
