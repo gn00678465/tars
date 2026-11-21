@@ -69,7 +69,7 @@ export type RelayAction =
   | {
       readonly type: "tag";
       readonly sock: string;
-      readonly role: "local" | "challenger";
+      readonly role: "local" | "challenger" | "retired";
       readonly stale: boolean;
     }
   /** The earliest pending deadline; null cancels. */
@@ -114,6 +114,10 @@ function takeOver(
   actions: RelayAction[],
 ): RelayState {
   actions.push(
+    // The one replaced stays among the sockets until its close arrives: not a local end again.
+    ...(state.local === undefined || state.local.sock === sock
+      ? []
+      : [{ type: "tag", sock: state.local.sock, role: "retired", stale: false } as const]),
     { type: "tag", sock, role: "local", stale: false },
     { type: "store", localSince: now },
     ...closeBrowsers(state),
@@ -302,7 +306,8 @@ export function route(
 
 /** What each socket carries across hibernation. */
 export interface Attachment {
-  readonly role: "local" | "challenger" | "browser";
+  /** retired: replaced or its close already handled; no event from it changes anything. */
+  readonly role: "local" | "challenger" | "browser" | "retired";
   /** A browser's connection id, or the DO's name for a local socket. */
   readonly conn: string;
   /** When this socket was accepted. */
@@ -322,6 +327,7 @@ export function rebuild(
   let challenger: RelayState["challenger"];
   const browsers: string[] = [];
   for (const { attachment: a, autoResponseAt } of sockets) {
+    if (a.role === "retired") continue;
     if (a.role === "browser") browsers.push(a.conn);
     else if (a.role === "challenger")
       challenger = { sock: a.conn, deadline: a.connectedAt + PROBE_MS };

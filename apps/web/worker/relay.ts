@@ -91,9 +91,13 @@ export class Relay extends DurableObject<Env> {
     await this.apply(await this.state(), { type: "alarm", now: Date.now() });
   }
 
+  /**
+   * A socket's close is handled once: a second event (close after error, or the other way) and
+   * the close of one already replaced find it retired and do nothing.
+   */
   private async closed(ws: WebSocket): Promise<void> {
     const a = attachmentOf(ws);
-    if (a === undefined) return;
+    if (a === undefined || a.role === "retired") return;
     // route matches a close against the state that still holds the socket, so it is put back in
     // whether or not getWebSockets lists it during its own close handler.
     const state = await this.state(ws);
@@ -103,6 +107,12 @@ export class Relay extends DurableObject<Env> {
         ? { type: "browser.close", conn: a.conn }
         : { type: "local.close", sock: a.conn, now: Date.now() },
     );
+    try {
+      ws.serializeAttachment({ ...a, role: "retired" } satisfies Attachment);
+    } catch {
+      // Unverified whether workerd accepts this on a closed socket; if not, a second event for
+      // it may repeat this close's effects.
+    }
   }
 
   private async state(closing?: WebSocket) {

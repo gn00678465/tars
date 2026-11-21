@@ -65,7 +65,12 @@ function relay(sockets: FakeSocket[]) {
     },
   };
   const r = new Relay(ctx as never, {} as never);
-  return { r, stored, close: (ws: FakeSocket) => r.webSocketClose(ws as never) };
+  return {
+    r,
+    stored,
+    close: (ws: FakeSocket) => r.webSocketClose(ws as never),
+    error: (ws: FakeSocket) => r.webSocketError(ws as never),
+  };
 }
 
 const local = (conn: string, role: Attachment["role"] = "local") =>
@@ -113,5 +118,58 @@ describe("the DO's close handler reaches route with the closing socket", () => {
     expect(c.deserializeAttachment()).toMatchObject({ role: "local" });
     expect(typeof stored.get("localSince")).toBe("number");
     expect(a.closed).toBe(4000);
+  });
+});
+
+describe("a socket already handled or replaced: its late close or error does nothing", () => {
+  const offline = (ws: FakeSocket) =>
+    ws.sent.filter(
+      (m) =>
+        (m as { kind?: string; p?: { online?: boolean } }).kind === "relay.status" &&
+        (m as { p: { online: boolean } }).p.online === false,
+    );
+
+  test("the old local end closing after the alarm handed over: the new one stays online", async () => {
+    const l1 = local("L1");
+    // A challenger whose probe deadline has passed.
+    const l2 = new FakeSocket({ role: "challenger", conn: "L2", connectedAt: Date.now() - 60_000 });
+    const a = browser(A);
+    const { r, close, stored } = relay([l1, l2, a]);
+    await r.alarm();
+    expect(l1.closed).toBe(4001);
+    expect(l2.deserializeAttachment()).toMatchObject({ role: "local" });
+    const since = stored.get("localSince");
+    await close(l1);
+    expect(stored.has("lastSeenAt")).toBe(false);
+    expect(stored.get("localSince")).toBe(since);
+    expect(offline(a)).toEqual([]);
+    expect(l2.deserializeAttachment()).toMatchObject({ role: "local" });
+  });
+
+  test("the old local end's error after its close let the challenger in", async () => {
+    const l1 = local("L1");
+    const l2 = local("L2", "challenger");
+    const { close, error, stored } = relay([l1, l2, browser(A)]);
+    await close(l1);
+    const since = stored.get("localSince");
+    await error(l1);
+    expect(stored.has("lastSeenAt")).toBe(false);
+    expect(stored.get("localSince")).toBe(since);
+    expect(l2.deserializeAttachment()).toMatchObject({ role: "local" });
+  });
+
+  test("close then error, once each: the side effects happen once", async () => {
+    const l = local("L1");
+    const a = browser(A);
+    const b = browser(B);
+    const { close, error, stored } = relay([l, a, b]);
+    await close(a);
+    await error(a);
+    expect(l.sent).toEqual([{ t: "close", conn: A }]);
+    await close(l);
+    const seen = stored.get("lastSeenAt");
+    await error(l);
+    expect(stored.get("lastSeenAt")).toBe(seen);
+    expect(offline(b)).toHaveLength(1);
   });
 });
