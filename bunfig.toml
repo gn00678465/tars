@@ -1,2 +1,6 @@
 [install]
 minimumReleaseAge = 604800
+
+[test]
+# apps/web runs its own tests under Vite+ (vp test); bun test would pick them up without a DOM.
+pathIgnorePatterns = ["apps/**"]

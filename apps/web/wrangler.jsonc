@@ -1,0 +1,17 @@
+// Every value is a placeholder (the repo is public). The owner's values go in when deploying;
+// OWNER_EMAIL and LINK_CERT_FINGERPRINTS are Worker secrets, not vars.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "tars-web",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-11-01",
+  "assets": { "binding": "ASSETS", "not_found_handling": "single-page-application" },
+  "durable_objects": { "bindings": [{ "name": "RELAY", "class_name": "Relay" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Relay"] }],
+  "vars": {
+    "APP_HOST": "<APP_HOST>",
+    "LINK_HOST": "<LINK_HOST>",
+    "ACCESS_TEAM_DOMAIN": "<TEAM>.cloudflareaccess.com",
+    "ACCESS_AUD": "<ACCESS_AUD>",
+  },
+}

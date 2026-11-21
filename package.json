@@ -2,9 +2,13 @@
   "name": "tars",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "build": "bun scripts/build.ts",
-    "check": "oxfmt --check src test scripts && oxlint --deny-warnings src test scripts && tsc --noEmit && bun test && gitleaks dir . && osv-scanner scan source -L bun.lock",
+    "check": "oxfmt --check src test scripts packages/protocol/src packages/protocol/test && oxlint --deny-warnings src test scripts packages/protocol/src packages/protocol/test && tsc --noEmit && tsc -p packages/protocol/tsconfig.json --noEmit && bun test test/ packages/protocol/test/ && bun run --cwd apps/web check && bun run --cwd apps/web test && gitleaks dir . && osv-scanner scan source -L bun.lock",
     "e2e": "bun scripts/build.ts && bun test/e2e/run.ts",
     "e2e:script": "bun scripts/build.ts && bun test/e2e/script.ts",
     "e2e:pilots": "bun scripts/build.ts && bun test/e2e/pilots.ts",
@@ -15,14 +19,19 @@
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.81",
     "@anthropic-ai/sdk": "1.8.0",
+    "@tars/protocol": "workspace:*",
     "commander": "15.1.0",
     "openai": "7.55.0"
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
-    "oxfmt": "0.77.0",
-    "oxlint": "1.92.0",
+    "oxfmt": "0.78.0",
+    "oxlint": "1.93.0",
     "typescript": "7.0.2"
   },
-  "trustedDependencies": []
+  "trustedDependencies": [],
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.6.0",
+    "vitest": "5.1.0"
+  }
 }
