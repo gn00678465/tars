@@ -261,7 +261,7 @@ export async function serve(ctx: ServeContext): Promise<number> {
         random: Math.random,
         log,
         onFrame: (f) => void d.onFrame(f),
-        onReset: () => registry.clear(),
+        onReset: () => d.reset(),
         onConnected: () => notifier.linkConnected(),
         onReplaced: (since) => notifier.replacedAgain(since),
         onState: changed,

@@ -73,6 +73,8 @@ export class Dispatch {
   /** requestId → sha256 of its text, only between ack and the turn existing or being refused. */
   readonly pending = new Map<string, string>();
   private readonly order = new Map<string, Promise<void>>();
+  /** Which link connection the frames came over: a frame from an earlier one does nothing. */
+  private generation = 0;
   private readonly epoch: string;
 
   constructor(private readonly d: DispatchDeps) {
@@ -90,7 +92,10 @@ export class Dispatch {
   onFrame(frame: FrameToLocal): Promise<void> {
     if (frame.t === "probe") return Promise.resolve();
     const { conn } = frame;
-    const next = (this.order.get(conn) ?? Promise.resolve()).then(() => this.handle(frame));
+    const gen = this.generation;
+    const next = (this.order.get(conn) ?? Promise.resolve()).then(() =>
+      gen === this.generation ? this.handle(frame, gen) : undefined,
+    );
     this.order.set(conn, next);
     void next.then(() => {
       if (this.order.get(conn) === next) this.order.delete(conn);
@@ -98,10 +103,20 @@ export class Dispatch {
     return next;
   }
 
+  /**
+   * The link connected again or went away: the relay's connections from before are not ours,
+   * including an open still being checked and the frames queued behind it.
+   */
+  reset(): void {
+    this.generation++;
+    this.order.clear();
+    this.registry.clear();
+  }
+
   /** A malformed frame or a failing handler is logged, never the end of the process. */
-  private async handle(frame: Exclude<FrameToLocal, { t: "probe" }>): Promise<void> {
+  private async handle(frame: Exclude<FrameToLocal, { t: "probe" }>, gen: number): Promise<void> {
     try {
-      if (frame.t === "open") await this.open(frame);
+      if (frame.t === "open") await this.open(frame, gen);
       else if (frame.t === "close") {
         this.registry.remove(frame.conn);
         this.d.log.log("conn", { state: "closed", connId: store.shortId(frame.conn) });
@@ -112,8 +127,9 @@ export class Dispatch {
     }
   }
 
-  private async open(f: Extract<FrameToLocal, { t: "open" }>): Promise<void> {
+  private async open(f: Extract<FrameToLocal, { t: "open" }>, gen: number): Promise<void> {
     const verdict = await this.d.verifier.verify(f.jwt);
+    if (gen !== this.generation) return;
     const connId = store.shortId(f.conn);
     this.d.changed();
     if (!verdict.ok) {

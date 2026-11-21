@@ -52,6 +52,8 @@ interface Setup {
   hub: TestHub;
   d: Dispatch;
   frames: FrameToRelay[];
+  /** Finishes the checks waiting on jwt "held". */
+  release(): void;
   db: Database;
   reconciled: string[];
   /** Sends a client message from `conn`. */
@@ -70,6 +72,7 @@ async function setup(): Promise<Setup> {
   const hub = testHub({ timers, log });
   const frames: FrameToRelay[] = [];
   const reconciled: string[] = [];
+  const held: (() => void)[] = [];
   const verdicts: Record<string, Verdict> = {
     good: { ok: true, exp: Number.MAX_SAFE_INTEGER },
     short: { ok: true, exp: timers.now() + 1000 },
@@ -83,7 +86,9 @@ async function setup(): Promise<Setup> {
     verifier: {
       verify: async (jwt) => {
         if (jwt === "throw") throw new Error("boom");
-        return verdicts[jwt] ?? { ok: false, reason: "denied" };
+        // Access's keys still on their way: the test lets the check finish.
+        if (jwt === "held") await new Promise<void>((done) => held.push(done));
+        return verdicts[jwt === "held" ? "good" : jwt] ?? { ok: false, reason: "denied" };
       },
     },
     hub,
@@ -104,6 +109,9 @@ async function setup(): Promise<Setup> {
     hub,
     d,
     frames,
+    release: () => {
+      for (const done of held.splice(0)) done();
+    },
     db: h.db,
     reconciled,
     async msg(conn, kind, p, extra = {}) {
@@ -209,6 +217,22 @@ describe("Dispatch: connections", () => {
     await Promise.all([open, hi]);
     expect(s.hub.to(CONN_A).map((m) => m.kind)).toEqual(["hello", "status"]);
     expect(s.frames).toEqual([]);
+  });
+
+  test("a link that reset while an open was being checked: the open and what queued behind it do nothing", async () => {
+    const s = await setup();
+    const open = s.open(CONN_A, "held");
+    const hi = s.msg(CONN_A, "hello", {});
+    const sub = s.msg(CONN_A, "turn.submit", { requestId: "r-old", text: "舊的" });
+    await until(() => s.hub.registry.size === 0 && s.frames.length === 0);
+    s.d.reset();
+    s.release();
+    await Promise.all([open, hi, sub]);
+    expect(s.hub.registry.get(CONN_A)).toBeUndefined();
+    expect(s.d.current).toBeUndefined();
+    expect(s.hub.sent).toEqual([]);
+    expect(s.frames).toEqual([]);
+    expect(store.findTurnByRequest(s.db, "r-old")).toBeUndefined();
   });
 
   test("close unregisters", async () => {
