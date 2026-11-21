@@ -176,7 +176,18 @@ export function baseEnv(host: Host): Record<string, string> {
  * the session bus, the system bus, systemd-resolved, avahi, and every other host socket there),
  * and a private dbus-daemon plus gnome-keyring. The caller is already in the loopback-only netns.
  */
-export async function runStep(host: Host, step: Step): Promise<StepResult> {
+export function runStep(host: Host, step: Step): Promise<StepResult> {
+  return spawnStep(host, step).result;
+}
+
+export interface Running {
+  /** The bwrap process; SIGKILL to it takes the sandbox down with it. */
+  readonly child: Bun.Subprocess;
+  readonly result: Promise<StepResult>;
+}
+
+/** runStep without waiting: for a command that runs until it is stopped, such as tars serve. */
+export function spawnStep(host: Host, step: Step): Running {
   const bwrap = [
     "bwrap",
     "--dev-bind",
@@ -225,12 +236,18 @@ export async function runStep(host: Host, step: Step): Promise<StepResult> {
     timeout: step.timeoutMs ?? 120_000,
     killSignal: "SIGKILL",
   });
-  const [stdout, stderr, exitCode] = await Promise.all([
+  const result = Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
     child.exited,
-  ]);
-  return { name: step.name, exitCode, stdout, stderr, ms: Math.round(performance.now() - started) };
+  ]).then(([stdout, stderr, exitCode]) => ({
+    name: step.name,
+    exitCode,
+    stdout,
+    stderr,
+    ms: Math.round(performance.now() - started),
+  }));
+  return { child, result };
 }
 
 /** Dirs to mount read-only so the harness binaries resolve inside the sandbox. */
