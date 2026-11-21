@@ -139,6 +139,10 @@ export class Socket {
   ): void {
     const s = this.submit_;
     if (s === undefined || re === undefined || !s.ids.has(re)) return;
+    // Only the relay says offline, for the one send it could not pass on: an earlier one may
+    // have reached the local end, so the request stays and is resent. Every other nack is the
+    // local end refusing the request itself.
+    if (!ok && reason === "offline") return;
     if (ok && turn === undefined) {
       if (s.acked !== true) this.listener({ type: "submit_result", requestId: s.requestId, ok });
       s.acked = true;

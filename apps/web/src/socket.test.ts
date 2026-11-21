@@ -207,6 +207,31 @@ describe("Socket: heartbeat and resend", () => {
     expect(subs()).toHaveLength(2);
   });
 
+  test("the relay's offline nack is about one resend: the request is kept and resent", async () => {
+    const h = await opened();
+    const requestId = h.socket.submit("你好");
+    const subs = () =>
+      h
+        .last()
+        .messages()
+        .filter((m) => m.kind === "turn.submit");
+    h.last().receive({ v: PROTOCOL_VERSION, id: "s-a", kind: "ack", re: subs()[0]?.id, p: {} });
+    await h.advance(10_000);
+    // The local end went stale after its ack: the relay answers the resend itself.
+    h.last().receive({
+      v: PROTOCOL_VERSION,
+      id: "s-o",
+      kind: "nack",
+      re: subs()[1]?.id,
+      p: { reason: "offline" },
+    });
+    expect(h.events.filter((e) => e.type === "submit_result")).toEqual([
+      { type: "submit_result", requestId, ok: true },
+    ]);
+    await h.advance(10_000);
+    expect(subs().map((m) => m.p.requestId)).toEqual([requestId, requestId, requestId]);
+  });
+
   test("a submit made offline goes after the next hello; a nack ends it", async () => {
     const h = await opened();
     h.last().end(4000);
