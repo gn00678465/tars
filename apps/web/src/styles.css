@@ -1,0 +1,80 @@
+/* No visual design in S3: S4 redoes the page from ui_spec.md. Static, no inline styles (CSP). */
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+  padding: 0 16px 16px;
+}
+
+main {
+  max-width: 48rem;
+  margin: 0 auto;
+}
+
+.status p,
+.meta,
+.reason {
+  margin: 0.25rem 0;
+  font-size: 0.9rem;
+}
+
+.warning {
+  border: 2px solid currentColor;
+  padding: 0.5rem;
+  font-weight: bold;
+}
+
+.approval {
+  border: 2px solid currentColor;
+  padding: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.approval dl div {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 0.5rem;
+}
+
+.approval dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+button {
+  font: inherit;
+  min-height: 2.75rem;
+  margin: 0.25rem 0.5rem 0.25rem 0;
+}
+
+.convs ul,
+.thread ol {
+  list-style: none;
+  padding: 0;
+}
+
+.convs small {
+  display: block;
+}
+
+.thread li {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0.5rem 0;
+}
+
+.user {
+  font-weight: bold;
+}
+
+.composer textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 5rem;
+  font: inherit;
+}
