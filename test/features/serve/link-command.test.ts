@@ -54,7 +54,15 @@ access_aud = "aud-0001"
 owner_email = "owner@example.test"
 `;
 
-function setup(opts: { answers?: string[]; config?: string; env?: Env; now?: number } = {}) {
+function setup(
+  opts: {
+    answers?: string[];
+    config?: string;
+    env?: Env;
+    now?: number;
+    secrets?: ReturnType<typeof fakeSecrets>;
+  } = {},
+) {
   const home = tempHome();
   const env: Env = {
     HOME: home,
@@ -65,7 +73,7 @@ function setup(opts: { answers?: string[]; config?: string; env?: Env; now?: num
   const paths = resolvePaths(env);
   mkdirSync(paths.config, { recursive: true });
   writeFileSync(paths.configFile, opts.config ?? `${CONFIG_TEMPLATE}${LINK}`);
-  const secrets = fakeSecrets();
+  const secrets = opts.secrets ?? fakeSecrets();
   const terminal = scriptedTerminal(opts.answers ?? ["yes"]);
   const now = opts.now ?? Date.now();
   const deps = testDeps({ env, secrets, openTerminal: () => terminal, now: () => new Date(now) });
@@ -82,6 +90,28 @@ describe.skipIf(openssl === null)("tars link", () => {
     expect(secrets.entries.get("link:key")).toBe(readFileSync(p.key, "utf8"));
     expect(deps.io.stdout.join("\n")).toContain(`請刪除原始的私鑰檔：${p.key}`);
     expect(deps.io.stdout.join("\n")).not.toContain("BEGIN");
+  });
+
+  test("setup: the key cannot be written, so the certificate goes back to what it was", async () => {
+    const p = pair();
+    const failing = (initial: Parameters<typeof fakeSecrets>[0]) => {
+      const secrets = fakeSecrets(initial);
+      const set = secrets.set;
+      secrets.set = async (name, value) => {
+        if (name === "link:key") throw new Error("keyring locked");
+        return set(name, value);
+      };
+      return secrets;
+    };
+    const old = { "link:cert": "OLD-CERT", "link:key": "OLD-" + "KEY" };
+    const rotating = setup({ secrets: failing(old) });
+    expect(await run(["link", "setup", "--cert", p.cert, "--key", p.key], rotating.deps)).not.toBe(
+      0,
+    );
+    expect(Object.fromEntries(rotating.secrets.entries)).toEqual(old);
+    const first = setup({ secrets: failing({}) });
+    expect(await run(["link", "setup", "--cert", p.cert, "--key", p.key], first.deps)).not.toBe(0);
+    expect(first.secrets.entries.size).toBe(0);
   });
 
   test("setup: no yes, nothing stored", async () => {

@@ -52,6 +52,28 @@ async function missingLinkKeys(ctx: ServeContext): Promise<string[]> {
   }
 }
 
+/**
+ * The keyring has no transaction: a new certificate next to the old key cannot connect, so a
+ * key that fails to be written puts the certificate back the way it was.
+ */
+async function storePair(ctx: ServeContext, cert: string, key: string): Promise<void> {
+  const before = await ctx.secrets.get("link:cert");
+  await ctx.secrets.set("link:cert", cert);
+  try {
+    await ctx.secrets.set("link:key", key);
+  } catch (err) {
+    try {
+      if (before === null) await ctx.secrets.delete("link:cert");
+      else await ctx.secrets.set("link:cert", before);
+    } catch {
+      throw new TarsError(
+        `私鑰寫不進 keyring，憑證也還原不了：keyring 裡的 link:cert 與 link:key 可能不成對，請重新執行 tars link setup（${(err as Error).message}）`,
+      );
+    }
+    throw new TarsError(`私鑰寫不進 keyring，憑證已還原，沒有改變：${(err as Error).message}`);
+  }
+}
+
 async function setup(ctx: ServeContext, opts: { cert: string; key: string }): Promise<number> {
   refuseInSession(ctx.env);
   const [certText, keyText] = await Promise.all([
@@ -72,8 +94,7 @@ async function setup(ctx: ServeContext, opts: { cert: string; key: string }): Pr
     ctx.io.err("沒有寫入");
     return 1;
   }
-  await ctx.secrets.set("link:cert", certText);
-  await ctx.secrets.set("link:key", keyText);
+  await storePair(ctx, certText, keyText);
   // The dashboard made the key and the browser saved it: it is on disk, and tars does not delete it.
   ctx.io.out(`私鑰已存進 keyring。請刪除原始的私鑰檔：${opts.key}`);
   const missing = await missingLinkKeys(ctx);
