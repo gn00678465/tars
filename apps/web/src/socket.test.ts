@@ -108,6 +108,24 @@ describe("Socket: telling an expired login from a dead network", () => {
     expect(h.sockets.length).toBeGreaterThan(2);
   });
 
+  test("asks again every 4 failed reconnects: a network back after the login ran out is found", async () => {
+    const h = await dropped(() => Promise.reject(new TypeError("offline")));
+    expect(h.fetches).toEqual(["/"]);
+    // The network is back, but Access now turns the page away.
+    h.answer = async () => ({ type: "opaqueredirect", status: 0 });
+    for (let i = 0; i < 3; i++) {
+      await h.advance(15_000);
+      h.last().end(1006);
+      await h.advance(0);
+    }
+    expect(h.fetches).toEqual(["/"]);
+    await h.advance(15_000);
+    h.last().end(1006);
+    await h.advance(0);
+    expect(h.fetches).toEqual(["/", "/"]);
+    expect(states(h).at(-1)).toBe("auth_expired");
+  });
+
   test("a 4xxx close does not ask", async () => {
     const h = await opened();
     h.last().end(4001);

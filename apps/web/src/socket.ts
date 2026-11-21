@@ -6,6 +6,8 @@ const PING_EVERY_MS = 30_000;
 const PONG_WITHIN_MS = 10_000;
 const RESEND_MS = 10_000;
 const KEYS_RETRY_MS = 30_000;
+/** Failed reconnects between same-origin requests, once asking: see closed(). */
+const PROBE_EVERY = 4;
 
 /** The part of a browser WebSocket the page uses. */
 export interface WebSocketLike {
@@ -55,8 +57,11 @@ export class Socket {
   private ping: unknown;
   private pong: unknown;
   private helloId: string | undefined;
-  /** A connection that had opened closed without a 4xxx: the next failed connect asks why. */
-  private probeNext = false;
+  /**
+   * A connection that had opened closed without a 4xxx: failed connects since then ask why.
+   * Undefined when not asking.
+   */
+  private failedSince: number | undefined;
   private submit_: Submit | undefined;
 
   constructor(private readonly d: SocketDeps) {}
@@ -174,7 +179,7 @@ export class Socket {
       if (m.kind === "hello" && m.re !== undefined && m.re === this.helloId) {
         this.open = true;
         this.attempt = 0;
-        this.probeNext = false;
+        this.failedSince = undefined;
         this.listener({ type: "message", m, at: this.d.now() });
         this.state("open");
         this.transmit();
@@ -233,11 +238,16 @@ export class Socket {
     }
     if (code === 4000) return this.later(0);
     const is4xxx = code >= 4000 && code <= 4999;
-    if (opened && !is4xxx) this.probeNext = true;
-    else if (!opened && this.probeNext) {
-      this.probeNext = false;
-      void this.probe();
-      return;
+    if (opened && !is4xxx) this.failedSince = 0;
+    else if (!opened && this.failedSince !== undefined) {
+      const n = this.failedSince++;
+      // Asked once, a request that failed with the network says nothing about the login, which
+      // may run out while the network is still down. Every PROBE_EVERY failures (once a minute
+      // at the 15 s backoff) catches that without a request on each reconnect.
+      if (n % PROBE_EVERY === 0) {
+        void this.probe();
+        return;
+      }
     }
     this.backoff();
   }
