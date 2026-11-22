@@ -56,3 +56,15 @@
   align-items: center;
   gap: 12px;
 }
+
+/* The model's line breaks are part of its answer (a list, a ledger preview). */
+.msg-assistant-text p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.msg-assistant-text pre.tool-code-box {
+  margin: 0 0 10px;
+}
+.msg-assistant-text pre.tool-code-box:last-child {
+  margin-bottom: 0;
+}

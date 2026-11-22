@@ -95,6 +95,35 @@ function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undef
   );
 }
 
+/**
+ * The model's text as written: line breaks kept (CSS), and a block fenced by three backticks
+ * drawn as code. Only text nodes: nothing in it is ever read as HTML.
+ */
+export function Prose({ text, tail }: { text: string; tail?: string }) {
+  const parts = text.split("```");
+  return parts.map((part, i) => {
+    const end = i === parts.length - 1 && tail !== undefined && tail !== "" ? tail : undefined;
+    // Odd parts sit between fences; an unclosed one (still streaming) is code too.
+    if (i % 2 === 0)
+      return part === "" && end === undefined ? null : (
+        <p key={i}>
+          {part}
+          {end}
+        </p>
+      );
+    const newline = part.indexOf("\n");
+    // A first line with no space is the language name (```ts), not code.
+    const body =
+      newline >= 0 && !/\s/.test(part.slice(0, newline)) ? part.slice(newline + 1) : part;
+    return (
+      <Fragment key={i}>
+        <pre className="tool-code-box">{body.replace(/\n$/, "")}</pre>
+        {end === undefined ? null : <p>{end}</p>}
+      </Fragment>
+    );
+  });
+}
+
 /** What is drawn right after an item: the approval cards that belong to it. */
 export type After = (seq: number) => ReactNode;
 
@@ -124,11 +153,10 @@ function One({ item, result }: { item: WireItem; result: ToolResult | undefined 
     case "assistant":
       return (
         <div key={item.seq} className="msg-assistant-text">
-          <p>
-            {item.text}
-            {cut(item.truncated)}
-            {ASSISTANT_STATE[item.state] ?? ""}
-          </p>
+          <Prose
+            text={item.text}
+            tail={`${cut(item.truncated)}${ASSISTANT_STATE[item.state] ?? ""}`}
+          />
         </div>
       );
     case "tool_call":
@@ -214,7 +242,7 @@ export function Thread(props: { state: State; onOlder: () => void; after: After 
             <Rest items={g.rest} after={props.after} />
             {i === all.length - 1 && running !== undefined ? (
               <div className="msg-assistant-text streaming">
-                <p>{running.text}</p>
+                <Prose text={running.text} />
               </div>
             ) : null}
           </div>
@@ -222,7 +250,7 @@ export function Thread(props: { state: State; onOlder: () => void; after: After 
       ))}
       {all.length === 0 && running !== undefined ? (
         <div className="msg-assistant-text streaming">
-          <p>{running.text}</p>
+          <Prose text={running.text} />
         </div>
       ) : null}
       {turn === undefined ? null : (
