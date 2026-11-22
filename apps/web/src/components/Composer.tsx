@@ -35,6 +35,20 @@ export function Composer(props: {
   // being sent) says why the send button is off.
   const waitReason = props.canAbort ? undefined : props.busy;
   const menu = closed || off ? undefined : menuFor(text, props.skills, props.builtins);
+  // A press outside the menu, the text box and the / button closes the menu (14-14), as Esc.
+  const menuBox = useRef<HTMLDivElement>(null);
+  const slashButton = useRef<HTMLButtonElement>(null);
+  const shown = menu !== undefined;
+  useEffect(() => {
+    if (!shown) return;
+    const press = (e: PointerEvent) => {
+      const at = e.target as Node;
+      if ([menuBox, input, slashButton].some((r) => r.current?.contains(at) === true)) return;
+      setClosed(true);
+    };
+    document.addEventListener("pointerdown", press);
+    return () => document.removeEventListener("pointerdown", press);
+  }, [shown]);
   const enabled = menu?.filter((o) => o.enabled) ?? [];
   const selected = enabled[Math.min(index, enabled.length - 1)];
 
@@ -93,6 +107,7 @@ export function Composer(props: {
       {menu === undefined ? null : (
         <div
           id="slash-menu"
+          ref={menuBox}
           className="slash-menu sg-popover"
           role="listbox"
           aria-label="指令與可用的 skills"
@@ -181,6 +196,7 @@ export function Composer(props: {
         <div className="composer-toolbar">
           <div className="composer-toolbar-left">
             <button
+              ref={slashButton}
               className="sg-btn sg-btn-ghost"
               type="button"
               title="插入 / 指令（以 // 開頭可送出純斜線）"

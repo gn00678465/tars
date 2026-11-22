@@ -244,6 +244,19 @@ test("typing filters; Esc closes; Tab on a built-in runs it", async () => {
   expect(c.options()).toHaveLength(7);
 });
 
+test("a press outside the menu closes it; one on the text box or the menu does not", async () => {
+  const c = await composer(SKILLS);
+  const press = (el: Element) =>
+    act(async () => void el.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+  await c.type("/");
+  await press(c.area);
+  await press(c.root.querySelector(".slash-menu-foot") as Element);
+  expect(c.area.getAttribute("aria-expanded")).toBe("true");
+  await press(document.body);
+  expect(c.area.getAttribute("aria-expanded")).toBe("false");
+  expect(c.area.value).toBe("/");
+});
+
 test("a local-only skill or an unknown name sends nothing and says why; // sends one slash", async () => {
   const c = await composer(SKILLS);
   await c.type("/memory 記住這個");
