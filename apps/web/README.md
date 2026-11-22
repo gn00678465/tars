@@ -29,20 +29,31 @@ tars serve ── 用戶端憑證（mTLS）──> <LINK_HOST>/link ──┘
 
 每一步都由擁有者自己做。agent 不登入 Cloudflare、不部署、不碰憑證與 keyring。
 
-| #   | 在哪裡            | 步驟                                                                                                                                                       |
-| --- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Cloudflare 控制台 | 在 `<OWNER_DOMAIN>` 建兩個主機名稱：`<APP_HOST>`、`<LINK_HOST>`                                                                                            |
-| 2   | Cloudflare 控制台 | 在網域既有的封鎖規則裡，替這兩台主機加國別的例外（見下面「封鎖規則的例外」）                                                                               |
-| 3   | Cloudflare 控制台 | 建 Access 應用程式保護 `<APP_HOST>`，並替它建一條**專用的原則**（見下面「Access 的原則與登入期限」）。記下 team 網域與 `aud`                               |
-| 4   | Cloudflare 控制台 | 發本機端的用戶端憑證，替 `<LINK_HOST>` 開 mTLS，加一條 WAF 規則擋下沒有憑證的請求                                                                          |
-| 5   | 終端              | `tars link setup --cert <憑證檔> --key <私鑰檔>`，成功後**刪掉下載的私鑰檔**。私鑰已經在 keyring 裡，磁碟上那份只剩外洩的風險                              |
-| 6   | 終端              | 填 `config.toml` 的 `[link]`（見下面「本機端的設定」），`tars link status` 顯示「[link]：齊全」                                                            |
-| 7   | 終端              | 設 Worker 的 secret 並部署（見下面「Worker」）                                                                                                             |
-| 8   | 終端              | `tars llm key set <provider>`（已設過的不用重做）、`tars models refresh`、填價目、啟用模型                                                                 |
-| 9   | 終端              | 入庫通知腳本，設 `[notify]`（範本在 `examples/scripts/bark-push/`）                                                                                        |
-| 10  | 終端              | `tars serve`。另開一個終端跑 `tars serve status`，每一項都正常。登入網頁一次，確認日誌裡登入的期限和第 3 步設的值相符（見下面「Access 的原則與登入期限」） |
+| #   | 在哪裡            | 步驟                                                                                                                                                                                |
+| --- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Cloudflare 控制台 | 建 Access 應用程式保護 `<APP_HOST>`（主機名稱這時還不必存在），並替它建一條**專用的原則**（見下面「Access 的原則與登入期限」）。記下 team 網域與 `aud`                              |
+| 2   | Cloudflare 控制台 | 發本機端的用戶端憑證（有效期 1 年，加標籤 `tars-serve`），下載憑證與私鑰。私鑰只顯示一次                                                                                            |
+| 3   | 終端              | `tars link setup --cert <憑證檔> --key <私鑰檔>`，要輸入 `yes` 確認，所以在自己的終端執行。成功後**刪掉下載的私鑰檔**。憑證與私鑰只在 keyring 裡，下載的檔案刪掉不影響 `tars serve` |
+| 4   | 終端              | 設 Worker 的 secret、建置並部署（見下面「Worker」）。Worker 要先存在，下一步才能加自訂網域                                                                                          |
+| 5   | Cloudflare 控制台 | 在 Worker 的「網域」加兩個自訂網域：`<APP_HOST>`、`<LINK_HOST>`。替 `<LINK_HOST>` 開 mTLS（主機清單**只放它**），加 WAF 規則擋沒有憑證的請求（見下面「用戶端憑證的 WAF 規則」）     |
+| 6   | Cloudflare 控制台 | 在網域既有的封鎖規則裡，替這兩台主機加國別的例外（見下面「封鎖規則的例外」）                                                                                                        |
+| 7   | 終端              | 填 `config.toml` 的 `[link]`（見下面「本機端的設定」），`tars link status` 顯示「[link]：齊全」                                                                                     |
+| 8   | 終端              | `tars llm key set <provider>`（已設過的不用重做）、`tars models refresh`、填價目、啟用模型                                                                                          |
+| 9   | 終端              | 入庫通知腳本，設 `[notify]`（範本在 `examples/scripts/bark-push/`）                                                                                                                 |
+| 10  | 終端              | `tars serve`。另開一個終端跑 `tars serve status`，每一項都正常。登入網頁一次，確認日誌裡登入的期限和第 1 步設的值相符（見下面「Access 的原則與登入期限」）                          |
 
 任何一項缺了，`tars serve` 啟動時印出缺哪一項並結束。keyring 裡沒有憑證時它不連線，每 60 秒重讀一次，`tars serve status` 顯示「keyring 讀不到」。
+
+### 用戶端憑證的 WAF 規則
+
+mTLS 只是讓邊緣向對方要憑證，**不擋沒有憑證的請求**。要加一條自訂規則，動作 Block：
+
+```
+(http.host eq "<LINK_HOST>" and not cf.tls_client_auth.cert_verified)
+```
+
+- mTLS 的主機清單只放 `<LINK_HOST>`。放進 `<APP_HOST>` 的話，瀏覽器登入時邊緣也會要求出示用戶端憑證，裝過憑證的裝置會跳出選憑證的對話框。
+- 沒有憑證打 `<LINK_HOST>`，預期 403。
 
 ### 封鎖規則的例外
 
@@ -164,6 +175,9 @@ npx wrangler deploy \
 ## 疑難排解
 
 - `tars link setup` 執行到一半被中斷，或同時執行兩次時，keyring 裡的憑證與私鑰可能不成對：`tars serve` 連不上 `<LINK_HOST>`，`tars serve status` 顯示連線失敗。重新執行一次 `tars link setup` 即可恢復。
+- 在 Worker 加 `<APP_HOST>` 的自訂網域時出現「已有外部管理的 DNS 記錄」：這個主機名稱在 DNS 已有一筆記錄（例如指向已不存在的 Tunnel 的 CNAME）。確認不再使用後刪掉那筆，再加自訂網域。
+- Worker 的「網域」分頁剛加完時可能還是空的。以 DNS 頁顯示「Worker → `tars-web`」為準。
+- 網頁的對話清單很長時，開著對話會把清單收起來，摘要列寫「目前：<標題>」。點摘要可以展開。
 
 ## 常駐
 
