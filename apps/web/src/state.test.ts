@@ -412,7 +412,7 @@ describe("state: the relay and the local end", () => {
   test("offline from relay.status blocks the composer", () => {
     const s = run([...open, server("relay.status", { online: false, lastSeenAt: 50 })]);
     expect(s.relay).toEqual({ online: false, lastSeenAt: 50 });
-    expect(composerBlocked(s)).toBe("本機端離線");
+    expect(composerBlocked(s)).toBe("本機端離線，暫時無法送出訊息。");
   });
 
   test("localSince: none the first time; a change warns, and the warning stays", () => {
@@ -440,7 +440,7 @@ describe("state: the relay and the local end", () => {
   test("auth_expired anywhere ends the session's sending", () => {
     const s = run([...open, server("nack", { reason: "auth_expired" }, { re: "x" })]);
     expect(s.connection).toBe("auth_expired");
-    expect(composerBlocked(s)).toBe("登入已過期，請重新整理");
+    expect(composerBlocked(s)).toBe("登入已過期，請重新登入後再試。");
   });
 });
 

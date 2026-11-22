@@ -421,10 +421,10 @@ export const localNow = (s: State, at: number): number | undefined =>
 
 /** Why the composer is off (nothing can reach the local end), or undefined when it is on. */
 export function composerBlocked(s: State): string | undefined {
-  if (s.connection === "auth_expired") return "登入已過期，請重新整理";
+  if (s.connection === "auth_expired") return "登入已過期，請重新登入後再試。";
   if (s.connection === "keys_unavailable") return "本機端暫時無法驗證登入，稍後自動重試";
   if (s.connection !== "open") return "連線中斷，正在重新連線";
-  if (!s.relay.online) return "本機端離線";
+  if (!s.relay.online) return "本機端離線，暫時無法送出訊息。";
   return undefined;
 }
 

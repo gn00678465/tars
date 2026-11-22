@@ -14,8 +14,8 @@ afterEach(() => {
 const ready: State = { ...initial, connection: "open", relay: { online: true } };
 
 test.each<[string, State, string]>([
-  ["offline", { ...ready, relay: { online: false } }, "本機端離線"],
-  ["login expired", { ...ready, connection: "auth_expired" }, "登入已過期，請重新整理"],
+  ["offline", { ...ready, relay: { online: false } }, "本機端離線，暫時無法送出訊息。"],
+  ["login expired", { ...ready, connection: "auth_expired" }, "登入已過期，請重新登入後再試。"],
   ["the page's connection down", { ...ready, connection: "offline" }, "連線中斷，正在重新連線"],
 ])("%s: off, with the reason", async (_, state, reason) => {
   const { root } = await render(
