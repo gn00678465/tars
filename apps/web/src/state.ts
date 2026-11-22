@@ -26,7 +26,7 @@ export type Connection =
   /** hello was refused as another protocol version: which side is behind (nack.need). */
   | "version";
 
-export type TurnState = "started" | "rejected" | "completed" | "failed" | "aborted";
+export type TurnState = "started" | "rejected" | "completed" | "failed" | "aborted" | "interrupted";
 
 export interface Card {
   readonly approval: WireApproval;
@@ -234,6 +234,11 @@ function message(s: State, m: ServerMessage, at: number): State {
       return s.ping !== undefined && m.re === s.ping.id
         ? { ...withoutKeys(s, "ping"), status: m.p, statusAt: at, rtt: at - s.ping.at }
         : { ...s, status: m.p, statusAt: at };
+    // Shown from the batch 4 web commits on; until then the page ignores them.
+    case "turn.phase":
+    case "compact":
+    case "conv.context":
+      return s;
     case "relay.status": {
       const since = m.p.localSince;
       const changed = since !== undefined && s.localSince !== undefined && since !== s.localSince;

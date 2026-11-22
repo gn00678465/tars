@@ -32,6 +32,7 @@ import {
   limitReached,
   reserve,
   spent,
+  status as budgetStatus,
   turnSpent,
 } from "./ledger.ts";
 import type { Log } from "./log.ts";
@@ -73,6 +74,9 @@ import {
   type ModelRequest,
   type NewItem,
   type ReasonCode,
+  type ReasonData,
+  type Refusal,
+  type RejectReason,
   type SystemBlock,
   type ToolCallEndState,
   type ToolCallItem,
@@ -146,8 +150,13 @@ export type CompactOutcome =
       readonly reason: ReasonCode;
       readonly message: string;
       readonly detail?: string;
+      readonly data?: ReasonData;
     }
   | { readonly kind: "aborted" };
+
+/** The next UTC midnight: when the daily cap is counted afresh. */
+const nextUtcDay = (now: Date) =>
+  Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
 
 const TEXT = {
   skipped: "前一個動作沒有執行，這個已略過",
@@ -211,6 +220,58 @@ export function createEngine(deps: EngineDeps) {
     items.reduce((n, i) => n + sentBytes(i, limits.tool_result_bytes), 0);
   /** Read at every check, never kept: rather not send than count short. */
   const otherSpend = (s: Setup) => deps.otherSpend(s.model.provider, s.cfg, deps.now());
+
+  /**
+   * What a page needs to say why, read when the turn ends: the ledger now and the limit it
+   * reached. Only this machine's figures, so it may leave the machine as an error's message may not.
+   */
+  function reasonData(
+    s: Setup,
+    reason: ReasonCode | undefined,
+    at: { turnId?: string; attempts?: number } = {},
+  ): ReasonData | undefined {
+    const provider = s.model.provider;
+    switch (reason) {
+      case "budget_stopped":
+      case "daily_cap": {
+        const now = deps.now();
+        const b = budgetStatus(db, provider, s.cfg, now, otherSpend(s));
+        return reason === "budget_stopped"
+          ? {
+              provider,
+              period: b.period === "utc-month" ? "month" : "cumulative",
+              spentUsd: b.spentUsd,
+              stopUsd: b.stopUsd,
+              quotaUsd: b.quotaUsd,
+            }
+          : {
+              provider,
+              todayUsd: b.todayUsd,
+              dailyCapUsd: b.dailyCapUsd,
+              resetAt: nextUtcDay(now),
+            };
+      }
+      case "turn_cap":
+        return {
+          ...(at.turnId === undefined ? {} : { turnUsd: turnSpent(db, at.turnId) }),
+          turnCapUsd: s.limits.turn_cap_usd,
+        };
+      case "request_limit":
+        return { max: s.limits.max_requests_per_turn };
+      case "rate_limited":
+        return { provider, ...(at.attempts === undefined ? {} : { attempts: at.attempts }) };
+      case "provider_spend_limit":
+      case "auth":
+        return { provider };
+      default:
+        return undefined;
+    }
+  }
+
+  const refuse = (s: Setup, reason: RejectReason): Rejected => {
+    const data = reasonData(s, reason);
+    return data === undefined ? rejected(reason) : { ...rejected(reason), data };
+  };
 
   /**
    * The input tokens a chat request with this history is expected to take. The last measured
@@ -377,7 +438,7 @@ export function createEngine(deps: EngineDeps) {
     if (!first.ok)
       return first.reason === "conv_too_long" && carry !== undefined
         ? { ...rejected("conv_too_long", CARRY_TEXT.over_stop), carry: "over_stop" }
-        : rejected(first.reason);
+        : refuse(s, first.reason);
 
     const convId = conv?.id ?? store.newId();
     const turnId = store.newId();
@@ -528,7 +589,7 @@ export function createEngine(deps: EngineDeps) {
         writePartial(t, got.text, reason === "aborted" ? "aborted" : "incomplete");
         return reason === "aborted"
           ? endTurn(t, "aborted")
-          : endTurn(t, "failed", reason, got.error.detail);
+          : endTurn(t, "failed", reason, got.error.detail, attempt);
       }
       const end = got.end as NonNullable<Consumed["end"]>;
       const calls = recordAnswer(t, usageId, got, end);
@@ -674,6 +735,7 @@ export function createEngine(deps: EngineDeps) {
     t: Turn,
     call: ToolCallItem,
     outcome: ToolOutcome | { status: ToolCallEndState; text: string; truncated: boolean },
+    refusal?: Refusal,
   ): void {
     const item = store.finishToolCall(
       db,
@@ -683,6 +745,7 @@ export function createEngine(deps: EngineDeps) {
         text: outcome.text,
         truncated: outcome.truncated,
         ...("exit" in outcome && outcome.exit !== undefined ? { exit: outcome.exit } : {}),
+        ...(refusal === undefined ? {} : { refusal }),
       },
       deps.now().getTime(),
     );
@@ -690,8 +753,13 @@ export function createEngine(deps: EngineDeps) {
     if (item !== undefined) t.frontend.emit({ type: "item", item });
   }
 
-  const ended = (t: Turn, call: ToolCallItem, status: ToolCallEndState, text: string) =>
-    finish(t, call, { status, text, truncated: false });
+  const ended = (
+    t: Turn,
+    call: ToolCallItem,
+    status: ToolCallEndState,
+    text: string,
+    refusal?: Refusal,
+  ) => finish(t, call, { status, text, truncated: false }, refusal);
 
   async function runCall(t: Turn, call: ToolCallItem): Promise<Halt | undefined> {
     const { name, input } = call.body;
@@ -712,7 +780,7 @@ export function createEngine(deps: EngineDeps) {
     const cctx = { paths: deps.paths, approveCommand: deps.approveCommand };
     const first = await classify(argv, cctx);
     if (first.kind === "refuse") {
-      ended(t, call, "refused", `${REFUSAL_TEXT}\n原因：${first.reason}`);
+      ended(t, call, "refused", `${REFUSAL_TEXT}\n原因：${first.reason}`, "not_offered");
       t.frontend.emit({ type: "notice", code: "blocked", data: { reason: first.reason } });
       return undefined;
     }
@@ -728,7 +796,7 @@ export function createEngine(deps: EngineDeps) {
       again.kind !== first.kind ||
       JSON.stringify(again.canonicalArgv) !== JSON.stringify(first.canonicalArgv)
     ) {
-      ended(t, call, "refused", `${REFUSAL_TEXT}\n原因：${TEXT.changed}`);
+      ended(t, call, "refused", `${REFUSAL_TEXT}\n原因：${TEXT.changed}`, "changed");
       return undefined;
     }
     return execute(t, call, first);
@@ -749,7 +817,7 @@ export function createEngine(deps: EngineDeps) {
             other,
           });
     if (reason === null) return undefined;
-    ended(t, call, "refused", `${REASON_TEXT[reason]}，沒有執行`);
+    ended(t, call, "refused", `${REASON_TEXT[reason]}，沒有執行`, "budget");
     return { end: { state: "failed", reason } };
   }
 
@@ -774,6 +842,7 @@ export function createEngine(deps: EngineDeps) {
       AbortSignal.timeout(Math.max(0, record.expiresAt - now)),
     ]);
     const answer = await t.frontend.askApproval(record, wait);
+    const at = deps.now().getTime();
     // The approval and the tool call end in one transaction, and the call takes the state the
     // compare-and-set left the approval in: an answer given after expiry is an expiry.
     const state = db.transaction(() => {
@@ -783,7 +852,7 @@ export function createEngine(deps: EngineDeps) {
           decision: answer,
           hash: record.hash,
           via: t.frontend.via,
-          now: deps.now().getTime(),
+          now: at,
         });
       else if (t.signal.aborted) approvals.cancel(db, record.id);
       if (approvals.stateOf(db, record.id) === "pending") approvals.expire(db, record.id);
@@ -798,6 +867,7 @@ export function createEngine(deps: EngineDeps) {
       approvalId: record.id,
       state,
       via: state === "expired" ? "timeout" : state === "cancelled" ? "abort" : t.frontend.via,
+      at,
     });
     deps.log.log("approval", { turn: t.turnId, state });
     if (state === "approved") return undefined;
@@ -833,7 +903,15 @@ export function createEngine(deps: EngineDeps) {
     return undefined;
   }
 
-  function endTurn(t: Turn, state: EndState, reason?: FailReason, detail?: string): TurnOutcome {
+  function endTurn(
+    t: Turn,
+    state: EndState,
+    reason?: FailReason,
+    detail?: string,
+    attempts?: number,
+  ): TurnOutcome {
+    const data =
+      state === "failed" ? reasonData(t.s, reason, { turnId: t.turnId, attempts }) : undefined;
     db.transaction(() => {
       store.endTurn(db, {
         id: t.turnId,
@@ -851,6 +929,7 @@ export function createEngine(deps: EngineDeps) {
               code: reason,
               message: REASON_TEXT[reason],
               ...(detail === undefined ? {} : { detail }),
+              ...(data === undefined ? {} : { data }),
             },
           },
         ]);
@@ -862,6 +941,7 @@ export function createEngine(deps: EngineDeps) {
       state,
       reason,
       detail,
+      ...(data === undefined ? {} : { data }),
       costUsd,
       usage: t.usage,
       requests: store.turnRequests(db, t.turnId),
@@ -905,16 +985,26 @@ export function createEngine(deps: EngineDeps) {
   ): Promise<CompactOutcome> {
     const conv = store.getConversation(db, convId);
     const s = await prepareModel(deps, conv.provider, conv.model);
-    if ("kind" in s) return { kind: "failed", reason: s.reason, message: s.message };
+    if ("kind" in s)
+      return {
+        kind: "failed",
+        reason: s.reason,
+        message: s.message,
+        ...(s.data === undefined ? {} : { data: s.data }),
+      };
     return compactWith(s, conv, opts, frontend, signal);
   }
 
-  const compactFailed = (reason: ReasonCode, detail?: string): CompactOutcome => ({
-    kind: "failed",
-    reason,
-    message: REASON_TEXT[reason],
-    ...(detail === undefined ? {} : { detail }),
-  });
+  const compactFailed = (s: Setup, reason: ReasonCode, detail?: string): CompactOutcome => {
+    const data = reasonData(s, reason);
+    return {
+      kind: "failed",
+      reason,
+      message: REASON_TEXT[reason],
+      ...(detail === undefined ? {} : { detail }),
+      ...(data === undefined ? {} : { data }),
+    };
+  };
 
   async function compactWith(
     s: Setup,
@@ -942,9 +1032,9 @@ export function createEngine(deps: EngineDeps) {
       opts.focus,
       (p) => estimate(p) <= room,
     );
-    if (prompt === undefined) return compactFailed("compact_too_large");
+    if (prompt === undefined) return compactFailed(s, "compact_too_large");
     const other = otherSpend(s);
-    if (other === undefined) return compactFailed("budget_unreadable");
+    if (other === undefined) return compactFailed(s, "budget_unreadable");
     const r = reserve({
       other,
       db,
@@ -959,7 +1049,7 @@ export function createEngine(deps: EngineDeps) {
       maxOutput: maxOut,
       now: deps.now(),
     });
-    if (!r.ok) return compactFailed(r.reason);
+    if (!r.ok) return compactFailed(s, r.reason);
 
     const turnId = store.newId();
     const usageId = db.transaction(() => {
@@ -1006,7 +1096,9 @@ export function createEngine(deps: EngineDeps) {
           reason === "aborted" ? undefined : reason,
         );
       })();
-      return reason === "aborted" ? { kind: "aborted" } : compactFailed(reason, got.error.detail);
+      return reason === "aborted"
+        ? { kind: "aborted" }
+        : compactFailed(s, reason, got.error.detail);
     }
     const end = got.end as NonNullable<Consumed["end"]>;
     const final = (fn: () => void) => {
@@ -1020,7 +1112,7 @@ export function createEngine(deps: EngineDeps) {
     const check = validateSummary(got.text, end.stop);
     if (!check.ok) {
       final(() => close("failed", check.reason));
-      return compactFailed(check.reason);
+      return compactFailed(s, check.reason);
     }
     const body = {
       firstKeptSeq: plan.firstKeptSeq,

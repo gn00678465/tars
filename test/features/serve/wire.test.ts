@@ -1,13 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import { ITEM_TEXT_BYTES, TOOL_TEXT_BYTES, RUNNING_TEXT_BYTES, wireItem } from "@tars/protocol";
 import type { Item } from "../../../src/features/agent/types.ts";
-import { toWire, wireRunning } from "../../../src/features/serve/wire.ts";
+import { toWire, wireRunning, type WireLookup } from "../../../src/features/serve/wire.ts";
 
 const T = "01a1fd71-be41-71e7-809a-4bb1e568ad68";
 const it = (kind: string, body: unknown): Item =>
   ({ seq: 3, turnId: T, step: 1, kind, body }) as Item;
-const usage = () => ({ inputTokens: 120, outputTokens: 30, costUsd: 0.02, costSource: "table" });
-const wire = (item: Item) => toWire(item, usage);
+const figures = {
+  inputTokens: 120,
+  outputTokens: 30,
+  costUsd: 0.02,
+  costSource: "table",
+  cacheReadTokens: 0,
+  thinkingTokens: 0,
+};
+const lookup: WireLookup = {
+  usage: () => figures,
+  duration: () => undefined,
+  decided: () => undefined,
+};
+const wire = (item: Item, l: WireLookup = lookup) => toWire(item, l);
 
 /** Every key of the wire item, and it passes the protocol's schema. */
 function checked(item: Item) {
@@ -100,15 +112,48 @@ describe("toWire: the allow-list", () => {
       outputTokens: 30,
       costUsd: 0.02,
       costSource: "table",
+      cacheReadTokens: 0,
+      thinkingTokens: 0,
     });
   });
 
-  test("error: the code only, never message or detail", () => {
+  test("usage: cache read, thinking and the turn's effort when the row has them", () => {
+    const l = {
+      ...lookup,
+      usage: () => ({ ...figures, cacheReadTokens: 100, thinkingTokens: 12, effort: "medium" }),
+    };
+    expect(wire(it("usage", { usageId: 7 }), l)).toMatchObject({
+      cacheReadTokens: 100,
+      thinkingTokens: 12,
+      effort: "medium",
+    });
+  });
+
+  test("tool_result: how long it ran, and why it was refused", () => {
+    const l = { ...lookup, duration: (id: string) => (id === "c1" ? 840 : undefined) };
+    const body = { callId: "c1", status: "refused", text: "x", truncated: false };
+    expect(wire(it("tool_result", { ...body, refusal: "changed" }), l)).toMatchObject({
+      durationMs: 840,
+      refusal: "changed",
+    });
+    const never = wire(it("tool_result", { ...body, callId: "c2" }), l) as Record<string, unknown>;
+    expect(["durationMs" in never, "refusal" in never]).toEqual([false, false]);
+  });
+
+  test("error: the code and this machine's figures, never message or detail", () => {
     const w = checked(
       it("error", { code: "provider_error", message: "upstream said sk-…", detail: "raw body" }),
     );
     expect(w).toEqual({ seq: 3, turn: T, kind: "error", code: "provider_error" });
     expect(JSON.stringify(w)).not.toContain("upstream");
+    const data = { provider: "anthropic", stopUsd: 95, spentUsd: 95.12 };
+    expect(checked(it("error", { code: "budget_stopped", message: "m", data }))).toEqual({
+      seq: 3,
+      turn: T,
+      kind: "error",
+      code: "budget_stopped",
+      data,
+    });
   });
 
   test("compaction: the summary", () => {
@@ -133,7 +178,9 @@ describe("toWire: the allow-list", () => {
   });
 
   test("a usage row that cannot be read is not sent", () => {
-    expect(toWire(it("usage", { usageId: 9 }), () => undefined)).toBeUndefined();
+    expect(
+      wire(it("usage", { usageId: 9 }), { ...lookup, usage: () => undefined }),
+    ).toBeUndefined();
   });
 });
 

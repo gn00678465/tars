@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   ARGV_ITEMS,
   checkClient,
+  COMPACT_FOCUS_CHARS,
+  DATA_KEYS,
   FRAME_BYTES,
   EFFORT_LEVELS,
   EFFORT_NAME,
@@ -12,6 +14,7 @@ import {
   parseFrame,
   parseRelayFrame,
   parseServer,
+  PRICE_WARNS,
   SKILL_TEXT,
   SKILLS,
   skillInvocationText,
@@ -19,7 +22,7 @@ import {
   TEXT_BYTES,
   type Parsed,
 } from "../src/index.ts";
-import { CLIENT, CONN, ID, ITEMS, msg, SERVER } from "./fixtures.ts";
+import { CLIENT, CONN, context, ID, ITEMS, msg, SERVER, status } from "./fixtures.ts";
 
 const reason = (r: Parsed<unknown>) => (r.ok ? "ok" : r.reason);
 const submit = (text: string) => JSON.stringify(msg("turn.submit", { requestId: ID, text }));
@@ -243,4 +246,128 @@ test("checkClient: a frame's m checked like a raw message", () => {
   expect(reason(checkClient(CLIENT.hello))).toBe("ok");
   expect(reason(checkClient({ ...CLIENT.hello, v: 2 }))).toBe("version");
   expect(reason(checkClient({ ...CLIENT.hello, extra: 1 }))).toBe("bad_message");
+});
+
+describe("batch 4: every new field optional, each bounded", () => {
+  const server = (kind: string, p: object, extra: object = {}) =>
+    reason(parseServer(JSON.stringify(msg(kind, p, extra))));
+  const item = (it: object) => server("item", { item: it }, { conv: ID });
+
+  test("usage: cache read, thinking and effort; counts are whole and not negative", () => {
+    expect(item({ ...ITEMS.usage, cacheReadTokens: 0, thinkingTokens: 92, effort: "medium" })).toBe(
+      "ok",
+    );
+    expect(item({ ...ITEMS.usage, cacheReadTokens: -1 })).toBe("bad_message");
+    expect(item({ ...ITEMS.usage, thinkingTokens: 1.5 })).toBe("bad_message");
+    expect(item({ ...ITEMS.usage, effort: "" })).toBe("bad_message");
+  });
+
+  test("tool_result: duration and why it was refused; an unknown reason is refused", () => {
+    expect(item({ ...ITEMS.tool_result, durationMs: 840 })).toBe("ok");
+    for (const refusal of ["not_offered", "changed", "budget"])
+      expect(item({ ...ITEMS.tool_result, status: "refused", refusal })).toBe("ok");
+    expect(item({ ...ITEMS.tool_result, refusal: "other" })).toBe("bad_message");
+    expect(item({ ...ITEMS.tool_result, durationMs: -1 })).toBe("bad_message");
+  });
+
+  test("error and turn data: strings and numbers, at most DATA_KEYS keys, no nesting", () => {
+    const data = { provider: "anthropic", spentUsd: 95.1, stopUsd: 95 };
+    expect(item({ ...ITEMS.error, data })).toBe("ok");
+    const many = Object.fromEntries(Array.from({ length: DATA_KEYS + 1 }, (_, i) => [`k${i}`, i]));
+    expect(item({ ...ITEMS.error, data: many })).toBe("bad_message");
+    expect(item({ ...ITEMS.error, data: { nested: { a: 1 } } })).toBe("bad_message");
+    expect(item({ ...ITEMS.error, data: { s: "x".repeat(257) } })).toBe("bad_message");
+    expect(server("turn", { turn: ID, state: "failed", reason: "daily_cap", data })).toBe("ok");
+    expect(server("turn", { turn: ID, state: "interrupted" })).toBe("ok");
+    expect(server("compact", { state: "failed", reason: "budget_stopped", data })).toBe("ok");
+    expect(server("compact", { state: "paused" })).toBe("bad_message");
+  });
+
+  test("compaction: when, why, how much; all optional", () => {
+    expect(item(ITEMS.compaction)).toBe("ok");
+    expect(
+      item({
+        ...ITEMS.compaction,
+        at: 1,
+        trigger: "manual",
+        beforeTokens: 152_400,
+        keptTokens: 20_000,
+        count: 14,
+        costUsd: 0.004,
+        firstKeptSeq: 30,
+      }),
+    ).toBe("ok");
+    expect(item({ ...ITEMS.compaction, trigger: "cron" })).toBe("bad_message");
+  });
+
+  test("a turn's phase: one of five, as its own message and in a snapshot's running turn", () => {
+    expect(server("turn.phase", { turn: ID, phase: "waiting_approval" }, { conv: ID })).toBe("ok");
+    expect(server("turn.phase", { turn: ID, phase: "sleeping" })).toBe("bad_message");
+    const snapshot = (running: object) =>
+      server("conv.snapshot", { epoch: "ab".repeat(16), items: [], more: false, running });
+    expect(snapshot({ turn: ID, text: "", truncated: false, phase: "compacting" })).toBe("ok");
+    expect(snapshot({ turn: ID, text: "", truncated: false, phase: "x" })).toBe("bad_message");
+  });
+
+  test("approvals: when and which connection decided; already_decided says what", () => {
+    const resolved = { approvalId: ID, state: "approved", via: "remote" };
+    expect(server("approval.resolved", { ...resolved, at: 1, source: "this" })).toBe("ok");
+    expect(server("approval.resolved", { ...resolved, source: "other_device" })).toBe("ok");
+    expect(server("approval.resolved", { ...resolved, source: "terminal" })).toBe("bad_message");
+    expect(
+      server("nack", { reason: "already_decided", state: "denied", source: "other_device" }),
+    ).toBe("ok");
+    expect(server("nack", { reason: "already_decided", state: "pending" })).toBe("bad_message");
+  });
+
+  test("status: period, estimate, the prices to confirm, candidate and retired counts", () => {
+    const p = { ...status.providers[0], period: "cumulative", estimated: false };
+    const warn = { provider: "anthropic", model: "claude-opus-4-1", ageDays: 34, state: "stale" };
+    expect(
+      server("status", { ...status, providers: [p], prices: [warn], candidates: 2, retired: 1 }),
+    ).toBe("ok");
+    expect(server("status", { ...status, providers: [{ ...p, period: "week" }] })).toBe(
+      "bad_message",
+    );
+    expect(
+      server("status", { ...status, prices: [{ ...warn, ageDays: undefined, state: "missing" }] }),
+    ).toBe("ok");
+    expect(server("status", { ...status, prices: Array(PRICE_WARNS + 1).fill(warn) })).toBe(
+      "bad_message",
+    );
+  });
+
+  test("models.result: the read-only table, its total and the list's date", () => {
+    const entry = {
+      provider: "openrouter",
+      id: "deepseek/deepseek-chat",
+      label: "DeepSeek",
+      status: "candidate",
+      price: { input: 0.27, output: 1.1 },
+      priceSource: "openrouter",
+      pricedAt: "2026-11-19",
+    };
+    const result = (extra: object) =>
+      server("models.result", { models: [], updatedAt: "2026-11-19", ...extra });
+    expect(result({ catalog: [entry], catalogTotal: 340 })).toBe("ok");
+    expect(result({ catalog: [{ ...entry, status: "beta" }] })).toBe("bad_message");
+    expect(result({ catalog: [{ ...entry, price: { input: 1, other: 2 } }] })).toBe("bad_message");
+    expect(result({ catalog: Array(MODELS + 1).fill(entry) })).toBe("bad_message");
+  });
+
+  test("conv.context: the ratios and the window are required; the cache share is 0 to 100", () => {
+    expect(server("conv.context", context, { conv: ID })).toBe("ok");
+    expect(server("conv.context", { ...context, cacheHitPct: 101 })).toBe("bad_message");
+    expect(server("conv.context", { ...context, contextLimit: 0 })).toBe("bad_message");
+  });
+
+  test("conv.compact: needs conv; the focus is optional, not empty, at most COMPACT_FOCUS_CHARS", () => {
+    const compact = (p: object, extra: object = { conv: ID }) =>
+      reason(parseClient(JSON.stringify(msg("conv.compact", p, extra))));
+    expect(compact({})).toBe("ok");
+    expect(compact({ focus: "x".repeat(COMPACT_FOCUS_CHARS) })).toBe("ok");
+    expect(compact({ focus: "x".repeat(COMPACT_FOCUS_CHARS + 1) })).toBe("bad_message");
+    expect(compact({ focus: "" })).toBe("bad_message");
+    expect(compact({}, {})).toBe("bad_message");
+  });
 });

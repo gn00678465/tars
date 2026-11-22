@@ -118,6 +118,18 @@ export const CLIENT: Record<string, object> = {
   "wiki.page": msg("wiki.page", { path: "people/wang-xiaoming" }),
   "wiki.search": msg("wiki.search", { query: "王小明", limit: 20 }),
   "wiki.source": msg("wiki.source", { ref: REF, page: "people/wang-xiaoming" }),
+  "conv.compact": msg("conv.compact", { focus: "保留腳本輸出路徑" }, { conv: ID }),
+};
+
+export const context = {
+  contextUsed: 84_000,
+  contextLimit: 200_000,
+  cacheHitPct: 86,
+  lastCompactedAt: 1_800_000_000_000,
+  warnRatio: 0.6,
+  compactRatio: 0.75,
+  stopRatio: 0.85,
+  autoCompact: true,
 };
 
 export const SERVER: Record<string, object> = {
@@ -248,6 +260,9 @@ export const SERVER: Record<string, object> = {
     },
     { re: ID },
   ),
+  "turn.phase": msg("turn.phase", { turn: ID, phase: "running_script" }, { conv: ID }),
+  compact: msg("compact", { state: "failed", reason: "budget_stopped" }, { conv: ID }),
+  "conv.context": msg("conv.context", context, { conv: ID }),
 };
 
 /** A required key of each kind's p, when it has one. */
@@ -275,6 +290,9 @@ export const REQUIRED_P: Record<string, string> = {
   "wiki.page.result": "state",
   "wiki.search.result": "records",
   "wiki.source.result": "found",
+  "turn.phase": "phase",
+  compact: "state",
+  "conv.context": "contextLimit",
 };
 
 export const TO_LOCAL: Record<string, object> = {

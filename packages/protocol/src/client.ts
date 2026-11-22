@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { envelope, id, inConv } from "./envelope.ts";
-import { KEEP_LAST, TEXT_BYTES } from "./limits.ts";
+import { COMPACT_FOCUS_CHARS, KEEP_LAST, TEXT_BYTES } from "./limits.ts";
 import { wireEffort, wireModelRef } from "./wire.ts";
 import { WIKI_PATH, wikiSearchRequest, wikiSourceRequest } from "./wiki.ts";
 
@@ -40,6 +40,14 @@ export const clientMessage = z.discriminatedUnion("kind", [
       .refine((p) => p.keepLast === undefined || p.from !== undefined, "keepLast needs from"),
   ),
   inConv("turn.abort", empty),
+  /**
+   * Compacts the conversation now, as the terminal's /compact: a model request that is billed
+   * and goes through the same budget and the same one-at-a-time as a turn; turn.abort stops it.
+   */
+  inConv(
+    "conv.compact",
+    z.strictObject({ focus: z.string().min(1).max(COMPACT_FOCUS_CHARS).optional() }),
+  ),
   envelope(
     "approval.decide",
     z.strictObject({

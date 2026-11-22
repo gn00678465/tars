@@ -1,3 +1,4 @@
+import type { WireLookup } from "../../../src/features/serve/wire.ts";
 import type { ServerMessage } from "@tars/protocol";
 import { Registry, type Timers } from "../../../src/features/serve/access.ts";
 import { Notifier, type NotifyDeps } from "../../../src/features/serve/notify.ts";
@@ -64,6 +65,8 @@ export function testHub(opts: {
   timers: ManualTimers;
   notify?: Partial<NotifyDeps>;
   log?: Log;
+  /** The rows items refer to; a stub when the test has no database. */
+  lookup?: WireLookup;
 }): TestHub {
   const sent: TestHub["sent"] = [];
   const drops: string[] = [];
@@ -84,7 +87,18 @@ export function testHub(opts: {
     timers: opts.timers,
     notifier,
     newId: () => `m-${++n}`,
-    usageOf: () => ({ inputTokens: 10, outputTokens: 2, costUsd: 0.01, costSource: "table" }),
+    lookup: opts.lookup ?? {
+      usage: () => ({
+        inputTokens: 10,
+        outputTokens: 2,
+        costUsd: 0.01,
+        costSource: "table",
+        cacheReadTokens: 0,
+        thinkingTokens: 0,
+      }),
+      duration: () => undefined,
+      decided: () => undefined,
+    },
     sent,
     drops,
     send: linkSend(registry, (f) => {

@@ -296,6 +296,7 @@ describe("critical user journeys", () => {
     const out = ended(await runTurn(h, "記住"));
     const [result] = toolResults(h, out.convId);
     expect(result?.status).toBe("refused");
+    expect(result?.refusal).toBe("not_offered");
     expect(result?.text.startsWith(REFUSAL_TEXT)).toBe(true);
     expect(h.frontend.notices()).toContain("blocked");
   });
@@ -305,7 +306,11 @@ describe("critical user journeys", () => {
     adjust(h.db, "anthropic", 94.99, undefined, h.clock.now());
     const before = counts(h.db);
     const out = await runTurn(h, "hi");
-    expect(out).toMatchObject({ kind: "rejected", reason: "budget_stopped" });
+    expect(out).toMatchObject({
+      kind: "rejected",
+      reason: "budget_stopped",
+      data: { provider: "anthropic", period: "month", spentUsd: 94.99, stopUsd: 95, quotaUsd: 100 },
+    });
     expect(counts(h.db)).toEqual(before);
     expect(h.fake.messages()).toHaveLength(0);
   });
@@ -401,6 +406,36 @@ describe("rejections", () => {
     expect(h.fake.messages()).toHaveLength(0);
   });
 
+  test("a keyring that cannot be reached is not a missing key: keyring_unavailable", async () => {
+    const h = await harness();
+    const before = counts(h.db);
+    h.secrets.get = async () => {
+      throw new Error("cannot reach the OS keyring: no session bus");
+    };
+    expect(await runTurn(h, "hi")).toMatchObject({
+      kind: "rejected",
+      reason: "keyring_unavailable",
+      data: { provider: "anthropic" },
+    });
+    expect(counts(h.db)).toEqual(before);
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("the daily cap says when it is counted afresh: the next UTC midnight", async () => {
+    const h = await harness({ config: configWith({ daily_cap_usd: 0.0001 }) });
+    const now = h.clock.now();
+    const out = await runTurn(h, "hi");
+    expect(out).toMatchObject({
+      kind: "rejected",
+      reason: "daily_cap",
+      data: {
+        provider: "anthropic",
+        dailyCapUsd: 0.0001,
+        resetAt: Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+      },
+    });
+  });
+
   test("an invalid models.json refuses the message and leaves no turn", async () => {
     const h = await harness();
     writeFileSync(h.paths.modelsFile, "{ not json");
@@ -477,6 +512,21 @@ describe("retries and provider failures", () => {
     expect(turnRow(h.db, out.turnId).requests).toBe(3);
     const error = readItems(h.db, out.convId).find((i) => i.kind === "error");
     expect(error?.body).toMatchObject({ code: "provider_error" });
+    await expectNextTurnValid(h, out.convId);
+  });
+
+  test("429 to the last retry ends as rate_limited, saying how many attempts", async () => {
+    const h = await harness();
+    const limited = httpError(429, "rate_limit_error");
+    h.fake.reply(limited, limited, limited);
+    const out = ended(await runTurn(h, "hi"));
+    expect(out).toMatchObject({ state: "failed", reason: "rate_limited" });
+    const error = readItems(h.db, out.convId).find((i) => i.kind === "error");
+    expect(error?.body).toMatchObject({
+      code: "rate_limited",
+      message: "provider 的流量限制（HTTP 429），重試用完了",
+      data: { provider: "anthropic", attempts: 3 },
+    });
     await expectNextTurnValid(h, out.convId);
   });
 
@@ -609,7 +659,14 @@ describe("tools, approvals and the budget", () => {
     const out = ended(await runTurn(h, "hi"));
     expect(out).toMatchObject({ state: "failed", reason: "budget_stopped" });
     expect(toolResults(h, out.convId).map((r) => r.status)).toEqual(["done", "refused", "skipped"]);
+    expect(toolResults(h, out.convId)[1]?.refusal).toBe("budget");
     expect(h.fake.messages()).toHaveLength(1);
+    // The figures the page writes on the card, in the item and the turn's end alike.
+    const error = readItems(h.db, out.convId).find((i) => i.kind === "error");
+    const data = (error?.body as { data?: Record<string, unknown> } | undefined)?.data;
+    expect(data).toMatchObject({ provider: "anthropic", period: "month", stopUsd: 95 });
+    expect(data?.spentUsd as number).toBeGreaterThanOrEqual(95);
+    expect(h.frontend.events.find((e) => e.type === "turn_end")).toMatchObject({ data });
   });
 
   test("with the quota full no approval is created", async () => {
@@ -705,6 +762,7 @@ describe("tools, approvals and the budget", () => {
     expect(out.state).toBe("completed");
     const [result] = toolResults(h, out.convId);
     expect(result?.status).toBe("refused");
+    expect(result?.refusal).toBe("changed");
     expect(result?.text).toContain("腳本或路徑在核准後變了");
   });
 });
@@ -1490,8 +1548,15 @@ describe("the events a remote frontend needs", () => {
       h.fake.reply(tarsCall("tu1", runArgv("push")), text("好"));
       ended(await runTurn(h, "推播"));
       const [approval] = h.frontend.approvals;
+      const [decided] = rows(h.db, "SELECT decided_at FROM approvals") as { decided_at: number }[];
       expect(resolved(h)).toEqual([
-        { type: "approval_resolved", approvalId: approval?.id as string, state, via: expected },
+        {
+          type: "approval_resolved",
+          approvalId: approval?.id as string,
+          state,
+          via: expected,
+          at: decided?.decided_at as number,
+        },
       ]);
       expect(rows(h.db, "SELECT state, decided_via FROM approvals")).toEqual([
         { state, decided_via: via },

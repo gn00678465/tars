@@ -13,6 +13,7 @@ import {
 import { loadConfig } from "../../../src/features/agent/config.ts";
 import * as store from "../../../src/features/agent/store.ts";
 import { Dispatch, DROP } from "../../../src/features/serve/dispatch.ts";
+import { wireLookup } from "../../../src/features/serve/wire.ts";
 import type { Verdict } from "../../../src/features/serve/access.ts";
 import { tarsCall, text } from "../../fakes/anthropic.ts";
 import { tempHome } from "../../helpers.ts";
@@ -89,7 +90,7 @@ async function setup(extra: Omit<HarnessOptions, "selfCommand"> = {}): Promise<S
   harnesses.push(h);
   const timers = manualTimers(h.clock.now().getTime());
   const log = recordedLog();
-  const hub = testHub({ timers, log });
+  const hub = testHub({ timers, log, lookup: wireLookup(h.db) });
   const frames: FrameToRelay[] = [];
   const reconciled: string[] = [];
   const held: (() => void)[] = [];
@@ -596,14 +597,40 @@ describe("Dispatch: approvals while a turn runs", () => {
       hash: approval.hash,
     });
     expect(reply(s, CONN_B, d)?.kind).toBe("ack");
+    // The first device, a moment late: told what was decided, and that it was not this one.
+    const late = await s.msg(CONN_A, "approval.decide", {
+      approvalId: approval.approvalId,
+      decision: "denied",
+      hash: approval.hash,
+    });
+    expect(reply(s, CONN_A, late)?.p).toEqual({
+      reason: "already_decided",
+      state: "approved",
+      source: "other_device",
+    });
     await until(() => ended(s, CONN_A));
     await s.d.running;
-    for (const conn of [CONN_A, CONN_B])
+    const { decided_at: at } = s.db.query("SELECT decided_at FROM approvals").get() as {
+      decided_at: number;
+    };
+    for (const [conn, source] of [
+      [CONN_A, "other_device"],
+      [CONN_B, "this"],
+    ] as const)
       expect(s.hub.to(conn, "approval.resolved")[0]?.p).toEqual({
         approvalId: approval.approvalId,
         state: "approved",
         via: "remote",
+        at,
+        source,
       });
+    // After the turn: the row says what was decided; which device, it does not know.
+    const after = await s.msg(CONN_A, "approval.decide", {
+      approvalId: approval.approvalId,
+      decision: "denied",
+      hash: approval.hash,
+    });
+    expect(reply(s, CONN_A, after)?.p).toEqual({ reason: "already_decided", state: "approved" });
     expect(s.db.query("SELECT state, decided_via FROM approvals").all()).toEqual([
       { state: "approved", decided_via: "remote" },
     ]);

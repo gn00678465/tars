@@ -4,11 +4,13 @@ import { id } from "./envelope.ts";
 import {
   ARGV_CHARS,
   ARGV_ITEMS,
+  DATA_KEYS,
   EFFORT_LEVELS,
   EFFORT_NAME,
   ID_CHARS,
   ITEM_TEXT_BYTES,
   MESSAGE_BYTES,
+  PRICE_WARNS,
   PROTOCOL_VERSION,
   RUNNING_TEXT_BYTES,
   SKILL_TEXT,
@@ -20,6 +22,28 @@ import {
 // end cuts by bytes before sending, and every parse checks the whole message's bytes first.
 
 const base = { seq: z.number().int(), turn: id };
+const count = z.number().int().nonnegative();
+
+/**
+ * Figures the local end adds to a failure: a provider's name, amounts, limits, a model id. Never
+ * the upstream's words, which stay on this machine as an error's message and detail do.
+ */
+export const wireData = z
+  .record(z.string().max(64), z.union([z.string().max(256), z.number()]))
+  .refine((d) => Object.keys(d).length <= DATA_KEYS, "too many keys");
+
+/** What a running turn is doing, for the page's status line. */
+export const PHASES = [
+  "thinking",
+  "replying",
+  "running_script",
+  "waiting_approval",
+  "compacting",
+] as const;
+export const wirePhase = z.enum(PHASES);
+
+/** Why a tool call was refused without running: the page names each. */
+export const REFUSALS = ["not_offered", "changed", "budget"] as const;
 
 export const wireItem = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -54,22 +78,51 @@ export const wireItem = z.discriminatedUnion("kind", [
     exit: z.number().int().optional(),
     text: z.string().max(TOOL_TEXT_BYTES),
     truncated: z.boolean(),
+    /** From the call's start to its end; absent when it never started. */
+    durationMs: count.optional(),
+    /** With status refused: why. Absent from a local end older than it, and from older rows. */
+    refusal: z.enum(REFUSALS).optional(),
   }),
   z.strictObject({
     ...base,
     kind: z.literal("usage"),
+    /** Uncached, cache read and cache write together. */
     inputTokens: z.number(),
+    /** Output, thinking included. */
     outputTokens: z.number(),
     costUsd: z.number(),
     costSource: z.string().max(16),
+    /** Of inputTokens, read from the provider's cache. */
+    cacheReadTokens: count.optional(),
+    /** Of outputTokens, spent thinking. */
+    thinkingTokens: count.optional(),
+    /** The level the turn was sent with; absent when it was sent with none. */
+    effort: z.string().min(1).max(EFFORT_NAME).optional(),
   }),
-  /** Only the code: an error's message and detail may carry the upstream's words. */
-  z.strictObject({ ...base, kind: z.literal("error"), code: z.string().max(64) }),
+  /** The code and the local end's own figures: message and detail may carry the upstream's words. */
+  z.strictObject({
+    ...base,
+    kind: z.literal("error"),
+    code: z.string().max(64),
+    data: wireData.optional(),
+  }),
+  /** The fields after text are absent from rows written before them. */
   z.strictObject({
     ...base,
     kind: z.literal("compaction"),
     text: z.string().max(ITEM_TEXT_BYTES),
     truncated: z.boolean(),
+    at: z.number().optional(),
+    trigger: z.enum(["manual", "auto"]).optional(),
+    /** The context's tokens before it. */
+    beforeTokens: count.optional(),
+    /** About how many tokens the turns kept verbatim hold: an estimate. */
+    keptTokens: count.optional(),
+    /** Items it replaced with the summary. */
+    count: count.optional(),
+    costUsd: z.number().optional(),
+    /** The first item kept verbatim: those before it are in the summary. */
+    firstKeptSeq: z.number().int().optional(),
   }),
 ]);
 
@@ -165,6 +218,42 @@ export const wireRunning = z.strictObject({
   turn: id,
   text: z.string().max(RUNNING_TEXT_BYTES),
   truncated: z.boolean(),
+  phase: wirePhase.optional(),
+});
+
+/** A model in the read-only price table: every status, prices as the local list has them. */
+export const wireCatalogEntry = z.strictObject({
+  ...wireModelRef.shape,
+  label: z.string().max(128),
+  status: z.enum(["candidate", "active", "disabled", "retired"]),
+  window: z.number().int().positive().optional(),
+  /** US dollars per million tokens; a field the list lacks is absent. */
+  price: z
+    .strictObject({
+      input: z.number().optional(),
+      output: z.number().optional(),
+      cacheRead: z.number().optional(),
+      cacheWrite: z.number().optional(),
+    })
+    .optional(),
+  priceSource: z.enum(["manual", "openrouter"]).optional(),
+  /** The UTC date the price was confirmed, YYYY-MM-DD. */
+  pricedAt: z.string().max(10).optional(),
+});
+
+/** A conversation's context against its model's window, and the thresholds that act on it. */
+export const wireContext = z.strictObject({
+  /** The last request's input tokens. */
+  contextUsed: count,
+  /** The model's effective window. */
+  contextLimit: z.number().int().positive(),
+  /** Of the last request's input, the share read from the cache, 0 to 100. */
+  cacheHitPct: z.number().min(0).max(100).optional(),
+  lastCompactedAt: z.number().optional(),
+  warnRatio: z.number(),
+  compactRatio: z.number(),
+  stopRatio: z.number(),
+  autoCompact: z.boolean(),
 });
 
 export const wireStatus = z.strictObject({
@@ -179,10 +268,30 @@ export const wireStatus = z.strictObject({
         warnUsd: z.number(),
         stopUsd: z.number(),
         stopped: z.boolean(),
+        /** month: spending is counted per UTC month; cumulative: since the start. */
+        period: z.enum(["month", "cumulative"]).optional(),
+        /** false only when the whole figure is from the provider's bill (tars cost adjust). */
+        estimated: z.boolean().optional(),
       }),
     )
     .max(8),
   pricesWarn: z.boolean(),
+  /** The models pricesWarn is about: a price old or missing. */
+  prices: z
+    .array(
+      z.strictObject({
+        provider: z.string().max(32),
+        model: z.string().max(128),
+        /** Days since it was confirmed; absent when it never was. */
+        ageDays: z.number().int().optional(),
+        state: z.enum(["stale", "refused", "missing"]),
+      }),
+    )
+    .max(PRICE_WARNS)
+    .optional(),
+  /** Models the list has seen but the owner has not taken on, and models taken off. */
+  candidates: count.optional(),
+  retired: count.optional(),
   pendingApprovals: z.number().int(),
   turnRunning: z.boolean(),
   notify: z.enum(["ok", "not_configured"]),
@@ -211,3 +320,8 @@ export type WireApproval = z.infer<typeof wireApproval>;
 export type WireRunning = z.infer<typeof wireRunning>;
 export type WireStatus = z.infer<typeof wireStatus>;
 export type WireModel = z.infer<typeof wireModel>;
+export type WireCatalogEntry = z.infer<typeof wireCatalogEntry>;
+export type WireContext = z.infer<typeof wireContext>;
+export type WireData = z.infer<typeof wireData>;
+export type Phase = (typeof PHASES)[number];
+export type Refusal = (typeof REFUSALS)[number];

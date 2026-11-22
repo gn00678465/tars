@@ -14,6 +14,10 @@ import { agentDb, MODEL, NOW, seedTurn } from "./db-fixture.ts";
 
 const LATER = new Date(NOW.getTime() + 60_000);
 const INTERRUPTED = "中斷，結果不明。這個動作可能已經執行，沒有自動重跑";
+const TURN_ERROR = {
+  kind: "error" as const,
+  body: { code: "interrupted", message: "程式在回合進行中結束，這個回合中斷，沒有自動重跑" },
+};
 
 function addCall(
   db: Database,
@@ -54,7 +58,40 @@ describe("reconcile", () => {
     expect(callState(db, "c1")).toEqual({ state: to, child_pid: null, ended_at: LATER.getTime() });
     expect(readItems(db, turn.convId).map((i) => ({ kind: i.kind, body: i.body }))).toEqual([
       { kind: "tool_result", body: { callId: "c1", status: to, text, truncated: false } },
+      TURN_ERROR,
     ]);
+  });
+
+  test("an interrupted turn gets one error item: run again, nothing is added", async () => {
+    const { db } = await agentDb();
+    const turn = seedTurn(db);
+    addCall(db, turn, "c1", "running");
+    db.run(
+      `INSERT INTO approvals (id, tool_call_id, conv_id, hash, fields, state, created_at, expires_at)
+       VALUES ('a1', 'c1', ?, 'h', ?, 'approved', 0, 1)`,
+      [turn.convId, JSON.stringify({ script: "gcal-add" })],
+    );
+    const errors = () =>
+      readItems(db, turn.convId)
+        .filter((i) => i.kind === "error")
+        .map((i) => i.body);
+    expect(reconcile(db, LATER, noKill).turns).toBe(1);
+    expect(errors()).toEqual([{ ...TURN_ERROR.body, data: { script: "gcal-add" } }]);
+    expect(reconcile(db, LATER, noKill).turns).toBe(0);
+    expect(errors()).toHaveLength(1);
+  });
+
+  test("a compaction cut off says so; a finished turn gets nothing", async () => {
+    const { db } = await agentDb();
+    const turn = seedTurn(db);
+    db.run("UPDATE turns SET kind = 'compaction' WHERE id = ?", [turn.turnId]);
+    const done = seedTurn(db);
+    db.run("UPDATE turns SET state = 'completed' WHERE id = ?", [done.turnId]);
+    reconcile(db, LATER, noKill);
+    expect(readItems(db, turn.convId).map((i) => i.body)).toEqual([
+      { ...TURN_ERROR.body, data: { turnKind: "compaction" } },
+    ]);
+    expect(readItems(db, done.convId).filter((i) => i.kind === "error")).toEqual([]);
   });
 
   test("finished calls are not touched", async () => {
@@ -86,7 +123,7 @@ describe("reconcile", () => {
       ],
     );
     reconcile(db, LATER, noKill);
-    expect(readItems(db, turn.convId)).toHaveLength(1);
+    expect(readItems(db, turn.convId).map((i) => i.kind)).toEqual(["tool_result", "error"]);
     expect(callState(db, "c1").state).toBe("interrupted");
   });
 

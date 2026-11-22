@@ -179,6 +179,21 @@ describe("options", () => {
     expect(existsSync(h.paths.agentLockInfo)).toBe(false);
   });
 
+  test("a keyring that cannot be reached exits 1 saying so, not as a missing key", async () => {
+    const h = await setup();
+    const secrets = {
+      ...fakeSecrets(),
+      get: async () => {
+        throw new Error("cannot reach the OS keyring: no session bus");
+      },
+    };
+    const deps = testDeps({ env: h.env, secrets, adapterFor });
+    expect(await run(["chat", "--message", "hi"], deps)).toBe(1);
+    expect(err(deps)).toContain("讀不到本機的系統金鑰庫：cannot reach the OS keyring");
+    expect(err(deps)).not.toContain("tars llm key set");
+    expect(existsSync(h.paths.agentLockInfo)).toBe(false);
+  });
+
   test("--effort with a level the model lacks exits 1 and lists the levels", async () => {
     const h = await setup();
     const { deps } = chatDeps(h);

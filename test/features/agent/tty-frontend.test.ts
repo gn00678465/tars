@@ -149,7 +149,13 @@ describe("items and notices", () => {
       turnId: "t",
       items: [item({ step: 0, kind: "user", body: { text: "hi" } }) as UserItem],
     });
-    fe.emit({ type: "approval_resolved", approvalId: APPROVAL.id, state: "approved", via: "tty" });
+    fe.emit({
+      type: "approval_resolved",
+      approvalId: APPROVAL.id,
+      state: "approved",
+      via: "tty",
+      at: 1,
+    });
     expect(io.stdout).toEqual([]);
     expect(io.stderr).toEqual([]);
   });

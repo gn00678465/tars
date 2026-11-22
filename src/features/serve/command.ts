@@ -29,7 +29,7 @@ import {
   writeStatus,
   type ServeStatus,
 } from "./status-file.ts";
-import { usageFigures } from "./wire.ts";
+import { wireLookup } from "./wire.ts";
 
 /** tars's version: the link's User-Agent and the hello a browser gets. */
 export const TARS_VERSION = "0.0.1";
@@ -178,7 +178,7 @@ export async function serve(ctx: ServeContext): Promise<number> {
       timers,
       notifier,
       newId: () => crypto.randomUUID(),
-      usageOf: usageFigures(db),
+      lookup: wireLookup(db),
       send: linkSend(registry, (f) => link?.send(f)),
     };
     const verifier = new AccessVerifier(

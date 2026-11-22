@@ -30,9 +30,10 @@ import type { Log } from "../agent/log.ts";
 import { loadSkillIndex } from "../agent/prompt.ts";
 import * as store from "../agent/store.ts";
 import type { AccessVerifier, Registry } from "./access.ts";
-import { broadcast, message, RemoteFrontend, type Hub } from "./remote-frontend.ts";
+import { alreadyDecided, broadcast, message, RemoteFrontend, type Hub } from "./remote-frontend.ts";
 import { answerWiki, type WikiRequest } from "./wiki.ts";
-import { toWire, wireApproval, wireBytes, wireConv, wireRunning } from "./wire.ts";
+import type { ReasonData } from "../agent/types.ts";
+import { toWire, wireApproval, wireBytes, wireConv, wireData, wireRunning } from "./wire.ts";
 
 /** Close codes the local end gives a browser connection. */
 export const DROP = { auth: 4003, keys: 4004, flood: 4005 } as const;
@@ -299,7 +300,10 @@ export class Dispatch {
       case "approval.decide":
         if (this.current === undefined) {
           if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
-          return this.reply(conn, "nack", "already_decided", m.id);
+          return this.d.hub.send(
+            conn,
+            alreadyDecided(this.d.hub, m.p.approvalId, { re: m.id }, conn, undefined),
+          );
         }
         return this.current.frontend.decide(conn, m, (out) => this.d.hub.send(conn, out));
       case "status.get":
@@ -390,7 +394,7 @@ export class Dispatch {
     const kept: WireItem[] = [];
     let more = page.more;
     for (const item of page.items.toReversed()) {
-      const wire = toWire(item, (id) => this.d.hub.usageOf(id));
+      const wire = toWire(item, this.d.hub.lookup);
       if (wire === undefined) continue;
       const bytes = wireBytes(wire) + 1;
       if (bytes > budget) {
@@ -576,7 +580,7 @@ export class Dispatch {
         this.pending.delete(requestId);
         // The page gets codes only: which carry failed says what to do next.
         const reason = out.carry === undefined ? out.reason : `carry_${out.carry}`;
-        return this.rejected(conn, requestId, reason, conv?.id);
+        return this.rejected(conn, requestId, reason, conv?.id, out.data);
       }
       await Promise.race([
         this.d.reconcile(input.provider).catch(() => undefined),
@@ -620,13 +624,24 @@ export class Dispatch {
     }
   }
 
-  private rejected(conn: string, requestId: string, reason: string, conv?: string): void {
+  private rejected(
+    conn: string,
+    requestId: string,
+    reason: string,
+    conv?: string,
+    data?: ReasonData,
+  ): void {
     this.d.hub.send(
       conn,
       message(
         this.d.hub,
         "turn",
-        { requestId, state: "rejected", reason: reason.slice(0, 64) },
+        {
+          requestId,
+          state: "rejected",
+          reason: reason.slice(0, 64),
+          ...(data === undefined ? {} : { data: wireData(data) }),
+        },
         conv === undefined ? {} : { conv },
       ),
     );

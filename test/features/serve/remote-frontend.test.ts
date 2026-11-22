@@ -133,14 +133,15 @@ describe("RemoteFrontend: a turn's stream", () => {
     });
   });
 
-  test("turn_end: flushed, then the end to everyone, with a terminal state", () => {
+  test("turn_end: flushed, then the end to everyone, with its state and figures", () => {
     const { hub, fe } = setup();
     start(fe);
     fe.emit({ type: "delta", text: "尾" });
     fe.emit({
       type: "turn_end",
-      state: "interrupted",
+      state: "failed",
       reason: "x".repeat(100),
+      data: { provider: "anthropic", spentUsd: 95.2 },
       costUsd: 0.5,
     } as never);
     expect(
@@ -150,9 +151,22 @@ describe("RemoteFrontend: a turn's stream", () => {
         .slice(-2),
     ).toEqual(["delta", "turn"]);
     const end = hub.to(CONN_B, "turn").at(-1)!;
-    expect(end.p).toMatchObject({ turn: TURN, requestId: REQ, state: "failed", costUsd: 0.5 });
+    expect(end.p).toMatchObject({
+      turn: TURN,
+      requestId: REQ,
+      state: "failed",
+      costUsd: 0.5,
+      data: { provider: "anthropic", spentUsd: 95.2 },
+    });
     expect((end.p as { reason: string }).reason).toHaveLength(64);
     expect(valid(end)).toBe(true);
+  });
+
+  test("turn_end: interrupted goes out as it is", () => {
+    const { hub, fe } = setup();
+    start(fe);
+    fe.emit({ type: "turn_end", state: "interrupted", costUsd: 0 } as never);
+    expect(hub.to(CONN_B, "turn").at(-1)?.p).toMatchObject({ state: "interrupted" });
   });
 
   test("approval_resolved goes to every ready connection", () => {
@@ -162,12 +176,14 @@ describe("RemoteFrontend: a turn's stream", () => {
       approvalId: APPROVAL_ID,
       state: "expired",
       via: "timeout",
+      at: 5,
     });
     for (const conn of [CONN_A, CONN_B])
       expect(hub.to(conn, "approval.resolved")[0]!.p).toEqual({
         approvalId: APPROVAL_ID,
         state: "expired",
         via: "timeout",
+        at: 5,
       });
   });
 });

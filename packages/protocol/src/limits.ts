@@ -61,3 +61,9 @@ export const WIKI_QUOTES = 5;
 /** wiki.status's example queries: the first alias of the most recently updated pages. */
 export const WIKI_EXAMPLES = 3;
 export const WIKI_QUOTE = 200;
+/** An error's or a failure's data: at most this many keys. */
+export const DATA_KEYS = 16;
+/** conv.compact's focus, in characters: the local end's summary prompt takes no more. */
+export const COMPACT_FOCUS_CHARS = 500;
+/** status's models whose prices need confirming. */
+export const PRICE_WARNS = 50;

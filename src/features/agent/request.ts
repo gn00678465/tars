@@ -11,6 +11,7 @@ import type {
   ModelRequest,
   ProviderEvent,
   ReasonCode,
+  ReasonData,
   RejectReason,
   TurnKind,
   Usage,
@@ -23,6 +24,7 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   boot_failed: "讀不到 SOUL.md 或 MEMORY.md",
   provider_disabled: "這家 provider 沒有啟用",
   no_key: "沒有 API 金鑰",
+  keyring_unavailable: "讀不到本機的系統金鑰庫",
   unknown_model: "模型不在清單上，或沒有啟用",
   price_incomplete: "模型的上限或單價不完整",
   prices_stale: "模型的價目太久沒有確認",
@@ -35,6 +37,7 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   provider_spend_limit: "provider 端的花費上限已到",
   auth: "provider 拒絕了 API 金鑰",
   bad_request: "provider 拒絕了這個請求",
+  rate_limited: "provider 的流量限制（HTTP 429），重試用完了",
   provider_error: "provider 暫時無法回應，重試用完了",
   stream_interrupted: "回應中途斷線",
   compact_too_large: "要壓縮的內容太大",
@@ -65,6 +68,8 @@ export interface Rejected {
   readonly message: string;
   /** conv_too_long from carrying: which next step helps, for a page that gets only codes. */
   readonly carry?: CarryFailure;
+  /** The figures behind reason: a provider, amounts, limits. */
+  readonly data?: ReasonData;
 }
 
 export const rejected = (reason: RejectReason, message = REASON_TEXT[reason]): Rejected => ({
@@ -110,7 +115,13 @@ export async function prepareModel(
       "provider_disabled",
       `${provider} 沒有啟用：在 config.toml 的 [providers.${provider}] 設 enabled = true`,
     );
-  const key = await deps.secrets.get(`llm:${provider}`);
+  let key;
+  try {
+    key = await deps.secrets.get(`llm:${provider}`);
+  } catch (err) {
+    // The store, not the key: the same key works once the keyring is reachable again.
+    return { ...rejected("keyring_unavailable", errorText(err)), data: { provider } };
+  }
   if (key === null || key === "")
     return rejected("no_key", `沒有 ${provider} 的 API 金鑰。設定：tars llm key set ${provider}`);
   const r = resolve(catalog, provider, modelId, config.limits, deps.now());
@@ -161,6 +172,8 @@ export function failureOf(e: ProviderError): FailReason | "aborted" {
       return "auth";
     case "bad_request":
       return "bad_request";
+    case "rate_limit":
+      return e.receivedContent ? "stream_interrupted" : "rate_limited";
     default:
       return e.receivedContent ? "stream_interrupted" : "provider_error";
   }

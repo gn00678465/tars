@@ -1,35 +1,74 @@
 import type { Database } from "bun:sqlite";
 import {
+  DATA_KEYS,
+  EFFORT_NAME,
   ITEM_TEXT_BYTES,
   RUNNING_TEXT_BYTES,
   TOOL_TEXT_BYTES,
   type WireApproval,
   type WireConv,
+  type WireData,
   type WireItem,
   type WireRunning,
 } from "@tars/protocol";
 import { utf8Bytes } from "../agent/bytes.ts";
 import type { Conversation } from "../agent/store.ts";
-import type { ApprovalRecord, Item } from "../agent/types.ts";
+import type { ApprovalRecord, ApprovalState, Item } from "../agent/types.ts";
 
 export interface UsageFigures {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly costUsd: number;
   readonly costSource: string;
+  readonly cacheReadTokens: number;
+  readonly thinkingTokens: number;
+  readonly effort?: string;
 }
 
-/** A usage item holds only its row's id; the figures sent are in the usage row. */
-export const usageFigures =
-  (db: Database) =>
-  (usageId: number): UsageFigures | undefined =>
-    (db
-      .query(
-        `SELECT uncached_input_tokens + cache_read_tokens + cache_write_tokens AS inputTokens,
-           output_tokens AS outputTokens, cost_usd AS costUsd, cost_source AS costSource
-         FROM usage WHERE id = ?`,
-      )
-      .get(usageId) as UsageFigures | null) ?? undefined;
+/** What an item refers to by id and the page shows as figures: rows read when it is sent. */
+export interface WireLookup {
+  usage(usageId: number): UsageFigures | undefined;
+  /** From a tool call's start to its end; undefined when it never started or has not ended. */
+  duration(callId: string): number | undefined;
+  /** An approval's settled state; undefined while pending or when there is no such approval. */
+  decided(approvalId: string): Exclude<ApprovalState, "pending"> | undefined;
+}
+
+export function wireLookup(db: Database): WireLookup {
+  const usage = db.query(
+    `SELECT u.uncached_input_tokens + u.cache_read_tokens + u.cache_write_tokens AS inputTokens,
+       u.output_tokens AS outputTokens, u.cost_usd AS costUsd, u.cost_source AS costSource,
+       u.cache_read_tokens AS cacheReadTokens, u.thinking_tokens AS thinkingTokens,
+       t.effort AS effort
+     FROM usage u LEFT JOIN turns t ON t.id = u.turn_id WHERE u.id = ?`,
+  );
+  const times = db.query("SELECT started_at AS s, ended_at AS e FROM tool_calls WHERE id = ?");
+  const approval = db.query("SELECT state FROM approvals WHERE id = ?");
+  return {
+    usage: (usageId) => {
+      const row = usage.get(usageId) as (UsageFigures & { effort: string | null }) | null;
+      if (row === null) return undefined;
+      const { effort, ...rest } = row;
+      return effort === null ? rest : { ...rest, effort };
+    },
+    duration: (callId) => {
+      const row = times.get(callId) as { s: number | null; e: number | null } | null;
+      return row?.s == null || row.e == null ? undefined : Math.max(0, row.e - row.s);
+    },
+    decided: (approvalId) => {
+      const state = (approval.get(approvalId) as { state: ApprovalState } | null)?.state;
+      return state === undefined || state === "pending" ? undefined : state;
+    },
+  };
+}
+
+/** Within the protocol's limits for data; the loop's values are short already. */
+export const wireData = (data: Readonly<Record<string, string | number>>): WireData =>
+  Object.fromEntries(
+    Object.entries(data)
+      .slice(0, DATA_KEYS)
+      .map(([k, v]) => [k.slice(0, 64), typeof v === "string" ? v.slice(0, 256) : v]),
+  );
 
 /** A character's bytes once JSON.stringify writes it inside a string. */
 function jsonCost(c: string): number {
@@ -87,10 +126,7 @@ const cut = (text: string, max: number) => {
  * the wiki index included, is not sent, and neither is anything the switch does not copy (the
  * provider's native blocks, thinking keys, call ids, an error's message and detail).
  */
-export function toWire(
-  item: Item,
-  usageOf: (usageId: number) => UsageFigures | undefined,
-): WireItem | undefined {
+export function toWire(item: Item, lookup: WireLookup): WireItem | undefined {
   const base = { seq: item.seq, turn: item.turnId };
   switch (item.kind) {
     case "user":
@@ -125,15 +161,30 @@ export function toWire(
         ...(({ text, truncated }) => ({ text, truncated: truncated || item.body.truncated }))(
           cut(item.body.text, TOOL_TEXT_BYTES),
         ),
+        ...((ms) => (ms === undefined ? {} : { durationMs: ms }))(
+          lookup.duration(item.body.callId),
+        ),
+        ...(item.body.refusal === undefined ? {} : { refusal: item.body.refusal }),
       };
     case "usage": {
-      const u = usageOf(item.body.usageId);
-      return u === undefined
-        ? undefined
-        : { ...base, kind: "usage", ...u, costSource: u.costSource.slice(0, 16) };
+      const u = lookup.usage(item.body.usageId);
+      if (u === undefined) return undefined;
+      const { effort, ...figures } = u;
+      return {
+        ...base,
+        kind: "usage",
+        ...figures,
+        costSource: u.costSource.slice(0, 16),
+        ...(effort === undefined || effort === "" ? {} : { effort: effort.slice(0, EFFORT_NAME) }),
+      };
     }
     case "error":
-      return { ...base, kind: "error", code: item.body.code.slice(0, 64) };
+      return {
+        ...base,
+        kind: "error",
+        code: item.body.code.slice(0, 64),
+        ...(item.body.data === undefined ? {} : { data: wireData(item.body.data) }),
+      };
     case "compaction":
       return { ...base, kind: "compaction", ...cut(item.body.summary, ITEM_TEXT_BYTES) };
     default:

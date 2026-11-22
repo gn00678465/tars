@@ -11,7 +11,7 @@ import type { Frontend, FrontendEvent } from "../agent/frontend.ts";
 import type { ApprovalRecord } from "../agent/types.ts";
 import type { Registry, Timers } from "./access.ts";
 import type { Notifier } from "./notify.ts";
-import { toWire, wireApproval, wireBytes, type UsageFigures } from "./wire.ts";
+import { toWire, wireApproval, wireBytes, wireData, type WireLookup } from "./wire.ts";
 
 const DELTA_EVERY_MS = 80;
 
@@ -23,7 +23,7 @@ export interface Hub {
   newId(): string;
   readonly timers: Timers;
   readonly notifier: Notifier;
-  usageOf(usageId: number): UsageFigures | undefined;
+  readonly lookup: WireLookup;
 }
 
 /**
@@ -52,15 +52,31 @@ export const broadcast = (hub: Hub, m: () => ServerMessage) => {
   for (const r of hub.registry.ready()) hub.send(r.conn, m());
 };
 
-/** Within the protocol's limits for a notice's data; the loop's values are short already. */
-const noticeData = (data: Readonly<Record<string, string | number>>) =>
-  Object.fromEntries(
-    Object.entries(data)
-      .slice(0, 16)
-      .map(([k, v]) => [k.slice(0, 64), typeof v === "string" ? v.slice(0, 256) : v]),
-  );
-
 type Decision = "approved" | "denied" | "cancelled";
+
+/**
+ * already_decided, with what was decided: the decision still being carried out, else the row.
+ * Which connection decided is known only for the former; for a row it is left out.
+ */
+export function alreadyDecided(
+  hub: Hub,
+  approvalId: string,
+  re: { re: string },
+  conn: string,
+  by: { conn: string; decision: "approved" | "denied" } | undefined,
+): ServerMessage {
+  const state = by?.decision ?? hub.lookup.decided(approvalId);
+  return message(
+    hub,
+    "nack",
+    {
+      reason: "already_decided",
+      ...(state === undefined ? {} : { state }),
+      ...(by === undefined ? {} : { source: by.conn === conn ? "this" : "other_device" }),
+    },
+    re,
+  );
+}
 type Decide = Extract<ClientMessage, { kind: "approval.decide" }>;
 
 /**
@@ -76,7 +92,19 @@ export class RemoteFrontend implements Frontend {
   private pendingDelta = "";
   private deltaTimer: unknown;
   private waiting:
-    | { record: ApprovalRecord; deciding: boolean; resolve: (d: Decision) => void }
+    | {
+        record: ApprovalRecord;
+        /** The connection whose decision was taken, and what it decided. */
+        decided?: { conn: string; decision: "approved" | "denied" };
+        resolve: (d: Decision) => void;
+      }
+    | undefined;
+  /**
+   * The last decision taken, kept past the wait: for approval_resolved, and for a late decide
+   * that arrives before the loop's transaction has written it.
+   */
+  private decidedBy:
+    | { approvalId: string; conn: string; decision: "approved" | "denied" }
     | undefined;
 
   constructor(
@@ -146,21 +174,30 @@ export class RemoteFrontend implements Frontend {
           message(
             this.hub,
             "notice",
-            { code: e.code, ...(e.data === undefined ? {} : { data: noticeData(e.data) }) },
+            { code: e.code, ...(e.data === undefined ? {} : { data: wireData(e.data) }) },
             this.conv(),
           ),
         );
         return;
-      case "approval_resolved":
-        broadcast(this.hub, () =>
-          message(this.hub, "approval.resolved", {
-            approvalId: e.approvalId,
-            state: e.state,
-            // A remote frontend's decisions are all remote; timeout and abort pass as they are.
-            via: e.via === "tty" ? "remote" : e.via,
-          }),
-        );
+      case "approval_resolved": {
+        const by =
+          (e.via === "remote" || e.via === "tty") && this.decidedBy?.approvalId === e.approvalId
+            ? this.decidedBy.conn
+            : undefined;
+        for (const r of this.hub.registry.ready())
+          this.hub.send(
+            r.conn,
+            message(this.hub, "approval.resolved", {
+              approvalId: e.approvalId,
+              state: e.state,
+              // A remote frontend's decisions are all remote; timeout and abort pass as they are.
+              via: e.via === "tty" ? "remote" : e.via,
+              at: e.at,
+              ...(by === undefined ? {} : { source: by === r.conn ? "this" : "other_device" }),
+            }),
+          );
         return;
+      }
       case "turn_end":
         this.flush();
         this.running = "";
@@ -171,9 +208,10 @@ export class RemoteFrontend implements Frontend {
             {
               ...(this.turnId === undefined ? {} : { turn: this.turnId }),
               requestId: this.requestId,
-              // A turn that ends is never running or interrupted; those would be failures.
-              state: e.state === "running" || e.state === "interrupted" ? "failed" : e.state,
+              // A turn that ends is never running; that would be a failure.
+              state: e.state === "running" ? "failed" : e.state,
               ...(e.reason === undefined ? {} : { reason: e.reason.slice(0, 64) }),
+              ...(e.data === undefined ? {} : { data: wireData(e.data) }),
               costUsd: e.costUsd,
             },
             this.conv(),
@@ -184,7 +222,7 @@ export class RemoteFrontend implements Frontend {
   }
 
   private item(item: Parameters<typeof toWire>[0]): void {
-    const wire = toWire(item, (id) => this.hub.usageOf(id));
+    const wire = toWire(item, this.hub.lookup);
     if (wire !== undefined)
       this.toSubscribed(() => message(this.hub, "item", { item: wire }, this.conv()));
   }
@@ -209,7 +247,7 @@ export class RemoteFrontend implements Frontend {
       message(this.hub, "approval.request", { approval: wireApproval(record) }),
     );
     const answer = new Promise<Decision>((resolve) => {
-      this.waiting = { record, deciding: false, resolve };
+      this.waiting = { record, resolve };
       if (signal.aborted) resolve("cancelled");
       signal.addEventListener("abort", () => resolve("cancelled"), { once: true });
     });
@@ -229,14 +267,17 @@ export class RemoteFrontend implements Frontend {
    */
   async decide(conn: string, m: Decide, reply: (m: ServerMessage) => void): Promise<void> {
     const re = { re: m.id };
-    const nack = (reason: "auth_expired" | "already_decided" | "hash_mismatch") =>
+    const nack = (reason: "auth_expired" | "hash_mismatch") =>
       reply(message(this.hub, "nack", { reason }, re));
     if (!this.hub.registry.valid(conn)) return nack("auth_expired");
     const w = this.waiting;
-    if (w === undefined || w.deciding || w.record.id !== m.p.approvalId)
-      return nack("already_decided");
+    if (w === undefined || w.decided !== undefined || w.record.id !== m.p.approvalId) {
+      const by = this.decidedBy?.approvalId === m.p.approvalId ? this.decidedBy : undefined;
+      return reply(alreadyDecided(this.hub, m.p.approvalId, re, conn, by));
+    }
     if (m.p.hash !== w.record.hash) return nack("hash_mismatch");
-    w.deciding = true;
+    w.decided = { conn, decision: m.p.decision };
+    this.decidedBy = { approvalId: w.record.id, ...w.decided };
     reply(message(this.hub, "ack", {}, re));
     // approved starts the tool's child at once, and the script runner is not re-entrant.
     await this.hub.notifier.idle();

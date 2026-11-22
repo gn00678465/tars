@@ -387,6 +387,39 @@ async function inner(): Promise<number> {
       `chat ${brief(badChat)}; refresh ${brief(badRefresh)}`,
     );
 
+    // --- 11b. 429 to the last retry, and a keyring that cannot be reached: each named as it is.
+    const limited = {
+      kind: "http_error",
+      status: 429,
+      type: "rate_limit_error",
+      retryAfter: "0",
+    } as const;
+    fake.reply(limited, limited, limited);
+    const rate = await run("rate-limited", "tars chat --message rate");
+    const rateErrors = query<{ body: string }>(
+      "SELECT body FROM items WHERE kind = 'error' ORDER BY rowid DESC LIMIT 1",
+    ).map((r) => JSON.parse(r.body) as { code: string; data?: { attempts?: number } });
+    check(
+      "rate-limited",
+      "429 to the last retry ends as rate_limited, in the terminal and in the error item",
+      rate.stderr.includes("失敗：provider 的流量限制（HTTP 429），重試用完了") &&
+        rateErrors[0]?.code === "rate_limited" &&
+        rateErrors[0]?.data?.attempts === 3,
+      `${brief(rate)}; error ${JSON.stringify(rateErrors[0])}`,
+    );
+    const keyring = await run(
+      "keyring-unreachable",
+      "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/bus tars chat --message hi",
+    );
+    check(
+      "keyring-unreachable",
+      "a keyring that cannot be reached is said as such, not as a missing key",
+      keyring.exitCode === 1 &&
+        keyring.stderr.includes("讀不到本機的系統金鑰庫") &&
+        !keyring.stderr.includes("沒有 anthropic 的 API 金鑰"),
+      brief(keyring),
+    );
+
     // --- 12. Q5: /tmp/claude exists.
     fake.reply(tarsCall("q1", ["script", "run", "weather", "--", "q5"]), text("q5 done"));
     const q5 = await run("q5", "mkdir -p /tmp/claude && tars chat --message q5");

@@ -12,6 +12,7 @@ import {
 import type { TarsConfig } from "./config.ts";
 import { effectiveEffort, supported } from "./effort.ts";
 import { effectiveWindow } from "./ledger.ts";
+import { errorText, REASON_TEXT } from "./request.ts";
 import type { Effort, ModelReason } from "./types.ts";
 
 /**
@@ -48,7 +49,7 @@ export function defaultStart(config: TarsConfig, catalog: Catalog): DefaultStart
 }
 
 type ProviderProblem = {
-  readonly reason: "provider_disabled" | "no_key";
+  readonly reason: "provider_disabled" | "no_key" | "keyring_unavailable";
   readonly message: string;
 };
 
@@ -65,7 +66,16 @@ async function providerProblem(
       message: `${provider} 沒有啟用：在 config.toml 的 [providers.${provider}] 設 enabled = true。啟用的：${enabled.join(", ") || "（沒有）"}`,
     };
   }
-  const key = await deps.secrets.get(`llm:${provider}`);
+  let key;
+  try {
+    key = await deps.secrets.get(`llm:${provider}`);
+  } catch (err) {
+    // The store, not the key: the turn's own check (prepareModel) says the same.
+    return {
+      reason: "keyring_unavailable",
+      message: `${REASON_TEXT.keyring_unavailable}：${errorText(err)}`,
+    };
+  }
   if (key === null || key === "")
     return {
       reason: "no_key",
@@ -108,7 +118,7 @@ export interface ModelChoice {
   /** The one a new conversation gets when none is named. */
   readonly isDefault: boolean;
   /** Why it cannot be used now; absent when it can. */
-  readonly unusable?: "provider_disabled" | "no_key" | ModelReason;
+  readonly unusable?: ProviderProblem["reason"] | ModelReason;
   /** The levels it takes, lowest first; empty when none. */
   readonly effortLevels: readonly Effort[];
   /** What a new conversation on it is sent with: [chat]'s level, or the nearest it takes. */

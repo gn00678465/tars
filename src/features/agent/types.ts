@@ -157,20 +157,29 @@ export interface ToolCallBody {
   readonly name: string;
   readonly input: unknown;
 }
+/** Why a call was refused without running: not offered here, changed after approval, budget. */
+export type Refusal = "not_offered" | "changed" | "budget";
+
 export interface ToolResultBody {
   readonly callId: string;
   readonly status: ToolCallEndState;
   readonly text: string;
   readonly truncated: boolean;
   readonly exit?: number;
+  /** With status refused; rows written before it have none. */
+  readonly refusal?: Refusal;
 }
 export interface UsageBody {
   readonly usageId: number;
 }
+/** This machine's own figures about a failure: amounts, limits, a provider, never upstream text. */
+export type ReasonData = Readonly<Record<string, string | number>>;
+
 export interface ErrorBody {
   readonly code: string;
   readonly message: string;
   readonly detail?: string;
+  readonly data?: ReasonData;
 }
 export interface CompactionBody {
   /** seq of the first item kept verbatim; always a user item, the start of a turn. */
@@ -254,6 +263,7 @@ export type RejectReason =
   | "boot_failed"
   | "provider_disabled"
   | "no_key"
+  | "keyring_unavailable"
   | ModelReason
   | "conv_too_long"
   | BudgetReason
@@ -268,6 +278,7 @@ export type FailReason =
   | "provider_spend_limit"
   | "auth"
   | "bad_request"
+  | "rate_limited"
   | "provider_error"
   | "stream_interrupted"
   | CompactReason;

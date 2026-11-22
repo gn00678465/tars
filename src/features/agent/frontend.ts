@@ -4,6 +4,7 @@ import type {
   Effort,
   Item,
   NoticeCode,
+  ReasonData,
   TurnState,
   Usage,
   UserItem,
@@ -30,6 +31,8 @@ export type FrontendEvent =
       readonly approvalId: string;
       readonly state: Exclude<ApprovalState, "pending">;
       readonly via: Frontend["via"] | "timeout" | "abort";
+      /** When it was settled, by this machine's clock. */
+      readonly at: number;
     }
   | {
       readonly type: "notice";
@@ -41,6 +44,8 @@ export type FrontendEvent =
       readonly state: TurnState;
       readonly reason?: string;
       readonly detail?: string;
+      /** The figures behind reason, as the error item holds them. */
+      readonly data?: ReasonData;
       readonly costUsd: number;
       /** The sum over the turn's finalized requests. */
       readonly usage: Usage;
