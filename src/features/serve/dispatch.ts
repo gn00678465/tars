@@ -3,6 +3,8 @@ import {
   checkClient,
   ID_CHARS,
   PROTOCOL_VERSION,
+  SKILL_TEXT,
+  SKILLS,
   SNAPSHOT_BYTES,
   SNAPSHOT_ITEMS,
   type ClientMessage,
@@ -22,6 +24,7 @@ import type { TarsConfig } from "../agent/config.ts";
 import { budgetStatuses } from "../agent/cost-command.ts";
 import type { Engine, TurnInput } from "../agent/engine.ts";
 import type { Log } from "../agent/log.ts";
+import { loadSkillIndex } from "../agent/prompt.ts";
 import * as store from "../agent/store.ts";
 import type { AccessVerifier, Registry } from "./access.ts";
 import { broadcast, message, RemoteFrontend, type Hub } from "./remote-frontend.ts";
@@ -55,6 +58,8 @@ export interface DispatchDeps {
   sleep(ms: number): Promise<void>;
   /** Something the status file shows changed. */
   changed(): void;
+  /** The link certificate's expiry (epoch ms), once it was read; undefined before or without. */
+  certExpiresAt?(): number | undefined;
 }
 
 interface Current {
@@ -536,8 +541,28 @@ export class Dispatch {
       pendingApprovals: approvals.listPending(this.d.db).length,
       turnRunning: this.current !== undefined,
       notify: this.d.hub.notifier.configured ? "ok" : "not_configured",
+      skills: await this.skills(),
+      ...(this.d.certExpiresAt?.() === undefined
+        ? {}
+        : { certExpiresAt: this.d.certExpiresAt() as number }),
     };
     return message(this.d.hub, "status", body, re === undefined ? {} : { re });
+  }
+
+  /** The / menu's skills, as the terminal's: a description is cut to what the protocol takes. */
+  private async skills(): Promise<NonNullable<WireStatus["skills"]>> {
+    const { skills } = await loadSkillIndex(this.d.paths).catch(() => ({ skills: [] }));
+    return skills
+      .filter((s) => s.name.length <= ID_CHARS)
+      .slice(0, SKILLS)
+      .map((s) => ({
+        name: s.name,
+        description:
+          s.description.length > SKILL_TEXT
+            ? `${s.description.slice(0, SKILL_TEXT - 1)}…`
+            : s.description,
+        localOnly: s.localOnly,
+      }));
   }
 
   /** For the model a new conversation would use. */

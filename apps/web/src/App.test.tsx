@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { skillInvocationText } from "@tars/protocol";
 import { act } from "react";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { App } from "./App.tsx";
@@ -700,4 +701,85 @@ test("spend says 本期 and 估 until status says the period and source; a table
   );
   expect(root.querySelector(".msg-usage-line")?.textContent).not.toContain("估");
   unmount();
+});
+
+describe("the / menu and the certificate, from status", () => {
+  const DAY = 86_400_000;
+  const status = (extra: object) =>
+    server("status", {
+      now: 1_800_000_000_000,
+      providers: [],
+      pricesWarn: false,
+      pendingApprovals: 0,
+      turnRunning: false,
+      notify: "ok",
+      ...extra,
+    });
+  async function ready(extra: object) {
+    const h = socketHarness();
+    const r = await render(<App socket={h.socket} now={h.now} />);
+    await act(async () => h.last().ready());
+    await act(async () => {
+      h.last().receive(server("relay.status", { online: true }));
+      h.last().receive(status(extra));
+    });
+    const area = r.root.querySelector("textarea") as HTMLTextAreaElement;
+    const type = (value: string) =>
+      act(async () => {
+        // oxlint-disable-next-line typescript/unbound-method
+        const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+        set?.call(area, value);
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    const key = (k: string) =>
+      act(
+        async () =>
+          void area.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })),
+      );
+    return { h, ...r, type, key };
+  }
+
+  test("the local end's skills are in the menu; a skill goes as the terminal's wording", async () => {
+    const { h, root, type, key, unmount } = await ready({
+      skills: [
+        { name: "tars-mode", description: "路由表", localOnly: false },
+        { name: "memory", description: "記憶", localOnly: true },
+      ],
+    });
+    await type("/");
+    const names = [...root.querySelectorAll(".slash-cmd")].map((e) => e.textContent);
+    expect(names).toEqual(["/new", "/cost", "/help", "/tars-mode", "/memory"]);
+    await type("/tars-mode 記一筆");
+    await key("Enter");
+    const sent = h
+      .last()
+      .messages()
+      .filter((m) => m.kind === "turn.submit");
+    expect((sent.at(-1)?.p as { text?: string } | undefined)?.text).toBe(
+      skillInvocationText("tars-mode", "記一筆"),
+    );
+    unmount();
+  });
+
+  test("/cost opens the status sheet", async () => {
+    const { root, type, key, unmount } = await ready({});
+    await type("/cost");
+    await key("Enter");
+    expect(root.querySelector(".sheet-panel")).not.toBeNull();
+    unmount();
+  });
+
+  test("a certificate within 30 days is warned on the bar and dated in the sheet", async () => {
+    const { root, unmount } = await ready({ certExpiresAt: 1_800_000_000_000 + 10 * DAY });
+    const bar = root.querySelector(".topbar-right .desktop-only") as HTMLButtonElement;
+    expect(bar.textContent).toBe("憑證剩 10 天");
+    await act(async () => bar.click());
+    const sheet = root.querySelector(".sheet-panel") as HTMLElement;
+    expect(sheet.textContent).toContain("本機端憑證30 天內到期");
+    expect(sheet.textContent).toContain("（剩 10 天）");
+    unmount();
+    const far = await ready({ certExpiresAt: 1_800_000_000_000 + 90 * DAY });
+    expect(far.root.querySelector(".topbar-right .desktop-only")?.textContent).toBe("花費與模型");
+    far.unmount();
+  });
 });

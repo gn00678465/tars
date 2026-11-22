@@ -1,10 +1,11 @@
 import type { Database } from "bun:sqlite";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   parseServer,
   PROTOCOL_VERSION,
+  SKILL_TEXT,
   SNAPSHOT_BYTES,
   type FrameToRelay,
   type ServerMessage,
@@ -68,6 +69,7 @@ interface Setup {
 }
 
 let ids = 0;
+const CERT_EXPIRES = 1_900_000_000_000;
 async function setup(): Promise<Setup> {
   const h = await engineHarness({ selfCommand: [fakeTars('echo "ran $*"')] });
   harnesses.push(h);
@@ -107,6 +109,7 @@ async function setup(): Promise<Setup> {
     reconcile: async (p) => void reconciled.push(p),
     sleep: (ms) => Bun.sleep(Math.min(ms, 5)),
     changed: () => undefined,
+    certExpiresAt: () => CERT_EXPIRES,
   });
   const s: Setup = {
     h,
@@ -699,6 +702,35 @@ describe("Dispatch: snapshots", () => {
     expect(wireBytesOf(p.items)).toBeLessThanOrEqual(SNAPSHOT_BYTES);
     const older = await s.msg(CONN_A, "conv.open", { before: p.items[0]!.seq }, { conv });
     expect(reply(s, CONN_A, older)?.kind).toBe("conv.snapshot");
+    allValid(s);
+  });
+
+  test("status lists the skills for the / menu, local-only marked, and the certificate's expiry", async () => {
+    const s = await setup();
+    await s.open(CONN_A, "good");
+    await s.msg(CONN_A, "hello", {});
+    const skill = (name: string, description: string) => {
+      mkdirSync(join(s.h.paths.skills, name), { recursive: true });
+      writeFileSync(
+        join(s.h.paths.skills, name, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${description}\n---\nbody\n`,
+      );
+    };
+    skill("demo", "長".repeat(400));
+    skill("memory", "記憶");
+    const st = await s.msg(CONN_A, "status.get", {});
+    const p = reply(s, CONN_A, st)!.p as {
+      skills: { name: string; description: string; localOnly: boolean }[];
+      certExpiresAt: number;
+    };
+    expect(p.skills.map((k) => [k.name, k.localOnly])).toEqual([
+      ["demo", false],
+      ["memory", true],
+    ]);
+    // Cut to what the protocol takes, and said to be cut.
+    expect(p.skills[0]!.description).toHaveLength(SKILL_TEXT);
+    expect(p.skills[0]!.description.endsWith("…")).toBe(true);
+    expect(p.certExpiresAt).toBe(CERT_EXPIRES);
     allValid(s);
   });
 

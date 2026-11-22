@@ -249,7 +249,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                 blocked={composerBlocked(state)}
                 canAbort={running && state.connection === "open"}
                 error={state.error}
+                skills={state.status?.skills}
                 onSend={(text) => socket.submit(text, state.conv)}
+                onCommand={(name) => (name === "new" ? open(undefined) : setSheet(true))}
                 onAbort={() => {
                   if (state.conv !== undefined) socket.send("turn.abort", {}, state.conv);
                 }}

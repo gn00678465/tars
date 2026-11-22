@@ -20,3 +20,7 @@ export const DELTA_BYTES = 16_384;
 export const ID_CHARS = 64;
 export const ARGV_ITEMS = 64;
 export const ARGV_CHARS = 4_096;
+
+/** The skills status lists: at most this many, each description cut to SKILL_TEXT characters. */
+export const SKILLS = 200;
+export const SKILL_TEXT = 300;

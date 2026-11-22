@@ -62,11 +62,8 @@ export function frontMatter(text: string): Record<string, unknown> | undefined {
   }
 }
 
-/** The user message `/<skill> [content]` sends. */
-export function skillInvocationText(name: string, content: string): string {
-  const head = `請用 skill「${name}」處理下面的內容。先用 skill_load 讀它。`;
-  return content === "" ? head : `${head}\n\n${content}`;
-}
+// The web page sends the same wording, so it lives with the protocol.
+export { skillInvocationText } from "@tars/protocol";
 
 export const PREAMBLE = `你在 tars 自己的入口裡（終端的 tars chat，或擁有者的遠端網頁），不是 Claude Code。下面的 SOUL.md 是你的人格，MEMORY.md 是你對擁有者的記憶。
 

@@ -9,6 +9,8 @@ import {
   MESSAGE_BYTES,
   PROTOCOL_VERSION,
   RUNNING_TEXT_BYTES,
+  SKILL_TEXT,
+  SKILLS,
   TOOL_TEXT_BYTES,
 } from "./limits.ts";
 
@@ -147,6 +149,23 @@ export const wireStatus = z.strictObject({
   pendingApprovals: z.number().int(),
   turnRunning: z.boolean(),
   notify: z.enum(["ok", "not_configured"]),
+  /**
+   * The skills the local end has, for the page's / menu; a local-only one is shown, not sent.
+   * Optional, as certExpiresAt: a local end older than them sends neither. A page older than
+   * them refuses a status that has them (strictObject): the page is deployed first.
+   */
+  skills: z
+    .array(
+      z.strictObject({
+        name: z.string().max(ID_CHARS),
+        description: z.string().max(SKILL_TEXT),
+        localOnly: z.boolean(),
+      }),
+    )
+    .max(SKILLS)
+    .optional(),
+  /** When the local end's link certificate expires (epoch ms). */
+  certExpiresAt: z.number().optional(),
 });
 
 export type WireItem = z.infer<typeof wireItem>;

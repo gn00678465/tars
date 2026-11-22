@@ -8,6 +8,9 @@ import {
   parseFrame,
   parseRelayFrame,
   parseServer,
+  SKILL_TEXT,
+  SKILLS,
+  skillInvocationText,
   SNAPSHOT_ITEMS,
   TEXT_BYTES,
   type Parsed,
@@ -71,6 +74,34 @@ describe("an approval's tool call", () => {
     expect(reason(parseServer(withCall(req.p.approval)))).toBe("ok");
     expect(reason(parseServer(withCall({ ...req.p.approval, callId: "x".repeat(65) })))).toBe(
       "bad_message",
+    );
+  });
+});
+
+describe("status's skills and certificate expiry", () => {
+  test("both optional; a description longer than SKILL_TEXT is refused", () => {
+    const st = SERVER.status as { p: Record<string, unknown> };
+    const withP = (extra: Record<string, unknown>) =>
+      JSON.stringify({ ...st, p: { ...st.p, ...extra } });
+    const skill = { name: "demo", description: "示範", localOnly: false };
+    expect(reason(parseServer(withP({})))).toBe("ok");
+    expect(reason(parseServer(withP({ skills: [skill], certExpiresAt: 1 })))).toBe("ok");
+    expect(
+      reason(
+        parseServer(withP({ skills: [{ ...skill, description: "x".repeat(SKILL_TEXT + 1) }] })),
+      ),
+    ).toBe("bad_message");
+    expect(reason(parseServer(withP({ skills: Array(SKILLS + 1).fill(skill) })))).toBe(
+      "bad_message",
+    );
+  });
+
+  test("skillInvocationText is one wording for the terminal and the page", () => {
+    expect(skillInvocationText("demo", "")).toBe(
+      "請用 skill「demo」處理下面的內容。先用 skill_load 讀它。",
+    );
+    expect(skillInvocationText("demo", "內容")).toBe(
+      "請用 skill「demo」處理下面的內容。先用 skill_load 讀它。\n\n內容",
     );
   });
 });

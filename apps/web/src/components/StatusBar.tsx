@@ -32,6 +32,16 @@ export function connection(state: State): { tone: string; text: string } {
   return { tone: "ok", text: "在線" };
 }
 
+const DAY_MS = 86_400_000;
+/** ui_spec 5.2: the local end's certificate is warned of 30 days before it expires. */
+const CERT_WARN_DAYS = 30;
+
+/** Whole days left on the local end's certificate, by the local end's clock; undefined unknown. */
+export function certDays(status: WireStatus | undefined): number | undefined {
+  if (status?.certExpiresAt === undefined) return undefined;
+  return Math.floor((status.certExpiresAt - status.now) / DAY_MS);
+}
+
 /** The catalog button: 花費與模型, or the provider past a threshold. Stopping wins over warning. */
 function spendButton(status: WireStatus | undefined): { tone?: string; text: string } {
   const providers = status?.providers ?? [];
@@ -44,6 +54,12 @@ function spendButton(status: WireStatus | undefined): { tone?: string; text: str
       text: `${label(warned)} 已用 ${Math.round((warned.spentUsd / warned.quotaUsd) * 100)}%`,
     };
   if (status?.pricesWarn === true) return { tone: "warn", text: "價目表過期" };
+  const days = certDays(status);
+  if (days !== undefined && days < CERT_WARN_DAYS)
+    return {
+      tone: days < 0 ? "error" : "warn",
+      text: days < 0 ? "憑證已過期" : `憑證剩 ${days} 天`,
+    };
   return { text: "花費與模型" };
 }
 
@@ -186,6 +202,19 @@ export function StatusSheet(props: { state: State; onClose: () => void }) {
                 <span>待核准</span>
                 <span className="num">{status.pendingApprovals}</span>
               </div>
+              {status.certExpiresAt === undefined ? null : (
+                <div className="model-option">
+                  <span>
+                    本機端憑證
+                    {(certDays(status) ?? 0) < CERT_WARN_DAYS ? (
+                      <span className="sg-tag warn">{CERT_WARN_DAYS} 天內到期</span>
+                    ) : null}
+                  </span>
+                  <span className="mono">
+                    到期 {timeText(status.certExpiresAt)}（剩 {certDays(status)} 天）
+                  </span>
+                </div>
+              )}
               {status.pricesWarn ? (
                 <div className="task-notice warn">
                   <div className="task-notice-body">

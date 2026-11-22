@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import type { Command } from "commander";
 import { rm } from "node:fs/promises";
 import { TarsError } from "../../core/exit.ts";
@@ -232,6 +233,8 @@ export async function serve(ctx: ServeContext): Promise<number> {
       warn,
       log,
     };
+    // Read with the keys the link uses; the page shows it on the status bar.
+    let certExpiresAt: number | undefined;
     dispatch = new Dispatch({
       db,
       paths,
@@ -246,10 +249,12 @@ export async function serve(ctx: ServeContext): Promise<number> {
       reconcile: (provider) => reconcileAfterTurn(reconcileDeps, { provider }),
       sleep: (ms) => Bun.sleep(ms),
       changed,
+      certExpiresAt: () => certExpiresAt,
     });
 
     const d = dispatch;
     const startLink = (tls: { cert: string; key: string }) => {
+      certExpiresAt = expiryOf(tls.cert);
       const l = new Link({
         url: settings.url,
         // A ws:// link is e2e's fake relay on 127.0.0.1: no certificate goes to it.
@@ -395,4 +400,14 @@ Examples:
     .action(async (opts: { json?: boolean }) =>
       exitWith(await serveStatus(ctx, opts.json === true)),
     );
+}
+
+/** The certificate's expiry, or undefined when it does not parse. */
+function expiryOf(pem: string): number | undefined {
+  try {
+    const t = new Date(new X509Certificate(pem).validTo).getTime();
+    return Number.isFinite(t) ? t : undefined;
+  } catch {
+    return undefined;
+  }
 }
