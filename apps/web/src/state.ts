@@ -23,6 +23,8 @@ export interface Card {
     readonly here: boolean;
   };
   readonly error?: string;
+  /** Which decision this was among those this page saw, 1 first: the newest ones are kept. */
+  readonly decidedOrder?: number;
 }
 
 export interface State {
@@ -83,6 +85,8 @@ export const initial: State = {
 };
 
 const NOTICES = 5;
+
+const LOST = "連線曾中斷，決定可能沒有送達；可以再按一次";
 
 export const NACK_TEXT: Record<NackReason, string> = {
   busy: "本機端正在跑另一個回合",
@@ -203,10 +207,18 @@ function message(s: State, m: ServerMessage, at: number): State {
       return { ...s, notices: [...s.notices, `${m.p.code}${data}`].slice(-NOTICES) };
     }
     case "approval.request": {
-      const rest = s.cards.filter((c) => c.approval.approvalId !== m.p.approval.approvalId);
-      return { ...s, cards: [...rest, { approval: m.p.approval }] };
+      // The local end sends every pending one again after each hello: it keeps its place, and
+      // an error shown on it (a decision lost to the reconnect) stays until the next decision.
+      const old = s.cards.find((c) => c.approval.approvalId === m.p.approval.approvalId);
+      if (old === undefined) return { ...s, cards: [...s.cards, { approval: m.p.approval }] };
+      const card: Card = {
+        approval: m.p.approval,
+        ...(old.resolved === undefined && old.error !== undefined ? { error: old.error } : {}),
+      };
+      return { ...s, cards: s.cards.map((c) => (c === old ? card : c)) };
     }
-    case "approval.resolved":
+    case "approval.resolved": {
+      const order = Math.max(0, ...s.cards.map((c) => c.decidedOrder ?? 0)) + 1;
       return {
         ...s,
         cards: s.cards.map((c) =>
@@ -215,12 +227,14 @@ function message(s: State, m: ServerMessage, at: number): State {
                 {
                   ...c,
                   resolved: { state: m.p.state, here: c.acked === true && m.p.via === "remote" },
+                  decidedOrder: order,
                 },
                 "deciding",
               )
             : c,
         ),
       };
+    }
     case "ack":
     case "nack": {
       const card = s.cards.find((c) => c.deciding !== undefined && c.deciding === m.re);
@@ -246,8 +260,25 @@ function message(s: State, m: ServerMessage, at: number): State {
 
 export function reduce(s: State, e: Event): State {
   switch (e.type) {
-    case "connection":
-      return { ...s, connection: e.connection };
+    case "connection": {
+      // Back after a drop: a decision sent but never acked may not have arrived. It can be sent
+      // again (the local end answers already_decided if it had). One acked keeps waiting: no
+      // message gives a card's state, only the pending ones come again after hello.
+      const back = e.connection === "open" && s.connection !== "open";
+      return {
+        ...s,
+        connection: e.connection,
+        ...(back
+          ? {
+              cards: s.cards.map((c) =>
+                c.deciding !== undefined && c.acked !== true
+                  ? { ...withoutKeys(c, "deciding"), error: LOST }
+                  : c,
+              ),
+            }
+          : {}),
+      };
+    }
     case "message":
       return message(s, e.m, e.at);
     case "open_conv": {

@@ -209,6 +209,57 @@ describe("state: a conversation", () => {
     expect(s.cards[0]?.error).toBe("連線中斷，決定沒有送出");
   });
 
+  const req = (n: number) =>
+    server("approval.request", {
+      approval: { ...approval, approvalId: `approval-0000000${n}` },
+    });
+  const res = (n: number, state = "approved") =>
+    server("approval.resolved", { approvalId: `approval-0000000${n}`, state, via: "remote" });
+
+  test("decided cards carry the order they were decided in, not the order they came", () => {
+    const s = run([req(1), req(2), req(3), req(4), res(2), res(3), res(4), res(1)], run(open));
+    const order = Object.fromEntries(s.cards.map((c) => [c.approval.approvalId, c.decidedOrder]));
+    expect(order).toEqual({
+      "approval-00000001": 4,
+      "approval-00000002": 1,
+      "approval-00000003": 2,
+      "approval-00000004": 3,
+    });
+  });
+
+  test("acked but not resolved: still no second decision; the result replaces it", () => {
+    const acked = run(
+      [req(1), { type: "deciding", approvalId: "approval-00000001", id: "m1" }],
+      run(open),
+    );
+    const s = run([server("ack", {}, { re: "m1" })], acked);
+    expect(s.cards[0]?.acked).toBe(true);
+    expect(s.cards[0]?.resolved).toBeUndefined();
+    expect(run([res(1)], s).cards[0]?.resolved?.state).toBe("approved");
+  });
+
+  test("back after a drop: an unacked decision is freed with a note; an acked one keeps waiting", () => {
+    const sent = run(
+      [
+        req(1),
+        req(2),
+        { type: "deciding", approvalId: "approval-00000001", id: "m1" },
+        { type: "deciding", approvalId: "approval-00000002", id: "m2" },
+        server("ack", {}, { re: "m2" }),
+        { type: "connection", connection: "offline" },
+      ],
+      run(open),
+    );
+    const back = run([{ type: "connection", connection: "open" }, req(1), req(2)], sent);
+    expect(back.cards[0]?.deciding).toBeUndefined();
+    expect(back.cards[0]?.error).toBe("連線曾中斷，決定可能沒有送達；可以再按一次");
+    // Sent again after hello, it is still pending: the local end never took the decision.
+    expect(back.cards[1]?.acked).toBeUndefined();
+    const waiting = run([{ type: "connection", connection: "open" }], sent);
+    expect(waiting.cards[1]?.acked).toBe(true);
+    expect(waiting.cards[1]?.error).toBeUndefined();
+  });
+
   test("another epoch: everything held is dropped", () => {
     const s = run([
       ...open,

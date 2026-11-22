@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { Card } from "../state.ts";
 import { Icon } from "./Icon.tsx";
 import { leftText, shortId, timeText } from "./time.ts";
@@ -83,16 +84,31 @@ export function ApprovalCard(props: {
   origin?: { title: string; onJump: () => void; onDismiss?: () => void };
   /** Why a decision cannot be sent now (offline); the buttons are off while it is set. */
   blocked?: string;
+  /** Takes the focus when it appears; false for all but the oldest waiting card. */
+  focus?: boolean;
 }) {
   const { approval: a, resolved, deciding } = props.card;
-  const done = resolved !== undefined || deciding !== undefined || props.blocked !== undefined;
+  // Acked but not resolved yet: the local end has the decision, a second one must not go.
+  const waiting = resolved === undefined && props.card.acked === true;
+  const done =
+    resolved !== undefined || deciding !== undefined || waiting || props.blocked !== undefined;
+  const deny = useRef<HTMLButtonElement>(null);
+  // Only the card App names gets the focus, once, and not from someone typing a message.
+  useEffect(() => {
+    if (props.focus === false) return;
+    if (document.activeElement?.closest(".composer") != null) return;
+    deny.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const left = props.localNow === undefined ? undefined : a.expiresAt - props.localNow;
   const external = a.effects === "external-write";
   const [tone, label] =
     resolved === undefined
-      ? deciding === undefined
-        ? ["wait", "等待核准"]
-        : ["active", "送出決定中…"]
+      ? waiting
+        ? ["active", "等待結果…"]
+        : deciding === undefined
+          ? ["wait", "等待核准"]
+          : ["active", "送出決定中…"]
       : (STATUS[resolved.state] ?? ["", resolved.state]);
   const status = resolved !== undefined && !resolved.here ? `${label}（在別處決定）` : label;
   const cls = ["approval-card"];
@@ -181,7 +197,7 @@ export function ApprovalCard(props: {
             <button
               className="sg-btn sg-btn-danger"
               type="button"
-              autoFocus
+              ref={deny}
               disabled={done}
               onClick={() => props.onDecide("denied")}
             >
@@ -193,7 +209,13 @@ export function ApprovalCard(props: {
               disabled={done}
               onClick={() => props.onDecide("approved")}
             >
-              {deciding !== undefined ? "等待本機回應…" : external ? "確認核准寫外部" : "核准執行"}
+              {waiting
+                ? "等待結果…"
+                : deciding !== undefined
+                  ? "等待本機回應…"
+                  : external
+                    ? "確認核准寫外部"
+                    : "核准執行"}
             </button>
           </div>
         ) : (

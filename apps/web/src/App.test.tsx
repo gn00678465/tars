@@ -316,6 +316,67 @@ describe("the sidebar and the open conversation", () => {
     unmount();
   });
 
+  const requestN = (n: number, conv: string) =>
+    server("approval.request", {
+      approval: {
+        approvalId: `approval-0000000${n}`,
+        conv,
+        hash: "a".repeat(64),
+        action: "run_script",
+        script: `s${n}`,
+        version: "v1",
+        summary: "推播",
+        effects: "external-write",
+        domains: [],
+        secret: null,
+        argv: [],
+        expiresAt: 600_000,
+      },
+    });
+  const denyOf = (root: HTMLElement, script: string) =>
+    [...root.querySelectorAll<HTMLElement>(".approval-card")]
+      .find((c) => c.textContent?.includes(`${script}（版本`))
+      ?.querySelector<HTMLButtonElement>(".sg-btn-danger");
+
+  test("three waiting cards: only the oldest one's deny has the focus", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    for (const n of [2, 3, 4]) await act(async () => h.last().receive(requestN(n, `conv-${n}`)));
+    expect(document.activeElement).toBe(denyOf(root, "s2"));
+    unmount();
+  });
+
+  test("typing in the composer: a new card does not take the focus", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    const area = root.querySelector("textarea") as HTMLTextAreaElement;
+    area.focus();
+    await act(async () => h.last().receive(requestN(2, "conv-2")));
+    expect(document.activeElement).toBe(area);
+    unmount();
+  });
+
+  test("four decided elsewhere: the one decided last stays though it came first", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    for (const n of [2, 3, 4, 5]) await act(async () => h.last().receive(requestN(n, `conv-${n}`)));
+    for (const n of [3, 4, 5, 2])
+      await act(async () =>
+        h.last().receive(
+          server("approval.resolved", {
+            approvalId: `approval-0000000${n}`,
+            state: "approved",
+            via: "remote",
+          }),
+        ),
+      );
+    const shown = [...root.querySelectorAll(".composer-dock .approval-card")].map(
+      (c) => c.querySelector(".approval-field-val")?.textContent,
+    );
+    expect(shown).toEqual(["s4（版本 v1）", "s5（版本 v1）", "s2（版本 v1）"]);
+    unmount();
+  });
+
   test("a waiting card of this conversation is in the thread", async () => {
     const { h, root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());

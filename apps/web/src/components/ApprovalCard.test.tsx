@@ -235,3 +235,18 @@ test("offline: both buttons are off and the card says why", async () => {
   expect(button(root, APPROVE).disabled).toBe(true);
   expect(root.textContent).toContain("離線，無法送出決定");
 });
+
+test("acked, waiting for the result: both buttons stay off", async () => {
+  const { root } = await render(
+    <ApprovalCard card={card({ acked: true })} localNow={undefined} onDecide={() => undefined} />,
+  );
+  expect(button(root, DENY).disabled).toBe(true);
+  expect(button(root, "等待結果…").disabled).toBe(true);
+});
+
+test("a card told not to take the focus leaves it where it is", async () => {
+  const { root } = await render(
+    <ApprovalCard card={card()} focus={false} localNow={undefined} onDecide={() => undefined} />,
+  );
+  expect(document.activeElement).not.toBe(button(root, DENY));
+});

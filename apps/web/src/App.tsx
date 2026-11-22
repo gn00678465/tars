@@ -97,9 +97,14 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     (c) => c.approval.conv !== state.conv && !dismissed.has(c.approval.approvalId),
   );
   const pinned = [
-    ...elsewhere.filter((c) => c.resolved !== undefined).slice(-3),
+    ...elsewhere
+      .filter((c) => c.resolved !== undefined)
+      .sort((a, b) => (a.decidedOrder ?? 0) - (b.decidedOrder ?? 0))
+      .slice(-3),
     ...elsewhere.filter((c) => c.resolved === undefined),
   ];
+  // One card on the page takes the focus: the oldest waiting one.
+  const first = pending[0]?.approval.approvalId;
   const blocked =
     state.connection !== "open" || !state.relay.online ? "離線，無法送出決定" : undefined;
   const waiting = new Set(pending.map((c) => c.approval.conv));
@@ -174,6 +179,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                   card={card}
                   localNow={localNow(state, tick)}
                   onDecide={(d) => decide(card, d)}
+                  focus={card.approval.approvalId === first}
                   {...(blocked === undefined ? {} : { blocked })}
                 />
               ))}
@@ -188,6 +194,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                     card={card}
                     localNow={localNow(state, tick)}
                     onDecide={(d) => decide(card, d)}
+                    focus={card.approval.approvalId === first}
                     {...(blocked === undefined ? {} : { blocked })}
                     origin={{
                       title: titleOf(card.approval.conv),
