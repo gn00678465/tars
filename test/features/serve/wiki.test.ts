@@ -125,6 +125,7 @@ describe("before any sync", () => {
       synced: false,
       counts: { people: 0, projects: 0, topics: 0, life: 0, learning: 0, investment: 0 },
       total: 0,
+      examples: [],
     });
     expect(await ask(h, "wiki.list")).toEqual({ pages: [], more: false });
     expect(await ask(h, "wiki.page", { path: PAGE })).toEqual({ state: "missing", path: PAGE });
@@ -143,6 +144,24 @@ describe("after a sync", () => {
     expect(s).toMatchObject({ synced: true, total: 1, counts: { people: 1, projects: 0 } });
     expect(s.lastSyncAt).toBe(h.clock.now().getTime());
     expect(typeof s.indexedAt).toBe("number");
+  });
+
+  test("status: the examples are the first alias of the pages updated last", async () => {
+    const h = await setup();
+    const w = await openWikiDb(h.paths);
+    const add = (path: string, aliases: string[], updated: string) =>
+      w.run(
+        `INSERT INTO pages (path, title, aliases, created, updated, hash, next_item, state)
+         VALUES (?, 't', ?, '2026-11-01', ?, 'h', 1, 'ok')`,
+        [path, JSON.stringify(aliases), updated],
+      );
+    add("people/a", ["阿明", "明"], "2026-11-10");
+    add("topics/b", [], "2026-11-20");
+    add("life/c", ["作息"], "2026-11-15");
+    add("learning/d", ["SQLite"], "2026-11-01");
+    add("investment/e", ["再平衡"], "2026-11-12");
+    w.close();
+    expect((await ask(h, "wiki.status")).examples).toEqual(["作息", "再平衡", "阿明"]);
   });
 
   test("list: what tars wiki list lists", async () => {
@@ -353,6 +372,7 @@ describe("G4: the remote knowledge base writes nothing", () => {
       "../agent/db.ts": ["openDb"],
       "../wiki/db.ts": ["openWikiDb"],
       "../wiki/evidence.ts": ["readTurnParts", "resolveSource", "sourceRef"],
+      "../wiki/index-file.ts": ["byUpdated"],
       "../wiki/page.ts": ["parsePage", "type Category", "type Entry"],
       "../wiki/read.ts": ["categoryCounts", "listPages"],
       "../wiki/search.ts": ["scannedAt", "searchWiki"],

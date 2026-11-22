@@ -8,6 +8,7 @@ import {
   WIKI_ENTRIES,
   WIKI_ENTRY_SOURCES,
   WIKI_ERROR,
+  WIKI_EXAMPLES,
   WIKI_PAGES,
   WIKI_QUOTE,
   WIKI_QUOTES,
@@ -29,6 +30,7 @@ import { openDb } from "../agent/db.ts";
 import { openWikiDb } from "../wiki/db.ts";
 import { readTurnParts, resolveSource, sourceRef } from "../wiki/evidence.ts";
 import { parsePage, type Category, type Entry } from "../wiki/page.ts";
+import { byUpdated } from "../wiki/index-file.ts";
 import { categoryCounts, listPages } from "../wiki/read.ts";
 import { scannedAt, searchWiki } from "../wiki/search.ts";
 import { readIn, withWikiDir } from "../wiki/wiki-dir.ts";
@@ -111,6 +113,10 @@ const cut = (s: string, n: number) => {
 
 function status(wiki: Database | undefined): WikiStatus {
   const counts = categoryCounts(wiki);
+  const examples = listPages(wiki)
+    .toSorted(byUpdated)
+    .flatMap((p) => p.aliases.slice(0, 1))
+    .slice(0, WIKI_EXAMPLES);
   const last = wiki
     ?.query(
       "SELECT ended_at AS at FROM runs WHERE state IN ('completed', 'stopped') AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1",
@@ -121,6 +127,7 @@ function status(wiki: Database | undefined): WikiStatus {
     synced: wiki !== undefined,
     counts,
     total: Object.values(counts).reduce((a, b) => a + b, 0),
+    examples,
     ...(last === null || last === undefined ? {} : { lastSyncAt: last.at }),
     ...(indexedAt === null ? {} : { indexedAt }),
   };

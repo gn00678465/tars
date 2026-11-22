@@ -10,6 +10,7 @@ import {
   WIKI_ENTRY,
   WIKI_ENTRY_SOURCES,
   WIKI_ERROR,
+  WIKI_EXAMPLES,
   WIKI_PAGES,
   WIKI_QUERY,
   WIKI_QUOTE,
@@ -77,6 +78,8 @@ export const wikiStatus = z.strictObject({
     >,
   ),
   total: z.number().int().min(0),
+  /** Words worth a search here: the first alias of the pages updated last, newest first. */
+  examples: z.array(text(WIKI_ALIAS)).max(WIKI_EXAMPLES),
   /** When the last sync that finished (done, or stopped at a cap) ended. */
   lastSyncAt: z.number().optional(),
   /** How far both search indexes reach. */

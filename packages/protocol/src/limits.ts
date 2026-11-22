@@ -58,4 +58,6 @@ export const WIKI_CONV_TITLE = 200;
 /** Each side of a source turn, cut in the middle as sync cuts what the model reads. */
 export const WIKI_TURN_TEXT_BYTES = 4_000;
 export const WIKI_QUOTES = 5;
+/** wiki.status's example queries: the first alias of the most recently updated pages. */
+export const WIKI_EXAMPLES = 3;
 export const WIKI_QUOTE = 200;

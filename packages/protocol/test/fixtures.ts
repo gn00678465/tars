@@ -183,6 +183,7 @@ export const SERVER: Record<string, object> = {
       synced: true,
       counts: { people: 1, projects: 0, topics: 0, life: 0, learning: 0, investment: 0 },
       total: 1,
+      examples: ["小明"],
       lastSyncAt: 1,
       indexedAt: 2,
     },
