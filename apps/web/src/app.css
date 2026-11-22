@@ -68,3 +68,11 @@
 .msg-assistant-text pre.tool-code-box:last-child {
   margin-bottom: 0;
 }
+
+/*
+ * The prototype puts the disabled reason and the error straight in .composer-wrap, spaced by its
+ * gap; here they sit in the form, which takes no part in the layout so the same gap applies.
+ */
+.composer {
+  display: contents;
+}
