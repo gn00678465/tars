@@ -128,7 +128,8 @@ function Rest({ items }: { items: readonly WireItem[] }) {
             <span>輸入 {item.inputTokens.toLocaleString("en-US")}</span>
             <span>輸出 {item.outputTokens.toLocaleString("en-US")}</span>
             <span>
-              {item.costUsd.toFixed(4)} USD{item.costSource === "estimate" ? " 估" : ""}
+              {/* Only a cost the provider reported is exact; table and estimate are tars's own. */}
+              {item.costUsd.toFixed(4)} USD{item.costSource === "provider" ? "" : " 估"}
             </span>
           </div>
         );

@@ -220,6 +220,102 @@ describe("the sidebar and the open conversation", () => {
       },
     });
 
+  const resolved = (state: string) =>
+    server("approval.resolved", {
+      approvalId: "approval-00000001",
+      state,
+      via: "remote",
+    });
+  const pinnedCard = (root: HTMLElement) =>
+    root.querySelector(".composer-dock .approval-card") as HTMLElement | null;
+
+  test("decided on another device, a card from another conversation stays with its result until closed", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    await act(async () => h.last().receive(request("conv-2")));
+    await act(async () => h.last().receive(resolved("denied")));
+    const card = pinnedCard(root) as HTMLElement;
+    expect(card.textContent).toContain("已拒絕（在別處決定）");
+    expect(card.querySelector(".approval-origin-bar")?.textContent).toContain("對話 2");
+    await act(async () =>
+      buttons(card)
+        .find((b) => b.textContent === "關閉")
+        ?.click(),
+    );
+    expect(pinnedCard(root)).toBeNull();
+    unmount();
+  });
+
+  test("decided here, it stays too, saying it was this device", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    await act(async () => h.last().receive(request("conv-2")));
+    await act(async () =>
+      buttons(pinnedCard(root) as HTMLElement)
+        .find((b) => b.textContent === "確認核准寫外部")
+        ?.click(),
+    );
+    const decide = h
+      .last()
+      .messages()
+      .find((m) => m.kind === "approval.decide");
+    await act(async () => h.last().receive(server("ack", {}, { re: decide?.id })));
+    await act(async () => h.last().receive(resolved("approved")));
+    const card = pinnedCard(root) as HTMLElement;
+    expect(card.textContent).toContain("已核准");
+    expect(card.textContent).not.toContain("在別處決定");
+    unmount();
+  });
+
+  test("offline: the card's buttons are off and say why", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    await act(async () => h.last().receive(request("conv-1")));
+    await act(async () => h.last().receive(server("relay.status", { online: false })));
+    const card = root.querySelector(".approval-card") as HTMLElement;
+    expect(buttons(card).every((b) => b.disabled)).toBe(true);
+    expect(card.textContent).toContain("離線，無法送出決定");
+    unmount();
+  });
+
+  test("a decision the socket could not send: an error, not 送出中", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    await act(async () => h.last().receive(request("conv-1")));
+    h.socket.send = () => undefined;
+    const card = root.querySelector(".approval-card") as HTMLElement;
+    await act(async () =>
+      buttons(card)
+        .find((b) => b.textContent === "拒絕（預設）")
+        ?.click(),
+    );
+    expect(card.textContent).toContain("連線中斷，決定沒有送出");
+    expect(card.textContent).not.toContain("送出決定中");
+    expect(buttons(card).find((b) => b.textContent === "拒絕（預設）")?.disabled).toBe(false);
+    unmount();
+  });
+
+  test("the reconnection warning sits outside the thread, closes, and a new one shows again", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () =>
+      h.last().receive(server("relay.status", { online: true, localSince: 1_800_000_500_000 })),
+    );
+    const alert = () => root.querySelector(".reconnect-alert") as HTMLElement | null;
+    expect(alert()?.getAttribute("role")).toBe("alert");
+    expect(alert()?.closest(".thread-scroll")).toBeNull();
+    await act(async () => buttons(alert() as HTMLElement)[0]?.click());
+    expect(alert()).toBeNull();
+    await act(async () =>
+      h.last().receive(server("relay.status", { online: true, localSince: 1_800_000_500_000 })),
+    );
+    expect(alert()).toBeNull();
+    await act(async () =>
+      h.last().receive(server("relay.status", { online: true, localSince: 1_800_000_900_000 })),
+    );
+    expect(alert()).not.toBeNull();
+    unmount();
+  });
+
   test("a waiting card of this conversation is in the thread", async () => {
     const { h, root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());
@@ -245,4 +341,84 @@ describe("the sidebar and the open conversation", () => {
     expect(root.querySelector(".thread-scroll .approval-card")).not.toBeNull();
     unmount();
   });
+});
+
+test("spend says 本期 and 估 until status says the period and source; a table-priced turn is 估", async () => {
+  const h = socketHarness();
+  const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
+  await act(async () => h.last().ready());
+  await act(async () => {
+    h.last().receive(server("relay.status", { online: true }));
+    h.last().receive(
+      server("status", {
+        now: 1,
+        providers: [
+          {
+            name: "anthropic",
+            spentUsd: 1,
+            quotaUsd: 100,
+            warnUsd: 80,
+            stopUsd: 95,
+            stopped: false,
+          },
+          {
+            name: "openrouter",
+            spentUsd: 1,
+            quotaUsd: 10,
+            warnUsd: 8,
+            stopUsd: 9.5,
+            stopped: false,
+          },
+        ],
+        pricesWarn: false,
+        pendingApprovals: 0,
+        turnRunning: false,
+        notify: "ok",
+      }),
+    );
+    h.last().receive(
+      server("conv.list.result", {
+        convs: [{ id: "conv-1", title: "甲", provider: "anthropic", model: "m", updatedAt: 1 }],
+      }),
+    );
+  });
+  await act(async () => (root.querySelector(".topbar-right .sg-btn") as HTMLButtonElement).click());
+  const sheet = root.querySelector(".sheet-panel") as HTMLElement;
+  expect(sheet.textContent).not.toMatch(/本月|累計/);
+  expect(sheet.textContent?.match(/本期 1\.00 \/ [0-9,]+ USD 估/g)).toHaveLength(2);
+  await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
+  const usage = (costSource: string) => ({
+    seq: 2,
+    turn: "t",
+    kind: "usage",
+    inputTokens: 1,
+    outputTokens: 1,
+    costUsd: 0.01,
+    costSource,
+  });
+  await act(async () =>
+    h
+      .last()
+      .receive(
+        server(
+          "conv.snapshot",
+          { epoch: "epoch-1", more: false, items: [usage("table")] },
+          { conv: "conv-1" },
+        ),
+      ),
+  );
+  expect(root.querySelector(".msg-usage-line")?.textContent).toContain("USD 估");
+  await act(async () =>
+    h
+      .last()
+      .receive(
+        server(
+          "conv.snapshot",
+          { epoch: "epoch-1", more: false, items: [usage("provider")] },
+          { conv: "conv-1" },
+        ),
+      ),
+  );
+  expect(root.querySelector(".msg-usage-line")?.textContent).not.toContain("估");
+  unmount();
 });

@@ -68,7 +68,9 @@ export type Event =
       readonly turn?: string;
       readonly conv?: string;
     }
-  | { readonly type: "deciding"; readonly approvalId: string; readonly id: string };
+  | { readonly type: "deciding"; readonly approvalId: string; readonly id: string }
+  /** approval.decide could not be sent at all: the card says so instead of waiting. */
+  | { readonly type: "decide_failed"; readonly approvalId: string };
 
 export const initial: State = {
   connection: "connecting",
@@ -276,6 +278,15 @@ export function reduce(s: State, e: Event): State {
         ...(here ? { load: e.conv as string } : {}),
       };
     }
+    case "decide_failed":
+      return {
+        ...s,
+        cards: s.cards.map((c) =>
+          c.approval.approvalId === e.approvalId
+            ? { ...withoutKeys(c, "deciding"), error: "連線中斷，決定沒有送出" }
+            : c,
+        ),
+      };
     case "deciding":
       return {
         ...s,

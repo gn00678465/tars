@@ -163,10 +163,10 @@ export function StatusSheet(props: { state: State; onClose: () => void }) {
                       {l === "error" ? <span className="sg-tag error">已達停用門檻</span> : null}
                       {l === "warn" ? <span className="sg-tag warn">已過提醒門檻</span> : null}
                     </span>
+                    {/* status carries neither the period nor where the figure came from:
+                        本期, and 估 on every one, until the protocol says. */}
                     <span className="mono">
-                      {p.name === "anthropic" ? "本月" : "累計"} {p.spentUsd.toFixed(2)} /{" "}
-                      {p.quotaUsd.toLocaleString("en-US")} USD
-                      {p.name === "openrouter" ? "" : " 估"}
+                      本期 {p.spentUsd.toFixed(2)} / {p.quotaUsd.toLocaleString("en-US")} USD 估
                     </span>
                   </div>
                 );

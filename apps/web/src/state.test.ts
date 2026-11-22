@@ -196,6 +196,19 @@ describe("state: a conversation", () => {
     expect(none.load).toBeUndefined();
   });
 
+  test("a decision that could not be sent: no deciding, an error on the card", () => {
+    const s = run(
+      [
+        server("approval.request", { approval }),
+        { type: "deciding", approvalId: approval.approvalId, id: "m1" },
+        { type: "decide_failed", approvalId: approval.approvalId },
+      ],
+      run(open),
+    );
+    expect(s.cards[0]?.deciding).toBeUndefined();
+    expect(s.cards[0]?.error).toBe("連線中斷，決定沒有送出");
+  });
+
   test("another epoch: everything held is dropped", () => {
     const s = run([
       ...open,

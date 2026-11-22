@@ -80,10 +80,12 @@ export function ApprovalCard(props: {
   localNow: number | undefined;
   onDecide: (decision: "approved" | "denied") => void;
   /** Pinned above the composer while the page is on another conversation: says which. */
-  origin?: { title: string; onJump: () => void };
+  origin?: { title: string; onJump: () => void; onDismiss?: () => void };
+  /** Why a decision cannot be sent now (offline); the buttons are off while it is set. */
+  blocked?: string;
 }) {
   const { approval: a, resolved, deciding } = props.card;
-  const done = resolved !== undefined || deciding !== undefined;
+  const done = resolved !== undefined || deciding !== undefined || props.blocked !== undefined;
   const left = props.localNow === undefined ? undefined : a.expiresAt - props.localNow;
   const external = a.effects === "external-write";
   const [tone, label] =
@@ -99,10 +101,17 @@ export function ApprovalCard(props: {
     <article className={cls.join(" ")} aria-label="核准">
       {props.origin === undefined ? null : (
         <div className="approval-origin-bar">
-          <span>待核准（來自其他對話）：{props.origin.title}</span>
+          <span>
+            {resolved === undefined ? "待核准" : "已決定"}（來自其他對話）：{props.origin.title}
+          </span>
           <button className="sg-btn sg-btn-sm" type="button" onClick={props.origin.onJump}>
             跳至該對話
           </button>
+          {props.origin.onDismiss === undefined ? null : (
+            <button className="sg-btn sg-btn-sm" type="button" onClick={props.origin.onDismiss}>
+              關閉
+            </button>
+          )}
         </div>
       )}
       <div className="approval-head">
@@ -191,6 +200,11 @@ export function ApprovalCard(props: {
           <div className="compaction-meta">{OUTCOME[resolved.state] ?? ""}</div>
         )}
       </div>
+      {props.blocked === undefined || resolved !== undefined ? null : (
+        <p className="composer-disabled-reason" role="status">
+          {props.blocked}
+        </p>
+      )}
       {props.card.error === undefined ? null : (
         <p className="composer-inline-err" role="alert">
           {props.card.error}

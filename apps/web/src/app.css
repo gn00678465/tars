@@ -1,6 +1,5 @@
 /* What the prototype did not need: React's markup around its classes. Static, no inline styles. */
 .approval-card ol.approval-argv {
-  list-style: none;
   margin: 0;
 }
 
@@ -16,4 +15,44 @@
 .thread-scroll:focus-visible {
   outline: 2px solid var(--focus-line);
   outline-offset: -2px;
+}
+
+/* Cards pinned above the composer scroll inside a bounded area: the composer always shows. */
+.pinned-approvals {
+  max-height: 40vh;
+  max-height: 40dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pinned-approvals:empty {
+  display: none;
+}
+
+/* Each argument numbered and ruled off, so a wrapped one is not read as the next. */
+.approval-card ol.approval-argv {
+  list-style: decimal;
+  padding-left: 2.75em;
+}
+
+.approval-card ol.approval-argv li {
+  padding: 4px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-card ol.approval-argv li + li {
+  border-top: 1px dashed var(--glass-control-rim);
+}
+
+.approval-card ol.approval-argv li::marker {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+}
+
+.reconnect-alert {
+  margin: 8px 16px 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }

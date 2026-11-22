@@ -51,6 +51,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState(false);
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
+  /** The reconnection the owner closed; a later one shows again. */
+  const [seenReconnect, setSeenReconnect] = useState<number | undefined>(undefined);
 
   // A conversation opened from the list: the page goes to its thread.
   const thread = useRef<HTMLElement>(null);
@@ -72,7 +75,11 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
       decision,
       hash: card.approval.hash,
     });
-    if (id !== undefined) dispatch({ type: "deciding", approvalId: card.approval.approvalId, id });
+    dispatch(
+      id === undefined
+        ? { type: "decide_failed", approvalId: card.approval.approvalId }
+        : { type: "deciding", approvalId: card.approval.approvalId, id },
+    );
   };
   const oldest = state.items[0]?.seq;
   const running = state.turn?.state === "started" && state.conv !== undefined;
@@ -84,7 +91,17 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     ...here.filter((c) => c.resolved !== undefined).slice(-3),
     ...here.filter((c) => c.resolved === undefined),
   ];
-  const pinned = pending.filter((c) => c.approval.conv !== state.conv);
+  // From other conversations: the waiting ones, and the last three decided, so a decision made
+  // here or elsewhere stays visible until closed.
+  const elsewhere = state.cards.filter(
+    (c) => c.approval.conv !== state.conv && !dismissed.has(c.approval.approvalId),
+  );
+  const pinned = [
+    ...elsewhere.filter((c) => c.resolved !== undefined).slice(-3),
+    ...elsewhere.filter((c) => c.resolved === undefined),
+  ];
+  const blocked =
+    state.connection !== "open" || !state.relay.online ? "離線，無法送出決定" : undefined;
   const waiting = new Set(pending.map((c) => c.approval.conv));
   const titleOf = (id: string) => state.convs.find((c) => c.id === id)?.title || "另一個對話";
   const current = state.convs.find((c) => c.id === state.conv);
@@ -124,20 +141,26 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               </div>
             </div>
           )}
+          {/* Outside the scrolling thread: it may mean another machine took the certificate. */}
+          {state.reconnectedAt === undefined || state.reconnectedAt === seenReconnect ? null : (
+            <div className="task-notice warn reconnect-alert" role="alert">
+              <div className="task-notice-body">
+                <div className="task-notice-title">
+                  本機端在 {timeText(state.reconnectedAt)} 重新連上
+                </div>
+                <div className="task-notice-desc">如果不是你重啟的，請到 Cloudflare 檢查憑證。</div>
+              </div>
+              <button
+                className="sg-btn sg-btn-sm"
+                type="button"
+                onClick={() => setSeenReconnect(state.reconnectedAt)}
+              >
+                知道了
+              </button>
+            </div>
+          )}
           <main className="thread-scroll" ref={thread} tabIndex={-1} aria-label="訊息">
             <div className="thread-inner thread">
-              {state.reconnectedAt === undefined ? null : (
-                <div className="task-notice warn" role="alert">
-                  <div className="task-notice-body">
-                    <div className="task-notice-title">
-                      本機端在 {timeText(state.reconnectedAt)} 重新連上
-                    </div>
-                    <div className="task-notice-desc">
-                      如果不是你重啟的，請到 Cloudflare 檢查憑證。
-                    </div>
-                  </div>
-                </div>
-              )}
               <Thread
                 state={state}
                 onOlder={() => {
@@ -151,24 +174,34 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                   card={card}
                   localNow={localNow(state, tick)}
                   onDecide={(d) => decide(card, d)}
+                  {...(blocked === undefined ? {} : { blocked })}
                 />
               ))}
             </div>
           </main>
           <footer className="composer-dock">
             <div className="composer-wrap">
-              {pinned.map((card) => (
-                <ApprovalCard
-                  key={card.approval.approvalId}
-                  card={card}
-                  localNow={localNow(state, tick)}
-                  onDecide={(d) => decide(card, d)}
-                  origin={{
-                    title: titleOf(card.approval.conv),
-                    onJump: () => open(card.approval.conv),
-                  }}
-                />
-              ))}
+              <div className="pinned-approvals">
+                {pinned.map((card) => (
+                  <ApprovalCard
+                    key={card.approval.approvalId}
+                    card={card}
+                    localNow={localNow(state, tick)}
+                    onDecide={(d) => decide(card, d)}
+                    {...(blocked === undefined ? {} : { blocked })}
+                    origin={{
+                      title: titleOf(card.approval.conv),
+                      onJump: () => open(card.approval.conv),
+                      ...(card.resolved === undefined
+                        ? {}
+                        : {
+                            onDismiss: () =>
+                              setDismissed((d) => new Set(d).add(card.approval.approvalId)),
+                          }),
+                    }}
+                  />
+                ))}
+              </div>
               <Composer
                 blocked={composerBlocked(state)}
                 canAbort={running && state.connection === "open"}

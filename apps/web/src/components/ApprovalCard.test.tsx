@@ -207,3 +207,31 @@ test("combining marks and variation selectors are spelled out, so look-alikes di
     '"x\\u{e0100}"',
   ]);
 });
+
+test("long arguments, quotes and backslashes: one numbered item each, escaped as before", async () => {
+  const long = "x".repeat(300);
+  const { root } = await render(
+    <ApprovalCard
+      card={card({ approval: { ...approval, argv: [long, 'say "hi"', "C:\\dir\\file", "--"] } })}
+      localNow={undefined}
+      onDecide={() => undefined}
+    />,
+  );
+  const list = root.querySelector("ol.argv") as HTMLOListElement;
+  expect(list.children).toHaveLength(4);
+  expect(args(root)).toEqual([`"${long}"`, '"say \\"hi\\""', '"C:\\\\dir\\\\file"', '"--"']);
+});
+
+test("offline: both buttons are off and the card says why", async () => {
+  const { root } = await render(
+    <ApprovalCard
+      card={card()}
+      localNow={undefined}
+      blocked="離線，無法送出決定"
+      onDecide={() => undefined}
+    />,
+  );
+  expect(button(root, DENY).disabled).toBe(true);
+  expect(button(root, APPROVE).disabled).toBe(true);
+  expect(root.textContent).toContain("離線，無法送出決定");
+});
