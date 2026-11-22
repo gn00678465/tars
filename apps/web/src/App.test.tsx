@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { skillInvocationText } from "@tars/protocol";
 import { act } from "react";
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
 import { buttons, render } from "./render.ts";
 import { server, socketHarness } from "./testing.ts";
@@ -781,5 +781,69 @@ describe("the / menu and the certificate, from status", () => {
     const far = await ready({ certExpiresAt: 1_800_000_000_000 + 90 * DAY });
     expect(far.root.querySelector(".topbar-right .desktop-only")?.textContent).toBe("花費與模型");
     far.unmount();
+  });
+});
+
+describe("the drawer and the status sheet hold the focus; Esc closes them", () => {
+  const press = (key: string, shiftKey = false) =>
+    act(
+      async () =>
+        void document.dispatchEvent(new KeyboardEvent("keydown", { key, shiftKey, bubbles: true })),
+    );
+
+  test("the drawer below 1024px: focus goes in, Tab wraps, Esc closes and the menu button has it back", async () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    const h = socketHarness();
+    const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
+    await act(async () => h.last().ready());
+    const menu = root.querySelector('[aria-label="展開對話列表"]') as HTMLButtonElement;
+    menu.focus();
+    await act(async () => menu.click());
+    const drawer = root.querySelector(".sidebar") as HTMLElement;
+    expect(drawer.getAttribute("role")).toBe("dialog");
+    expect(drawer.contains(document.activeElement)).toBe(true);
+    const inside = [...drawer.querySelectorAll<HTMLElement>("button")];
+    (inside.at(-1) as HTMLElement).focus();
+    await press("Tab");
+    expect(document.activeElement).toBe(inside[0]);
+    await press("Tab", true);
+    expect(document.activeElement).toBe(inside.at(-1));
+    await press("Escape");
+    expect(drawer.classList.contains("mobile-open")).toBe(false);
+    expect(drawer.getAttribute("role")).toBeNull();
+    expect(document.activeElement).toBe(menu);
+    unmount();
+    vi.unstubAllGlobals();
+  });
+
+  test("on desktop the column is not a dialog and Esc leaves it alone", async () => {
+    const h = socketHarness();
+    const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
+    await act(async () => h.last().ready());
+    const side = root.querySelector(".sidebar") as HTMLElement;
+    expect(side.getAttribute("role")).toBeNull();
+    await press("Escape");
+    expect(side.classList.contains("collapsed")).toBe(false);
+    unmount();
+  });
+
+  test("the status sheet: the close button has the focus, Esc closes it and the opener has it back", async () => {
+    const h = socketHarness();
+    const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
+    await act(async () => h.last().ready());
+    const opener = root.querySelector(".topbar-right .desktop-only") as HTMLButtonElement;
+    opener.focus();
+    await act(async () => opener.click());
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("關閉");
+    await press("Tab");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("關閉");
+    await press("Escape");
+    expect(root.querySelector(".sheet-panel")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+    unmount();
   });
 });

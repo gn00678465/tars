@@ -1,5 +1,7 @@
 import type { WireConv } from "@tars/protocol";
+import { useRef } from "react";
 import { Icon, Monolith } from "./Icon.tsx";
+import { useModal } from "./modal.ts";
 import { timeText } from "./time.ts";
 
 const titleOf = (c: WireConv) => (c.title === "" ? "（沒有標題）" : c.title);
@@ -18,15 +20,24 @@ export function ConversationList(props: {
   /** Conversations with an approval waiting. */
   waiting: ReadonlySet<string>;
   collapsed: boolean;
+  /** The drawer below 1024px is open: it holds the focus and Esc closes it. */
   drawerOpen: boolean;
   onOpen: (conv: string | undefined) => void;
   onCollapse: () => void;
 }) {
+  const aside = useRef<HTMLElement>(null);
+  // Only the drawer is modal: the desktop column sits beside the thread.
+  useModal(aside, props.drawerOpen, props.onCollapse);
   const cls = ["sidebar"];
   if (props.collapsed) cls.push("collapsed");
   if (props.drawerOpen) cls.push("mobile-open");
   return (
-    <aside className={cls.join(" ")} aria-label="對話列表">
+    <aside
+      ref={aside}
+      className={cls.join(" ")}
+      aria-label="對話列表"
+      {...(props.drawerOpen ? { role: "dialog", "aria-modal": true } : {})}
+    >
       <div className="sidebar-header">
         <div className="brand-mark">
           <Monolith />

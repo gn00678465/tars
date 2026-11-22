@@ -1,6 +1,8 @@
 import type { WireStatus } from "@tars/protocol";
 import type { State } from "../state.ts";
+import { useRef } from "react";
 import { Icon } from "./Icon.tsx";
+import { useModal } from "./modal.ts";
 import { timeText } from "./time.ts";
 
 type Provider = WireStatus["providers"][number];
@@ -120,6 +122,8 @@ export function TopBar(props: {
 
 /** The status sheet: a dialog on desktop, a bottom sheet on a phone (the CSS decides). */
 export function StatusSheet(props: { state: State; onClose: () => void }) {
+  const panel = useRef<HTMLElement>(null);
+  useModal(panel, true, props.onClose);
   const { status } = props.state;
   const c = connection(props.state);
   return (
@@ -130,6 +134,7 @@ export function StatusSheet(props: { state: State; onClose: () => void }) {
       }}
     >
       <section
+        ref={panel}
         className="sheet-panel sg-popover wide"
         role="dialog"
         aria-modal="true"
@@ -137,13 +142,7 @@ export function StatusSheet(props: { state: State; onClose: () => void }) {
       >
         <div className="sheet-head">
           <h2 id="sheet-title">花費與狀態</h2>
-          <button
-            className="sg-icon-btn"
-            type="button"
-            aria-label="關閉"
-            autoFocus
-            onClick={props.onClose}
-          >
+          <button className="sg-icon-btn" type="button" aria-label="關閉" onClick={props.onClose}>
             <Icon name="close" size={15} />
           </button>
         </div>

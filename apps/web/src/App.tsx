@@ -161,7 +161,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           current={state.conv}
           waiting={waiting}
           collapsed={collapsed && !compact}
-          drawerOpen={drawer}
+          drawerOpen={drawer && compact}
           onOpen={open}
           onCollapse={() => (compact ? setDrawer(false) : setCollapsed(true))}
         />
