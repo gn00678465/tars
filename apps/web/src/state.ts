@@ -419,12 +419,20 @@ export function reduce(s: State, e: Event): State {
 export const localNow = (s: State, at: number): number | undefined =>
   s.status === undefined || s.statusAt === undefined ? undefined : s.status.now + (at - s.statusAt);
 
-/** Why the composer is off, or undefined when a message can be sent. */
+/** Why the composer is off (nothing can reach the local end), or undefined when it is on. */
 export function composerBlocked(s: State): string | undefined {
   if (s.connection === "auth_expired") return "登入已過期，請重新整理";
   if (s.connection === "keys_unavailable") return "本機端暫時無法驗證登入，稍後自動重試";
   if (s.connection !== "open") return "連線中斷，正在重新連線";
   if (!s.relay.online) return "本機端離線";
+  return undefined;
+}
+
+/**
+ * Why a message cannot go yet, though the composer is on: the owner keeps typing the next one
+ * while a turn runs, as the prototype, and only the send waits (the local end runs one turn).
+ */
+export function sendBusy(s: State): string | undefined {
   if (s.submitting !== undefined) return "送出中";
   if (s.status?.turnRunning === true || s.turn?.state === "started") return "回合進行中";
   return undefined;

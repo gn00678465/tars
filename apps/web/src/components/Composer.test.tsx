@@ -2,7 +2,7 @@
 import { act } from "react";
 import { afterEach, expect, test } from "vite-plus/test";
 import { button, render } from "../render.ts";
-import { composerBlocked, initial, type State } from "../state.ts";
+import { composerBlocked, initial, sendBusy, type State } from "../state.ts";
 import { Composer } from "./Composer.tsx";
 import { skillInvocationText } from "@tars/protocol";
 import type { Skill } from "./slash.ts";
@@ -15,13 +15,13 @@ const ready: State = { ...initial, connection: "open", relay: { online: true } }
 
 test.each<[string, State, string]>([
   ["offline", { ...ready, relay: { online: false } }, "本機端離線"],
-  ["busy", { ...ready, turn: { state: "started" } }, "回合進行中"],
   ["login expired", { ...ready, connection: "auth_expired" }, "登入已過期，請重新整理"],
   ["the page's connection down", { ...ready, connection: "offline" }, "連線中斷，正在重新連線"],
 ])("%s: off, with the reason", async (_, state, reason) => {
   const { root } = await render(
     <Composer
       blocked={composerBlocked(state)}
+      busy={undefined}
       canAbort={false}
       error={undefined}
       skills={undefined}
@@ -40,6 +40,7 @@ test("ready: sends the text and clears it", async () => {
   const { root } = await render(
     <Composer
       blocked={composerBlocked(ready)}
+      busy={undefined}
       canAbort={false}
       error={undefined}
       skills={undefined}
@@ -61,6 +62,76 @@ test("ready: sends the text and clears it", async () => {
   expect(area.value).toBe("");
 });
 
+test("a turn running: typing goes on; our own turn's button is 停止, another's says why", async () => {
+  const sent: string[] = [];
+  let aborted = 0;
+  const running: State = { ...ready, turn: { state: "started" } };
+  const at = (canAbort: boolean) =>
+    render(
+      <Composer
+        blocked={composerBlocked(running)}
+        busy={sendBusy(running)}
+        canAbort={canAbort}
+        error={undefined}
+        skills={undefined}
+        onSend={(t) => sent.push(t)}
+        onAbort={() => void aborted++}
+        onCommand={() => undefined}
+      />,
+    );
+  const ours = await at(true);
+  const area = ours.root.querySelector("textarea") as HTMLTextAreaElement;
+  expect(area.disabled).toBe(false);
+  expect(ours.root.querySelector(".composer .reason")).toBeNull();
+  await act(async () => {
+    // oxlint-disable-next-line typescript/unbound-method
+    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    set?.call(area, "下一則");
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () =>
+    area.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  // Not sent, not lost.
+  expect([sent, area.value]).toEqual([[], "下一則"]);
+  const stop = button(ours.root, "停止");
+  expect(stop.className).toBe("sg-btn sg-btn-danger");
+  await act(async () => stop.click());
+  expect(aborted).toBe(1);
+  ours.unmount();
+  const theirs = await at(false);
+  expect(theirs.root.querySelector("textarea")?.disabled).toBe(false);
+  expect(button(theirs.root, "送出").disabled).toBe(true);
+  expect(theirs.root.querySelector(".composer .reason")?.textContent).toBe("回合進行中");
+});
+
+test("the / button starts a command in the box; the hint says how to send a plain slash", async () => {
+  const { root } = await render(
+    <Composer
+      blocked={undefined}
+      busy={undefined}
+      canAbort={false}
+      error={undefined}
+      skills={undefined}
+      onSend={() => undefined}
+      onAbort={() => undefined}
+      onCommand={() => undefined}
+    />,
+  );
+  const slash = root.querySelector(".composer-toolbar-left button") as HTMLButtonElement;
+  expect([slash.textContent, slash.title]).toEqual([
+    "/指令",
+    "插入 / 指令（以 // 開頭可送出純斜線）",
+  ]);
+  await act(async () => slash.click());
+  const area = root.querySelector("textarea") as HTMLTextAreaElement;
+  expect([area.value, document.activeElement]).toEqual(["/", area]);
+  expect(root.querySelector("#slash-menu")).not.toBeNull();
+  expect(root.querySelector(".composer-hint")?.textContent).toBe(
+    "Enter 送出 · Shift+Enter 換行 · // 跳脫斜線",
+  );
+});
+
 const SKILLS: Skill[] = [
   { name: "tars-mode", description: "依路由表執行入庫腳本", localOnly: false },
   { name: "socratic-tutor", description: "蘇格拉底提問", localOnly: false },
@@ -73,6 +144,7 @@ async function composer(skills: readonly Skill[] | undefined) {
   const r = await render(
     <Composer
       blocked={undefined}
+      busy={undefined}
       canAbort={false}
       error={undefined}
       skills={skills}

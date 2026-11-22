@@ -15,7 +15,7 @@ import {
 } from "./components/RunSetup.tsx";
 import { Thread } from "./components/Thread.tsx";
 import type { Socket } from "./socket.ts";
-import { composerBlocked, initial, localNow, reduce } from "./state.ts";
+import { composerBlocked, initial, localNow, reduce, sendBusy } from "./state.ts";
 
 /** Within this much of the end counts as at the bottom (rounding, a last line half shown). */
 const BOTTOM_PX = 24;
@@ -262,7 +262,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           current: effortNow,
           ...(movedFrom === undefined ? {} : { movedFrom }),
           ...(() => {
-            const why = composerBlocked(state) ?? (running ? "回合結束後才能改" : undefined);
+            const why =
+              composerBlocked(state) ??
+              (running || sendBusy(state) !== undefined ? "回合結束後才能改" : undefined);
             return why === undefined ? {} : { disabled: why };
           })(),
           open: effortOpen,
@@ -437,6 +439,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               )}
               <Composer
                 blocked={composerBlocked(state)}
+                busy={sendBusy(state)}
                 canAbort={running && state.connection === "open"}
                 error={state.error}
                 skills={state.status?.skills}

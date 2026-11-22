@@ -38,7 +38,8 @@ test("a turn message missed across a reconnect: the resend's ack with the turn f
   );
   const textarea = () => root.querySelector("textarea") as HTMLTextAreaElement;
   await act(async () => void h.socket.submit("你好"));
-  expect(textarea().disabled).toBe(true);
+  // Being sent: the box stays on for the next message; the send waits.
+  expect(textarea().disabled).toBe(false);
   expect(root.querySelector(".composer .reason")?.textContent).toBe("送出中");
   await act(async () => {
     h.last().end(4000);

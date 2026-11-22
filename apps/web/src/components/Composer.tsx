@@ -1,9 +1,11 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { type Builtin, menuFor, type Option, type Skill, slashOf } from "./slash.ts";
 
 export function Composer(props: {
-  /** Why nothing can be sent now; undefined when it can. */
+  /** Why the composer is off; undefined when it is on. */
   blocked: string | undefined;
+  /** Why a message cannot go yet (a turn runs, one is being sent); typing goes on. */
+  busy: string | undefined;
   /** A turn runs in this conversation: the send button stops it. */
   canAbort: boolean;
   error: string | undefined;
@@ -21,6 +23,10 @@ export function Composer(props: {
   const [index, setIndex] = useState(0);
   const [refused, setRefused] = useState<string | undefined>(undefined);
   const off = props.blocked !== undefined;
+  const input = useRef<HTMLTextAreaElement>(null);
+  // Our own turn says so with the stop button; another one's (another conversation's, or one
+  // being sent) says why the send button is off.
+  const waitReason = props.canAbort ? undefined : props.busy;
   const menu = closed || off ? undefined : menuFor(text, props.skills);
   const enabled = menu?.filter((o) => o.enabled) ?? [];
   const selected = enabled[Math.min(index, enabled.length - 1)];
@@ -46,6 +52,8 @@ export function Composer(props: {
     const s = slashOf(text.trim(), props.skills);
     if (s.kind === "builtin") return run(s.name);
     if (s.kind === "refused") return setRefused(s.text);
+    // Kept as typed until the turn is over.
+    if (props.busy !== undefined) return;
     // A plain message goes as typed; a skill goes as the terminal words it.
     props.onSend(s.text === text.trim() ? text : s.text);
     change("");
@@ -65,9 +73,9 @@ export function Composer(props: {
         send();
       }}
     >
-      {off ? (
+      {off || waitReason !== undefined ? (
         <div className="composer-disabled-reason reason">
-          <span>{props.blocked}</span>
+          <span>{props.blocked ?? waitReason}</span>
         </div>
       ) : null}
       {props.error === undefined && refused === undefined ? null : (
@@ -125,6 +133,7 @@ export function Composer(props: {
         </label>
         <textarea
           id="composer-input"
+          ref={input}
           className="composer-input"
           rows={2}
           role="combobox"
@@ -163,19 +172,34 @@ export function Composer(props: {
         />
         <div className="composer-toolbar">
           <div className="composer-toolbar-left">
-            <span className="composer-hint desktop-only">Enter 送出 · Shift+Enter 換行</span>
+            <button
+              className="sg-btn sg-btn-ghost"
+              type="button"
+              title="插入 / 指令（以 // 開頭可送出純斜線）"
+              disabled={off}
+              onClick={() => {
+                change("/");
+                input.current?.focus();
+              }}
+            >
+              <span className="mono">/</span>
+              <span>指令</span>
+            </button>
+            <span className="composer-hint desktop-only">
+              Enter 送出 · Shift+Enter 換行 · // 跳脫斜線
+            </span>
           </div>
           <div className="composer-toolbar-right">
             {props.setup}
             {props.canAbort ? (
               <button className="sg-btn sg-btn-danger" type="button" onClick={props.onAbort}>
-                中止
+                停止
               </button>
             ) : (
               <button
                 className="sg-btn sg-btn-primary"
                 type="submit"
-                disabled={off || text.trim() === ""}
+                disabled={off || props.busy !== undefined || text.trim() === ""}
               >
                 送出
               </button>

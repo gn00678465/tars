@@ -1,7 +1,15 @@
 // @vitest-environment node
 import type { ServerMessage, WireApproval } from "@tars/protocol";
 import { describe, expect, test } from "vite-plus/test";
-import { composerBlocked, initial, localNow, reduce, type Event, type State } from "./state.ts";
+import {
+  composerBlocked,
+  initial,
+  localNow,
+  reduce,
+  sendBusy,
+  type Event,
+  type State,
+} from "./state.ts";
 import { server } from "./testing.ts";
 
 const CONV = "conv-1";
@@ -124,7 +132,7 @@ describe("state: a conversation", () => {
       { type: "open_conv", conv: undefined },
       { type: "submitted", requestId: "r1" },
     ]);
-    expect(composerBlocked(s)).toBe("送出中");
+    expect([composerBlocked(s), sendBusy(s)]).toEqual([undefined, "送出中"]);
     const started = run(
       [server("turn", { turn: TURN, requestId: "r1", state: "started" }, { conv: "conv-new" })],
       s,
@@ -146,7 +154,7 @@ describe("state: a conversation", () => {
       { type: "submitted", requestId: "r1" },
     ]);
     const plain = run([{ type: "submit_result", requestId: "r1", ok: true }], s);
-    expect(composerBlocked(plain)).toBe("送出中");
+    expect(sendBusy(plain)).toBe("送出中");
     // The turn's started message was missed: the resend's ack is all the page hears.
     const known = run(
       [{ type: "submit_result", requestId: "r1", ok: true, turn: TURN, conv: "conv-new" }],
@@ -379,7 +387,7 @@ describe("state: approvals", () => {
       server("approval.request", { approval }),
     ]);
     expect(s.cards).toHaveLength(1);
-    expect(composerBlocked(s)).toBe("回合進行中");
+    expect([composerBlocked(s), sendBusy(s)]).toEqual([undefined, "回合進行中"]);
   });
 
   test("the local end's clock counts on from status.now", () => {
