@@ -67,6 +67,29 @@ button {
   display: block;
 }
 
+.convs summary {
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+/* Not by colour alone: the open one also says 目前 and has a thick border. */
+.convs [aria-current="true"] {
+  border: 3px solid currentColor;
+  font-weight: bold;
+}
+
+.convs li button {
+  width: 100%;
+  text-align: left;
+}
+
+.thread:focus {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+}
+
 .thread li {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

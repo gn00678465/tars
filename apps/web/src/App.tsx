@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard } from "./components/ApprovalCard.tsx";
 import { Composer } from "./components/Composer.tsx";
 import { ConversationList } from "./components/ConversationList.tsx";
@@ -45,9 +45,18 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     if (ended) socket.send("conv.list");
   }, [ended, socket]);
 
+  // A conversation opened from the list: the page goes to its thread, which may sit below.
+  const thread = useRef<HTMLElement>(null);
+  const [opened, setOpened] = useState(0);
+  useEffect(() => {
+    if (opened > 0) thread.current?.focus();
+  }, [opened]);
+
   const open = (c: string | undefined) => {
     dispatch({ type: "open_conv", conv: c });
-    if (c !== undefined) socket.send("conv.open", {}, c);
+    if (c === undefined) return;
+    socket.send("conv.open", {}, c);
+    setOpened((n) => n + 1);
   };
   const oldest = state.items[0]?.seq;
   const running = state.turn?.state === "started" && state.conv !== undefined;
@@ -75,6 +84,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
       ))}
       <ConversationList convs={state.convs} current={state.conv} onOpen={open} />
       <Thread
+        ref={thread}
         state={state}
         onOlder={() => {
           if (state.conv !== undefined && oldest !== undefined)

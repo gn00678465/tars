@@ -71,10 +71,11 @@ function Item({ item }: { item: WireItem }) {
   }
 }
 
-export function Thread(props: { state: State; onOlder: () => void }) {
+export function Thread(props: { state: State; onOlder: () => void; ref?: React.Ref<HTMLElement> }) {
   const { items, running, turn, more, notices } = props.state;
   return (
-    <section className="thread">
+    // Focusable only from code: opening a conversation moves the focus, and so the view, here.
+    <section className="thread" aria-label="訊息" tabIndex={-1} ref={props.ref}>
       {more ? (
         <button type="button" onClick={props.onOlder}>
           載入更早的訊息
