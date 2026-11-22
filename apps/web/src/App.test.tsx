@@ -1144,6 +1144,18 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     none.unmount();
   });
 
+  test("/model opens the model menu on a new conversation and the continue sheet on one with messages", async () => {
+    const { root, send, submitted, unmount } = await ready(true);
+    await send("/model");
+    expect(root.querySelector("[role=menu][aria-label=選擇模型]")).not.toBeNull();
+    expect(submitted()).toBeUndefined();
+    await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
+    await send("/model");
+    expect(root.querySelector("[aria-labelledby=model-sheet-title]")).not.toBeNull();
+    expect(submitted()).toBeUndefined();
+    unmount();
+  });
+
   test("the header names the model and provider; continuing waits for a message", async () => {
     const { root, unmount } = await ready(true);
     const header = () => root.querySelector(".conv-header-bar") as HTMLElement;

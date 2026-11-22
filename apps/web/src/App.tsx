@@ -499,7 +499,17 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                     Object.keys(options).length === 0 ? undefined : options,
                   );
                 }}
-                onCommand={(name) => (name === "new" ? open(undefined) : setSheet(true))}
+                // /model needs the local end's model list (14-04).
+                {...(models === undefined ? { builtins: ["new", "cost", "help"] as const } : {})}
+                onCommand={(name) => {
+                  if (name === "new") return open(undefined);
+                  if (name === "cost") return setSheet(true);
+                  // As the model control: not while a turn runs or the local end is away.
+                  if (locked !== undefined) return;
+                  // Nothing to carry yet: the composer's model menu switches in place.
+                  if (source !== undefined) return setPicking("continue");
+                  return phone ? pickModel() : setModelOpen(true);
+                }}
                 {...(models === undefined
                   ? {}
                   : {

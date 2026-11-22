@@ -179,7 +179,8 @@ test("/ opens the menu: built-ins, the skills, local-only ones marked and not ch
   await c.type("/");
   expect(c.area.getAttribute("aria-expanded")).toBe("true");
   expect(c.options()).toEqual([
-    { name: "/new", selected: true, disabled: false },
+    { name: "/model", selected: true, disabled: false },
+    { name: "/new", selected: false, disabled: false },
     { name: "/cost", selected: false, disabled: false },
     { name: "/help", selected: false, disabled: false },
     { name: "/tars-mode", selected: false, disabled: false },
@@ -187,8 +188,8 @@ test("/ opens the menu: built-ins, the skills, local-only ones marked and not ch
     { name: "/memory", selected: false, disabled: true },
   ]);
   expect(c.root.textContent).toContain("僅限本機");
-  // No fake items: the terminal's /model, /effort, /compact, /wiki are not offered.
-  expect(c.root.textContent).not.toMatch(/\/(model|effort|compact|wiki)/);
+  // No fake items: the terminal's /effort, /compact, /wiki have nothing to run here yet.
+  expect(c.root.textContent).not.toMatch(/\/(effort|compact|wiki)/);
 });
 
 test("arrows skip the local-only one; Enter on a skill puts it in the box, then sends the terminal's wording", async () => {
@@ -213,7 +214,7 @@ test("keys faster than renders: three downs in one go move three", async () => {
     for (let i = 0; i < 3; i++)
       c.area.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
   });
-  expect(c.options().find((o) => o.selected)?.name).toBe("/tars-mode");
+  expect(c.options().find((o) => o.selected)?.name).toBe("/help");
 });
 
 test("typing filters; Esc closes; Tab on a built-in runs it", async () => {
@@ -231,7 +232,7 @@ test("typing filters; Esc closes; Tab on a built-in runs it", async () => {
   await c.type("/help");
   await c.key("Enter");
   expect(c.area.value).toBe("/");
-  expect(c.options()).toHaveLength(6);
+  expect(c.options()).toHaveLength(7);
 });
 
 test("a local-only skill or an unknown name sends nothing and says why; // sends one slash", async () => {

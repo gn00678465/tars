@@ -16,6 +16,8 @@ export function Composer(props: {
   onSend: (text: string) => void;
   onAbort: () => void;
   onCommand: (name: Exclude<Builtin, "help">) => void;
+  /** The built-ins this page can run now; all of them when absent. */
+  builtins?: readonly Builtin[];
   /** Beside the send button: the model and effort control; absent from an older local end. */
   setup?: ReactNode;
 }) {
@@ -32,7 +34,7 @@ export function Composer(props: {
   // Our own turn says so with the stop button; another one's (another conversation's, or one
   // being sent) says why the send button is off.
   const waitReason = props.canAbort ? undefined : props.busy;
-  const menu = closed || off ? undefined : menuFor(text, props.skills);
+  const menu = closed || off ? undefined : menuFor(text, props.skills, props.builtins);
   const enabled = menu?.filter((o) => o.enabled) ?? [];
   const selected = enabled[Math.min(index, enabled.length - 1)];
 
@@ -54,7 +56,7 @@ export function Composer(props: {
   };
   const send = () => {
     if (off || text.trim() === "") return;
-    const s = slashOf(text.trim(), props.skills);
+    const s = slashOf(text.trim(), props.skills, props.builtins);
     if (s.kind === "builtin") return run(s.name);
     if (s.kind === "refused") return setRefused(s.text);
     // Kept as typed until the turn is over.
