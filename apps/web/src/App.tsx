@@ -222,7 +222,18 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const { models } = state;
   const modelOf = (r: ModelRef | undefined) =>
     r === undefined ? undefined : models?.find((m) => m.provider === r.provider && m.id === r.id);
-  const chosen = state.conv === undefined ? next : undefined;
+  // A new conversation starts on the model of the one updated last, while the local end still
+  // takes it; else on the local end's default (7-16). The list is the memory: no browser storage.
+  const last = state.convs[0];
+  const lastModel =
+    last === undefined ? undefined : modelOf({ provider: last.provider, id: last.model });
+  const preset =
+    lastModel === undefined ||
+    lastModel.unusable !== undefined ||
+    providerSpend(state.status, lastModel.provider)?.stopped === true
+      ? undefined
+      : { model: { provider: lastModel.provider, id: lastModel.id } };
+  const chosen: typeof next = state.conv === undefined ? (next ?? preset) : undefined;
   const currentRef =
     current === undefined ? undefined : { provider: current.provider, id: current.model };
   // The conversation a continuation comes from: this one, or the one the next message continues.

@@ -1091,6 +1091,47 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     unmount();
   });
 
+  test("a new conversation starts on the model of the one updated last, while it is usable", async () => {
+    const start = async (models: readonly object[]) => {
+      const h = socketHarness();
+      const r = await render(<App socket={h.socket} now={h.now} />);
+      await act(async () => h.last().ready());
+      const asked = h
+        .last()
+        .messages()
+        .find((m) => m.kind === "models.get");
+      await act(async () => {
+        h.last().receive(server("relay.status", { online: true }));
+        // conv-2 is listed second but updated last.
+        h.last().receive(
+          server("conv.list.result", {
+            convs: [CONVS[0], { ...CONVS[1], updatedAt: 3 }],
+          }),
+        );
+        h.last().receive(server("models.result", { models }, { re: asked?.id ?? "" }));
+      });
+      return { h, ...r };
+    };
+    const used = await start(MODELS);
+    expect(used.root.querySelector(".run-seg")?.textContent).toBe("模型Model B");
+    await act(async () => (used.root.querySelector(".new-chat-btn") as HTMLElement).click());
+    expect(used.root.querySelector(".empty-state p")?.textContent).toContain("目前用 Model B。");
+    used.unmount();
+    // Model B can no longer be used: the local end's default.
+    const gone = await start(
+      MODELS.map((m) => (m.id === "model-b" ? { ...m, unusable: "no_key" } : m)),
+    );
+    expect(gone.root.querySelector(".run-seg")?.textContent).toBe("模型Model A");
+    gone.unmount();
+    // No models listed: the page says so instead of naming one.
+    const none = await start([]);
+    await act(async () => (none.root.querySelector(".new-chat-btn") as HTMLElement).click());
+    expect(none.root.querySelector(".empty-state p")?.textContent).toBe(
+      "還沒有可用的模型。請先在本機終端更新模型清單。",
+    );
+    none.unmount();
+  });
+
   test("continuing: the cost said first, then a new conversation that carries this one", async () => {
     const { h, root, send, submitted, unmount } = await ready(true);
     await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
