@@ -5,7 +5,13 @@ import { ContinueHints } from "./components/ContinueHints.tsx";
 import { ContinueBanner, ModelSheet, type ModelRef } from "./components/ModelSheet.tsx";
 import { ConversationList } from "./components/ConversationList.tsx";
 import { Icon } from "./components/Icon.tsx";
-import { providerName, providerSpend, StatusSheet, TopBar } from "./components/StatusBar.tsx";
+import {
+  certTag,
+  providerName,
+  providerSpend,
+  StatusSheet,
+  TopBar,
+} from "./components/StatusBar.tsx";
 import { shortTime, timeText } from "./components/time.ts";
 import { PinnedDock } from "./components/PinnedDock.tsx";
 import {
@@ -257,6 +263,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     chosen?.model ??
     (target === undefined ? undefined : { provider: target.provider, id: target.id });
   const spend = (provider: string) => providerSpend(state.status, provider);
+  const cert = certTag(state.status);
   // With messages, another model is a continuation (D17).
   const pickModel = () => setPicking(source === undefined ? "new" : "continue");
   const levels = target?.effortLevels ?? [];
@@ -334,6 +341,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           drawerOpen={drawer && compact}
           onOpen={open}
           onCollapse={() => (compact ? setDrawer(false) : setCollapsed(true))}
+          {...(cert === undefined ? {} : { cert })}
         />
         <div className="workspace">
           <TopBar

@@ -881,10 +881,22 @@ describe("the / menu and the certificate, from status", () => {
     const sheet = root.querySelector(".sheet-panel") as HTMLElement;
     expect(sheet.textContent).toContain("本機端憑證30 天內到期");
     expect(sheet.textContent).toContain("（剩 10 天）");
+    // The sidebar footer carries it too (1-05).
+    const tag = root.querySelector(".sidebar-footer .sg-tag") as HTMLElement;
+    expect([tag.className, tag.textContent]).toEqual(["sg-tag warn", "憑證剩 10 天"]);
     unmount();
     const far = await ready({ certExpiresAt: 1_800_000_000_000 + 90 * DAY });
     expect(far.root.querySelector(".topbar-right .desktop-only")?.textContent).toBe("花費與模型");
+    const ok = far.root.querySelector(".sidebar-footer .sg-tag") as HTMLElement;
+    expect([ok.className, ok.textContent]).toEqual(["sg-tag", "連線憑證正常"]);
     far.unmount();
+    const gone = await ready({ certExpiresAt: 1_800_000_000_000 - DAY });
+    expect(gone.root.querySelector(".sidebar-footer .sg-tag")?.className).toBe("sg-tag error");
+    gone.unmount();
+    // Not said yet: no footer.
+    const unknown = await ready({});
+    expect(unknown.root.querySelector(".sidebar-footer")).toBeNull();
+    unknown.unmount();
   });
 });
 

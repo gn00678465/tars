@@ -24,6 +24,8 @@ export function ConversationList(props: {
   drawerOpen: boolean;
   onOpen: (conv: string | undefined) => void;
   onCollapse: () => void;
+  /** The local end's certificate, as the prototype's footer tag; absent until it is known. */
+  cert?: { readonly tone: string; readonly text: string };
 }) {
   const aside = useRef<HTMLElement>(null);
   // The parent may be past the list's 500: then it is named only as another conversation.
@@ -112,6 +114,15 @@ export function ConversationList(props: {
           })
         )}
       </div>
+      {props.cert === undefined ? null : (
+        <div className="sidebar-footer">
+          {/* The page is not told the link host the prototype shows here. */}
+          <span>本機端連線</span>
+          <span className={props.cert.tone === "" ? "sg-tag" : `sg-tag ${props.cert.tone}`}>
+            {props.cert.text}
+          </span>
+        </div>
+      )}
     </aside>
   );
 }

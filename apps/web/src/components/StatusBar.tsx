@@ -75,6 +75,20 @@ export function certDays(status: WireStatus | undefined): number | undefined {
   return Math.floor((status.certExpiresAt - status.now) / DAY_MS);
 }
 
+/**
+ * The certificate as a tag: plain while more than 30 days are left, then warned, then an error
+ * once expired; undefined while the local end has not said when it expires.
+ */
+export function certTag(
+  status: WireStatus | undefined,
+): { readonly tone: "" | "warn" | "error"; readonly text: string } | undefined {
+  const days = certDays(status);
+  if (days === undefined) return undefined;
+  if (days < 0) return { tone: "error", text: "憑證已過期" };
+  if (days < CERT_WARN_DAYS) return { tone: "warn", text: `憑證剩 ${days} 天` };
+  return { tone: "", text: "連線憑證正常" };
+}
+
 /** The catalog button: 花費與模型, or the provider past a threshold. Stopping wins over warning. */
 function spendButton(status: WireStatus | undefined): { tone?: string; text: string } {
   const providers = status?.providers ?? [];
@@ -87,12 +101,8 @@ function spendButton(status: WireStatus | undefined): { tone?: string; text: str
       text: `${label(warned)} 已用 ${Math.round((warned.spentUsd / warned.quotaUsd) * 100)}%`,
     };
   if (status?.pricesWarn === true) return { tone: "warn", text: "價目表過期" };
-  const days = certDays(status);
-  if (days !== undefined && days < CERT_WARN_DAYS)
-    return {
-      tone: days < 0 ? "error" : "warn",
-      text: days < 0 ? "憑證已過期" : `憑證剩 ${days} 天`,
-    };
+  const cert = certTag(status);
+  if (cert !== undefined && cert.tone !== "") return cert;
   return { text: "花費與模型" };
 }
 
