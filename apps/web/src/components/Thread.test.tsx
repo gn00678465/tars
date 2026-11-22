@@ -12,13 +12,14 @@ test("line breaks stay in the text, and a fenced block is code, as text only", a
     '分三行：\n一\n二\n三\n```ts\n2026-11-22 * "午餐"\n  <b>Expenses</b>  120 TWD\n```\n完成';
   const { root, unmount } = await render(<Prose text={text} tail="（不完整）" />);
   const [first, last] = [...root.querySelectorAll("p")];
-  expect(first?.textContent).toBe("分三行：\n一\n二\n三\n");
+  expect(first?.textContent).toBe("分三行：\n一\n二\n三");
   const code = root.querySelectorAll("pre.tool-code-box");
   expect(code).toHaveLength(1);
   // The language name is dropped; the markup-looking text stays text.
   expect(code[0]?.textContent).toBe('2026-11-22 * "午餐"\n  <b>Expenses</b>  120 TWD');
   expect(root.querySelector("b")).toBeNull();
-  expect(last?.textContent).toBe("\n完成（不完整）");
+  // The fence's own line breaks are not blank lines in the paragraphs around it.
+  expect(last?.textContent).toBe("完成（不完整）");
   unmount();
 });
 

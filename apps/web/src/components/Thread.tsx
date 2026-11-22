@@ -104,13 +104,18 @@ export function Prose({ text, tail }: { text: string; tail?: string }) {
   return parts.map((part, i) => {
     const end = i === parts.length - 1 && tail !== undefined && tail !== "" ? tail : undefined;
     // Odd parts sit between fences; an unclosed one (still streaming) is code too.
-    if (i % 2 === 0)
-      return part === "" && end === undefined ? null : (
+    if (i % 2 === 0) {
+      // The line breaks around a fence belong to it, not to the paragraph (a blank line).
+      const prose = part
+        .replace(i > 0 ? /^\n/ : /^/, "")
+        .replace(i < parts.length - 1 ? /\n$/ : /$/, "");
+      return prose === "" && end === undefined ? null : (
         <p key={i}>
-          {part}
+          {prose}
           {end}
         </p>
       );
+    }
     const newline = part.indexOf("\n");
     // A first line with no space is the language name (```ts), not code.
     const body =
