@@ -1836,3 +1836,43 @@ describe("the model menu: spending by provider, each model's window and levels, 
     unmount();
   });
 });
+
+// main.tsx passes performance.now(): a clock for durations, not for dates. The list's times use the local end's wall clock.
+test("the list's times come from the local end's clock, not the page's monotonic one", async () => {
+  const h = socketHarness();
+  const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
+  const at = new Date(2026, 10, 22, 13, 12).getTime();
+  await act(async () => h.last().ready());
+  await act(async () => {
+    h.last().receive(server("relay.status", { online: true }));
+    h.last().receive(
+      server("status", {
+        now: at + 60_000,
+        providers: [],
+        pricesWarn: false,
+        pendingApprovals: 0,
+        turnRunning: false,
+        notify: "ok",
+      }),
+    );
+    h.last().receive(
+      server("conv.list.result", {
+        convs: [
+          { id: "c1", title: "今天", provider: "anthropic", model: "m", updatedAt: at },
+          {
+            id: "c2",
+            title: "昨天",
+            provider: "anthropic",
+            model: "m",
+            updatedAt: at - 86_400_000,
+          },
+        ],
+      }),
+    );
+  });
+  expect([...root.querySelectorAll(".conv-item .num")].map((n) => n.textContent)).toEqual([
+    "13:12",
+    "昨天",
+  ]);
+  unmount();
+});

@@ -345,7 +345,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           drawerOpen={drawer && compact}
           onOpen={open}
           onCollapse={() => (compact ? setDrawer(false) : setCollapsed(true))}
-          now={tick}
+          now={localNow(state, tick) ?? Date.now()}
           modelName={(provider, id) => shortName(modelName(provider, id))}
           {...(cert === undefined ? {} : { cert })}
         />
