@@ -134,6 +134,16 @@ test("arrows skip the local-only one; Enter on a skill puts it in the box, then 
   expect(c.sent).toEqual([skillInvocationText("tars-mode", "記一筆午餐 120")]);
 });
 
+test("keys faster than renders: three downs in one go move three", async () => {
+  const c = await composer(SKILLS);
+  await c.type("/");
+  await act(async () => {
+    for (let i = 0; i < 3; i++)
+      c.area.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  });
+  expect(c.options().find((o) => o.selected)?.name).toBe("/tars-mode");
+});
+
 test("typing filters; Esc closes; Tab on a built-in runs it", async () => {
   const c = await composer(SKILLS);
   await c.type("/cos");

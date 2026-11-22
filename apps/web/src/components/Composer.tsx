@@ -49,9 +49,9 @@ export function Composer(props: {
     change("");
   };
   const move = (by: number) => {
-    if (enabled.length === 0) return;
-    const at = selected === undefined ? 0 : enabled.indexOf(selected);
-    setIndex((at + by + enabled.length) % enabled.length);
+    const n = enabled.length;
+    // From the index React holds, not this render's: keys can come faster than renders.
+    if (n > 0) setIndex((i) => (Math.min(i, n - 1) + by + n) % n);
   };
   const optionId = (o: Option) => `slash-opt-${o.name}`;
 
