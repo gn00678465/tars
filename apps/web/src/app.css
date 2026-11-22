@@ -235,3 +235,36 @@
 .composer {
   display: contents;
 }
+
+/*
+ * styles.css (copied from the prototype) gives every .sg-btn a glass hover at 0,4,0, which beats
+ * each variant's own hover at 0,3,0: a primary button went dark glass under its dark text. These
+ * restate the variants' hovers above it. The shadows stay as each variant sets them.
+ */
+.sg-btn.sg-btn-primary:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--primary-hover);
+  border-color: var(--primary-edge);
+}
+
+.sg-btn.sg-btn-danger:hover:not(:disabled):not([aria-disabled="true"]),
+.sg-btn.sg-btn-warn-action:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--status-error-hover);
+}
+
+.sg-btn.sg-btn-danger:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--status-error-border);
+}
+
+.sg-btn.sg-btn-warn-action:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--status-warn-border);
+}
+
+.sg-btn.sg-btn-approve:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--status-ok-hover);
+  border-color: var(--status-ok-border);
+}
+
+.sg-btn.sg-btn-ghost:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--hover);
+  border-color: var(--glass-edge);
+}
