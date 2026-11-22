@@ -254,6 +254,10 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const effortNow = clampEffort(levels, wanted);
   const movedFrom =
     wanted !== undefined && effortNow !== undefined && effortNow !== wanted ? wanted : undefined;
+  // As the prototype: model and effort are not changed while a turn runs (it would apply to
+  // nothing) or while the local end cannot be reached.
+  const locked =
+    running || sendBusy(state) !== undefined ? "回合結束後才能改" : composerBlocked(state);
   // Only a local end that lists levels takes turn.submit's effort.
   const effort: EffortControl | undefined =
     models?.some((m) => m.effortLevels !== undefined) === true
@@ -261,12 +265,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           levels,
           current: effortNow,
           ...(movedFrom === undefined ? {} : { movedFrom }),
-          ...(() => {
-            const why =
-              composerBlocked(state) ??
-              (running || sendBusy(state) !== undefined ? "回合結束後才能改" : undefined);
-            return why === undefined ? {} : { disabled: why };
-          })(),
+          ...(locked === undefined ? {} : { disabled: locked }),
           open: effortOpen,
           onOpen: setEffortOpen,
           onPick: (level) => {
@@ -471,6 +470,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                                 ? "這個對話還沒有訊息，可以直接換模型。送出第一則訊息後，模型就綁在對話上。"
                                 : "模型綁在對話上。這個對話已有訊息，選另一個模型會開新對話接續。",
                             open: modelOpen,
+                            ...(locked === undefined ? {} : { disabled: locked }),
                             onOpen: (o) => (phone ? o && pickModel() : setModelOpen(o)),
                             onChoose: (model) => {
                               setModelOpen(false);

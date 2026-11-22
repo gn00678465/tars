@@ -64,6 +64,8 @@ export interface ModelControl {
   /** On a phone this opens the model sheet instead. */
   readonly onOpen: (open: boolean) => void;
   readonly onChoose: (model: ModelRef) => void;
+  /** Why the model cannot be changed now (offline, a turn running); undefined when it can. */
+  readonly disabled?: string;
 }
 
 const isModel = (m: WireModel, r: ModelRef | undefined) =>
@@ -106,8 +108,8 @@ export function RunSetup(props: {
   const m = props.model;
   const e = props.effort;
   const none = e !== undefined && e.levels.length === 0;
-  const dropped = e !== undefined && e.open && !props.compact && !none;
-  const modelDropped = m.open && !props.compact;
+  const dropped = e !== undefined && e.open && !props.compact && !none && e.disabled === undefined;
+  const modelDropped = m.open && !props.compact && m.disabled === undefined;
   usePopover(anchor, menu, dropped, () => e?.onOpen(false));
   usePopover(modelAnchor, modelMenu, modelDropped, () => m.onOpen(false));
   const providers = [...new Set(m.models.map((x) => x.provider))];
@@ -128,7 +130,8 @@ export function RunSetup(props: {
             type="button"
             aria-haspopup={props.compact ? "dialog" : "menu"}
             aria-expanded={modelDropped}
-            title="選擇模型"
+            disabled={m.disabled !== undefined}
+            title={m.disabled ?? "選擇模型"}
             onClick={() => m.onOpen(!m.open)}
           >
             <span className="run-seg-label">模型</span>

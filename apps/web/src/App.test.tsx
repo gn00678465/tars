@@ -1362,6 +1362,37 @@ describe("effort: the level beside the model, its menu, and what the message car
     return { h, ...r, send, submitted, openConv, seg, menu, key };
   }
 
+  test("model and effort are not changed while a turn runs or the local end is away, and say why", async () => {
+    const { h, root, seg, menu, openConv, unmount } = await ready();
+    await openConv("甲");
+    const model = () => root.querySelector(".model-anchor .run-seg") as HTMLButtonElement;
+    const both = () => [model(), seg() as HTMLButtonElement].map((b) => [b.disabled, b.title]);
+    expect(both()).toEqual([
+      [false, "選擇模型"],
+      [false, "調整推理強度"],
+    ]);
+    await act(async () => model().click());
+    expect(menu()).not.toBeNull();
+    await act(async () =>
+      h.last().receive(server("turn", { turn: "t-1", state: "started" }, { conv: "conv-1" })),
+    );
+    expect(both()).toEqual([
+      [true, "回合結束後才能改"],
+      [true, "回合結束後才能改"],
+    ]);
+    // An open menu goes with it.
+    expect(menu()).toBeNull();
+    await act(async () =>
+      h.last().receive(server("turn", { turn: "t-1", state: "completed" }, { conv: "conv-1" })),
+    );
+    await act(async () => h.last().receive(server("relay.status", { online: false })));
+    expect(both()).toEqual([
+      [true, "本機端離線，暫時無法送出訊息。"],
+      [true, "本機端離線，暫時無法送出訊息。"],
+    ]);
+    unmount();
+  });
+
   test("a local end whose list has no levels: no effort control, nothing about it in the header", async () => {
     const { root, seg, openConv, unmount } = await ready(
       MODELS.map((m) => ({
