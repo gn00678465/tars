@@ -3,6 +3,8 @@ import {
   ARGV_ITEMS,
   checkClient,
   FRAME_BYTES,
+  EFFORT_LEVELS,
+  EFFORT_NAME,
   KEEP_LAST,
   MESSAGE_BYTES,
   MODELS,
@@ -134,6 +136,62 @@ describe("turn.submit's model, from and keepLast; models.result", () => {
     expect(reason(parseServer(result([one])))).toBe("ok");
     expect(reason(parseServer(result([{ ...one, window: 0 }])))).toBe("bad_message");
     expect(reason(parseServer(result(Array(MODELS + 1).fill(one))))).toBe("bad_message");
+  });
+});
+
+describe("effort: turn.submit's, models.result's levels, a conversation's", () => {
+  const submit = (extra: Record<string, unknown>) =>
+    JSON.stringify(msg("turn.submit", { requestId: ID, text: "hi", ...extra }));
+  const one = { provider: "anthropic", id: "m", label: "M", isDefault: true };
+  const result = (extra: Record<string, unknown>) =>
+    JSON.stringify(msg("models.result", { models: [{ ...one, ...extra }] }));
+  const conv = (extra: Record<string, unknown>) =>
+    JSON.stringify(
+      msg("conv.list.result", {
+        convs: [{ id: ID, title: "t", provider: "anthropic", model: "m", updatedAt: 1, ...extra }],
+      }),
+    );
+
+  test("turn.submit: on its own, with a conversation, with a new model; a name, not an empty one", () => {
+    expect(reason(parseClient(submit({ effort: "high" })))).toBe("ok");
+    expect(
+      reason(
+        parseClient(
+          JSON.stringify({
+            ...msg("turn.submit", { requestId: ID, text: "hi", effort: "low" }),
+            conv: ID,
+          }),
+        ),
+      ),
+    ).toBe("ok");
+    expect(
+      reason(parseClient(submit({ model: { provider: "gemini", id: "g" }, effort: "low" }))),
+    ).toBe("ok");
+    // A level a newer local end knows is still a message; the local end judges it.
+    expect(reason(parseClient(submit({ effort: "ultra" })))).toBe("ok");
+    expect(reason(parseClient(submit({ effort: "" })))).toBe("bad_message");
+    expect(reason(parseClient(submit({ effort: "x".repeat(EFFORT_NAME + 1) })))).toBe(
+      "bad_message",
+    );
+    expect(reason(parseClient(submit({ effort: 2 })))).toBe("bad_message");
+  });
+
+  test("models.result: levels and the default optional, an empty list allowed, at most EFFORT_LEVELS", () => {
+    expect(reason(parseServer(result({})))).toBe("ok");
+    expect(reason(parseServer(result({ effortLevels: [] })))).toBe("ok");
+    expect(
+      reason(parseServer(result({ effortLevels: ["low", "max"], defaultEffort: "low" }))),
+    ).toBe("ok");
+    expect(
+      reason(parseServer(result({ effortLevels: Array(EFFORT_LEVELS + 1).fill("low") }))),
+    ).toBe("bad_message");
+    expect(reason(parseServer(result({ effortLevels: [""] })))).toBe("bad_message");
+  });
+
+  test("a conversation's effort is optional", () => {
+    expect(reason(parseServer(conv({})))).toBe("ok");
+    expect(reason(parseServer(conv({ effort: "medium" })))).toBe("ok");
+    expect(reason(parseServer(conv({ effort: 1 })))).toBe("bad_message");
   });
 });
 

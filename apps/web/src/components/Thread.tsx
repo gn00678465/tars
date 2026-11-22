@@ -1,10 +1,11 @@
 import type { WireItem } from "@tars/protocol";
 import { Fragment, type ReactNode, useState } from "react";
-import type { State } from "../state.ts";
+import type { Notice, State } from "../state.ts";
 import { Icon, Monolith } from "./Icon.tsx";
 import { reasonText } from "../reasons.ts";
 import { ErrorCard } from "./ErrorCard.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { effortName } from "./RunSetup.tsx";
 import { shortId } from "./time.ts";
 
 const cut = (truncated: boolean) => (truncated ? "（已截斷）" : "");
@@ -196,12 +197,28 @@ function groups(items: readonly WireItem[]) {
   return out;
 }
 
+/** The effort notices in words; any other by its code and data, as before. */
+function noticeText(n: Notice): string {
+  if (n.code === "effort_clamped" && typeof n.data?.effort === "string")
+    return `這個模型不支援原本的推理強度，這次用「${effortName(n.data.effort)}」`;
+  if (n.code === "effort_unsupported") return "這個模型不支援推理強度，這次不帶這個設定";
+  const data =
+    n.data === undefined
+      ? ""
+      : `（${Object.entries(n.data)
+          .map(([k, v]) => `${k}=${v}`)
+          .join("，")}）`;
+  return `${n.code}${data}`;
+}
+
 export function Thread(props: {
   state: State;
   onOlder: () => void;
   after: After;
   /** A new conversation's model, when one was chosen. */
   model?: string;
+  /** Opens the effort control; absent when the page offers none. */
+  onEffort?: () => void;
 }) {
   const { items, running, turn, more, notices, conv } = props.state;
   if (conv === undefined && items.length === 0)
@@ -265,11 +282,28 @@ export function Thread(props: {
           </span>
         </div>
       )}
-      {notices.map((n, i) => (
-        <div key={i} className="compaction-meta">
-          {n}
-        </div>
-      ))}
+      {notices.map((n, i) =>
+        n.code === "effort_truncated" ? (
+          <div key={i} className="task-notice warn">
+            <div className="task-notice-body">
+              <div className="task-notice-title">
+                <Icon name="alert" />
+                輸出上限被思考用完，請降低推理強度
+              </div>
+              <div className="task-notice-desc">這次請求用完了單次輸出上限，但沒有輸出正文。</div>
+            </div>
+            {props.onEffort === undefined ? null : (
+              <button className="sg-btn" type="button" onClick={props.onEffort}>
+                調整推理強度
+              </button>
+            )}
+          </div>
+        ) : (
+          <div key={i} className="compaction-meta">
+            {noticeText(n)}
+          </div>
+        ),
+      )}
     </>
   );
 }

@@ -10,6 +10,7 @@ import {
   type ResolvedModel,
 } from "./catalog.ts";
 import type { TarsConfig } from "./config.ts";
+import { effectiveEffort, supported } from "./effort.ts";
 import { effectiveWindow } from "./ledger.ts";
 import type { Effort, ModelReason } from "./types.ts";
 
@@ -108,6 +109,10 @@ export interface ModelChoice {
   readonly isDefault: boolean;
   /** Why it cannot be used now; absent when it can. */
   readonly unusable?: "provider_disabled" | "no_key" | ModelReason;
+  /** The levels it takes, lowest first; empty when none. */
+  readonly effortLevels: readonly Effort[];
+  /** What a new conversation on it is sent with: [chat]'s level, or the nearest it takes. */
+  readonly defaultEffort?: Effort;
 }
 
 /**
@@ -125,7 +130,15 @@ export async function modelChoices(
   const now = deps.now();
   return activeModels(catalog).map((m) => {
     const isDefault = start.ok && start.provider === m.provider && start.model === m.id;
-    const base = { provider: m.provider, id: m.id, label: m.label, isDefault };
+    const effort = effectiveEffort(m, config.chat.effort).effort;
+    const base = {
+      provider: m.provider,
+      id: m.id,
+      label: m.label,
+      isDefault,
+      effortLevels: supported(m),
+      ...(effort === undefined ? {} : { defaultEffort: effort }),
+    };
     const problem = problems.get(m.provider);
     if (problem !== undefined) return { ...base, unusable: problem.reason };
     const r = resolve(catalog, m.provider, m.id, config.limits, now);

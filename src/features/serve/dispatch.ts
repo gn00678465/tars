@@ -19,7 +19,8 @@ import {
 import { sha256 } from "../../core/hash.ts";
 import type { TarsPaths } from "../../core/paths.ts";
 import * as approvals from "../agent/approvals.ts";
-import { loadCatalog, resolve, type Catalog } from "../agent/catalog.ts";
+import { findModel, loadCatalog, resolve, type Catalog } from "../agent/catalog.ts";
+import { isEffort, supported } from "../agent/effort.ts";
 import { defaultStart, modelChoices } from "../agent/start.ts";
 import { PROVIDERS, type SecretStore } from "../../core/secrets.ts";
 import type { TarsConfig } from "../agent/config.ts";
@@ -318,6 +319,8 @@ export class Dispatch {
       isDefault: c.isDefault,
       ...(c.window === undefined ? {} : { window: c.window }),
       ...(c.unusable === undefined ? {} : { unusable: c.unusable }),
+      effortLevels: [...c.effortLevels],
+      ...(c.defaultEffort === undefined ? {} : { defaultEffort: c.defaultEffort }),
     }));
     this.d.hub.send(conn, message(this.d.hub, "models.result", { models }, { re }));
   }
@@ -429,9 +432,15 @@ export class Dispatch {
       } catch {
         return this.reply(conn, "nack", "not_found", m.id);
       }
-    // What a resend must match: the text, and the model and the conversation it continues.
+    // What a resend must match: the text, the model and the conversation it continues, the level.
     const hash = sha256(
-      JSON.stringify([text, m.p.model ?? null, m.p.from ?? null, m.p.keepLast ?? null]),
+      JSON.stringify([
+        text,
+        m.p.model ?? null,
+        m.p.from ?? null,
+        m.p.keepLast ?? null,
+        m.p.effort ?? null,
+      ]),
     );
     // A resend: the table while the turn is not there yet, then the database.
     const held = this.pending.get(requestId);
@@ -463,7 +472,7 @@ export class Dispatch {
     this.d.changed();
     this.ack(conn, m.id);
     // In the background: the next message (an approval, an abort) must not wait for this turn.
-    const start = { model: m.p.model, parent, keepLast: m.p.keepLast };
+    const start = { model: m.p.model, parent, keepLast: m.p.keepLast, effort: m.p.effort };
     this.running = this.run(conn, current, text, conv, start).catch((err) =>
       this.d.log.log("warning", {
         connId: store.shortId(conn),
@@ -482,6 +491,7 @@ export class Dispatch {
       readonly model: { readonly provider: string; readonly id: string } | undefined;
       readonly parent: store.Conversation | undefined;
       readonly keepLast: number | undefined;
+      readonly effort: string | undefined;
     },
   ): Promise<void> {
     const { requestId, frontend, controller } = current;
@@ -528,6 +538,20 @@ export class Dispatch {
           text,
           requestId,
         };
+      }
+      if (start.effort !== undefined) {
+        // Picked by the owner, so it must be one the model takes, as /effort checks; the engine
+        // would quietly move it to the nearest. A model the list lacks is the engine's to refuse.
+        const entry = findModel(await loadCatalog(this.d.paths), input.provider, input.model);
+        const effort = start.effort;
+        if (!isEffort(effort) || (entry !== undefined && !supported(entry).includes(effort))) {
+          this.pending.delete(requestId);
+          return this.rejected(conn, requestId, "effort_unsupported", conv?.id);
+        }
+        input = { ...input, effort };
+        // Kept from this turn on, as /effort keeps it: a turn the engine then refuses (a budget)
+        // does not undo the owner's choice.
+        if (conv !== undefined) store.setConversationEffort(this.d.db, conv.id, effort);
       }
       const out = await this.d.engine.runTurn(input, frontend, controller.signal);
       if (out.kind === "rejected") {

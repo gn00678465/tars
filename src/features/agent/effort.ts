@@ -9,8 +9,8 @@ export function parseEffort(value: string): Effort | undefined {
   return isEffort(value) ? value : undefined;
 }
 
-/** The levels a model accepts; a model that does not say supports none. */
-const supported = (entry: { readonly effortLevels?: readonly Effort[] }) =>
+/** The levels a model accepts, lowest first; a model that does not say supports none. */
+export const supported = (entry: { readonly effortLevels?: readonly Effort[] }) =>
   EFFORTS.filter((level) => entry.effortLevels?.includes(level) === true);
 
 export type EffortChoice =

@@ -26,5 +26,8 @@ export const SKILLS = 200;
 export const SKILL_TEXT = 300;
 /** The models models.result lists. */
 export const MODELS = 200;
+/** A model's effort levels in models.result, and one level's name. */
+export const EFFORT_LEVELS = 8;
+export const EFFORT_NAME = 16;
 /** turn.submit's keepLast: the turns a continuation carries at most. */
 export const KEEP_LAST = 1_000;

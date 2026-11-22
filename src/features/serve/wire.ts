@@ -148,6 +148,7 @@ export const wireConv = (c: Conversation): WireConv => ({
   model: c.model.slice(0, 128),
   updatedAt: c.updatedAt,
   ...(c.parentId === undefined ? {} : { parentId: c.parentId }),
+  effort: c.effort,
 });
 
 export const wireApproval = (a: ApprovalRecord): WireApproval => ({

@@ -6,6 +6,13 @@ import { ConversationList } from "./components/ConversationList.tsx";
 import { StatusSheet, TopBar } from "./components/StatusBar.tsx";
 import { shortTime, timeText } from "./components/time.ts";
 import { PinnedDock } from "./components/PinnedDock.tsx";
+import {
+  clampEffort,
+  type EffortControl,
+  EffortSheet,
+  effortName,
+  RunSetup,
+} from "./components/RunSetup.tsx";
 import { Thread } from "./components/Thread.tsx";
 import type { Socket } from "./socket.ts";
 import { composerBlocked, initial, localNow, reduce } from "./state.ts";
@@ -13,6 +20,8 @@ import { composerBlocked, initial, localNow, reduce } from "./state.ts";
 /** Within this much of the end counts as at the bottom (rounding, a last line half shown). */
 const BOTTOM_PX = 24;
 const PING_MS = 10_000;
+/** How long "from the next message" shows after a level is picked, as the prototype's toast. */
+const TOAST_MS = 2_600;
 
 export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [state, dispatch] = useReducer(reduce, initial);
@@ -53,7 +62,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   }, [ended, socket]);
 
   // The sidebar: a column that folds on desktop, a drawer below 1024px (ui_spec 5.1).
-  const compact = useCompact();
+  const compact = useMedia(COMPACT);
+  const phone = useMedia(PHONE);
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState(false);
@@ -83,6 +93,16 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     { model: ModelRef; from?: string; keepLast?: number } | undefined
   >(undefined);
   const [picking, setPicking] = useState<"new" | "continue" | undefined>(undefined);
+  // The level picked for the next message here, kept until another conversation opens; the
+  // menu; and the note that it applies from the next message, a new one each pick.
+  const [effortPick, setEffortPick] = useState<string | undefined>(undefined);
+  const [effortOpen, setEffortOpen] = useState(false);
+  const [toast, setToast] = useState(0);
+  useEffect(() => {
+    if (toast === 0) return;
+    const hide = setTimeout(() => setToast(0), TOAST_MS);
+    return () => clearTimeout(hide);
+  }, [toast]);
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
   /** The reconnection the owner closed; a later one shows again. */
   const [seenReconnect, setSeenReconnect] = useState<number | undefined>(undefined);
@@ -103,6 +123,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
 
   const open = (c: string | undefined) => {
     setNext(undefined);
+    setEffortPick(undefined);
+    setEffortOpen(false);
     dispatch({ type: "open_conv", conv: c });
     setDrawer(false);
     if (c === undefined) return;
@@ -187,6 +209,48 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     current !== undefined
       ? (modelOf(currentRef)?.label ?? current.model)
       : (modelOf(chosen?.model)?.label ?? models?.find((m) => m.isDefault)?.label ?? "預設");
+  // The model the next message goes to, and the level it goes with: the one picked, else this
+  // conversation's, else the one continued, else the model's own default; moved to the nearest
+  // the model takes, as the local end would move it, and then sent, so the page says what runs.
+  const target =
+    current !== undefined
+      ? modelOf(currentRef)
+      : (modelOf(chosen?.model) ?? models?.find((m) => m.isDefault));
+  const levels = target?.effortLevels ?? [];
+  const wanted =
+    effortPick ??
+    (current !== undefined
+      ? current.effort
+      : chosen?.from !== undefined
+        ? sourceConv?.effort
+        : target?.defaultEffort);
+  const effortNow = clampEffort(levels, wanted);
+  const movedFrom =
+    wanted !== undefined && effortNow !== undefined && effortNow !== wanted ? wanted : undefined;
+  // Only a local end that lists levels takes turn.submit's effort.
+  const effort: EffortControl | undefined =
+    models?.some((m) => m.effortLevels !== undefined) === true
+      ? {
+          levels,
+          current: effortNow,
+          ...(movedFrom === undefined ? {} : { movedFrom }),
+          ...(() => {
+            const why = composerBlocked(state) ?? (running ? "回合結束後才能改" : undefined);
+            return why === undefined ? {} : { disabled: why };
+          })(),
+          open: effortOpen,
+          onOpen: setEffortOpen,
+          onPick: (level) => {
+            setEffortPick(level);
+            setEffortOpen(false);
+            setToast((n) => n + 1);
+          },
+        }
+      : undefined;
+  const sendEffort =
+    effort !== undefined && (effortPick !== undefined || movedFrom !== undefined)
+      ? effortNow
+      : undefined;
   const card = (c: (typeof settled)[number]) => (
     <ApprovalCard
       key={c.approval.approvalId}
@@ -231,6 +295,11 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               <div className="conv-header-info">
                 <span className="conv-header-model">{current.model}</span>
                 <span className="sg-tag">{current.provider}</span>
+                {effort === undefined ? null : (
+                  <span className="conv-header-effort">
+                    推理：{effortNow === undefined ? "不適用" : effortName(effortNow)}
+                  </span>
+                )}
               </div>
               {models === undefined ? null : (
                 <button
@@ -276,6 +345,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               <Thread
                 state={state}
                 {...(chosen === undefined ? {} : { model: nextLabel })}
+                {...(effort === undefined || levels.length === 0
+                  ? {}
+                  : { onEffort: () => setEffortOpen(true) })}
                 after={(seq) => anchored.get(seq)?.map(card)}
                 onOlder={() => {
                   if (state.conv !== undefined && oldest !== undefined)
@@ -333,16 +405,33 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                 canAbort={running && state.connection === "open"}
                 error={state.error}
                 skills={state.status?.skills}
-                onSend={(text) => socket.submit(text, state.conv, chosen)}
+                onSend={(text) => {
+                  const options = {
+                    ...chosen,
+                    ...(sendEffort === undefined ? {} : { effort: sendEffort }),
+                  };
+                  socket.submit(
+                    text,
+                    state.conv,
+                    Object.keys(options).length === 0 ? undefined : options,
+                  );
+                }}
                 onCommand={(name) => (name === "new" ? open(undefined) : setSheet(true))}
                 {...(models === undefined
                   ? {}
                   : {
-                      model: {
-                        label: nextLabel,
-                        // With messages, another model is a continuation (D17).
-                        onPick: () => setPicking(source === undefined ? "new" : "continue"),
-                      },
+                      setup: (
+                        <RunSetup
+                          compact={phone}
+                          model={{
+                            label: nextLabel,
+                            // With messages, another model is a continuation (D17).
+                            onPick: () => setPicking(source === undefined ? "new" : "continue"),
+                          }}
+                          effort={effort}
+                          toast={toast !== 0}
+                        />
+                      ),
                     })}
                 onAbort={() => {
                   if (state.conv !== undefined) socket.send("turn.abort", {}, state.conv);
@@ -352,6 +441,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           </footer>
         </div>
         {sheet ? <StatusSheet state={state} onClose={() => setSheet(false)} /> : null}
+        {phone && effort !== undefined && effortOpen && levels.length > 0 ? (
+          <EffortSheet effort={effort} modelLabel={target?.label ?? nextLabel} />
+        ) : null}
         {picking === undefined ||
         models === undefined ||
         (picking === "continue" && sourceConv === undefined) ? null : (
@@ -381,19 +473,23 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   );
 }
 
+/** Below 1024px the sidebar is a drawer. */
 const COMPACT = "(max-width: 1023px)";
+/** Below 768px the model and effort menus are sheets, as the prototype's isCompactViewport. */
+const PHONE = "(max-width: 767px)";
 
-/** Below 1024px the sidebar is a drawer. jsdom has no matchMedia: there it is a desktop. */
-function useCompact(): boolean {
+/** Whether `query` matches now. jsdom has no matchMedia: there it is a desktop. */
+function useMedia(query: string): boolean {
   const media = () =>
-    typeof window.matchMedia === "function" ? window.matchMedia(COMPACT) : undefined;
-  const [compact, setCompact] = useState(() => media()?.matches === true);
+    typeof window.matchMedia === "function" ? window.matchMedia(query) : undefined;
+  const [matches, setMatches] = useState(() => media()?.matches === true);
+  // The queries are constants: one listener for the page's life.
   useEffect(() => {
-    const query = media();
-    if (query === undefined) return;
-    const change = () => setCompact(query.matches);
-    query.addEventListener("change", change);
-    return () => query.removeEventListener("change", change);
+    const list = media();
+    if (list === undefined) return;
+    const change = () => setMatches(list.matches);
+    list.addEventListener("change", change);
+    return () => list.removeEventListener("change", change);
   }, []);
-  return compact;
+  return matches;
 }

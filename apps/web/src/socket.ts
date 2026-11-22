@@ -33,11 +33,15 @@ export interface SocketDeps {
   now(): number;
 }
 
-/** A new conversation's model, and the conversation it continues (turn.submit's options). */
+/**
+ * turn.submit's options: a new conversation's model and the conversation it continues, and the
+ * effort level from this turn on.
+ */
 export interface Start {
-  readonly model: { readonly provider: string; readonly id: string };
+  readonly model?: { readonly provider: string; readonly id: string };
   readonly from?: string;
   readonly keepLast?: number;
+  readonly effort?: string;
 }
 
 interface Submit {

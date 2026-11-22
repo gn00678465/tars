@@ -80,7 +80,7 @@ export interface State {
   /** A conversation followed without its items: the page asks for its snapshot. */
   readonly load?: string;
   readonly cards: readonly Card[];
-  readonly notices: readonly string[];
+  readonly notices: readonly Notice[];
   readonly error?: string;
 }
 
@@ -119,6 +119,12 @@ export const initial: State = {
 };
 
 const NOTICES = 5;
+
+/** What the local end said along a turn (notice's p). */
+export interface Notice {
+  readonly code: string;
+  readonly data?: Readonly<Record<string, string | number>>;
+}
 
 const LOST = "連線曾中斷，決定可能沒有送達；可以再按一次";
 
@@ -245,13 +251,7 @@ function message(s: State, m: ServerMessage, at: number): State {
     }
     case "notice": {
       if (m.conv !== undefined && !here) return s;
-      const data =
-        m.p.data === undefined
-          ? ""
-          : `（${Object.entries(m.p.data)
-              .map(([k, v]) => `${k}=${v}`)
-              .join("，")}）`;
-      return { ...s, notices: [...s.notices, `${m.p.code}${data}`].slice(-NOTICES) };
+      return { ...s, notices: [...s.notices, m.p].slice(-NOTICES) };
     }
     case "approval.request": {
       // The local end sends every pending one again after each hello: it keeps its place, and

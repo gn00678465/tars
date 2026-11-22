@@ -4,6 +4,8 @@ import { id } from "./envelope.ts";
 import {
   ARGV_CHARS,
   ARGV_ITEMS,
+  EFFORT_LEVELS,
+  EFFORT_NAME,
   ID_CHARS,
   ITEM_TEXT_BYTES,
   MESSAGE_BYTES,
@@ -71,6 +73,12 @@ export const wireItem = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/**
+ * A reasoning effort level by name (low … max). A string, not the local end's list: a level a
+ * newer local end adds must not make an older page refuse the whole message.
+ */
+export const wireEffort = z.string().min(1).max(EFFORT_NAME);
+
 export const wireModelRef = z.strictObject({
   provider: z.string().max(32),
   id: z.string().max(128),
@@ -89,6 +97,13 @@ export const wireModel = z.strictObject({
   isDefault: z.boolean(),
   /** Why it cannot be used now, as a turn's rejection code; absent when it can. */
   unusable: z.string().max(64).optional(),
+  /**
+   * The effort levels it takes, lowest first; empty when it takes none. Absent from a local end
+   * older than the effort control: the page then does not offer one.
+   */
+  effortLevels: z.array(wireEffort).max(EFFORT_LEVELS).optional(),
+  /** The level a new conversation on it gets: [chat]'s, or the nearest one it takes. */
+  defaultEffort: wireEffort.optional(),
 });
 
 export const wireConv = z.strictObject({
@@ -98,6 +113,8 @@ export const wireConv = z.strictObject({
   model: z.string().max(128),
   updatedAt: z.number(),
   parentId: id.optional(),
+  /** Its effort level, which its next turn is sent with unless the model takes another. */
+  effort: wireEffort.optional(),
 });
 
 export const wireApproval = z.strictObject({

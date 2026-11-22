@@ -1144,3 +1144,253 @@ describe("cards from other conversations: set off, and told apart", () => {
     unmount();
   });
 });
+
+describe("effort: the level beside the model, its menu, and what the message carries", () => {
+  const MODELS = [
+    {
+      provider: "anthropic",
+      id: "model-a",
+      label: "Model A",
+      window: 200_000,
+      isDefault: true,
+      effortLevels: ["low", "medium", "high"],
+      defaultEffort: "medium",
+    },
+    {
+      provider: "anthropic",
+      id: "model-b",
+      label: "Model B",
+      window: 100_000,
+      isDefault: false,
+      effortLevels: ["low", "medium"],
+      defaultEffort: "medium",
+    },
+    { provider: "anthropic", id: "model-c", label: "Model C", isDefault: false, effortLevels: [] },
+  ];
+  const CONVS = [
+    {
+      id: "conv-1",
+      title: "甲",
+      provider: "anthropic",
+      model: "model-a",
+      updatedAt: 2,
+      effort: "high",
+    },
+    {
+      id: "conv-3",
+      title: "丙",
+      provider: "anthropic",
+      model: "model-c",
+      updatedAt: 1,
+      effort: "medium",
+    },
+  ];
+  const media = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = media;
+  });
+  /** A phone: both the drawer's and the menus' widths match. */
+  const asPhone = () => {
+    window.matchMedia = ((q: string) => ({
+      matches: true,
+      media: q,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    })) as unknown as typeof window.matchMedia;
+  };
+  async function ready(models: readonly unknown[] = MODELS) {
+    const h = socketHarness();
+    const r = await render(<App socket={h.socket} now={h.now} />);
+    await act(async () => h.last().ready());
+    const asked = h
+      .last()
+      .messages()
+      .find((m) => m.kind === "models.get");
+    await act(async () => {
+      h.last().receive(server("relay.status", { online: true }));
+      h.last().receive(server("conv.list.result", { convs: CONVS }));
+      h.last().receive(server("models.result", { models }, { re: asked?.id ?? "" }));
+    });
+    const area = r.root.querySelector("textarea") as HTMLTextAreaElement;
+    const send = async (value: string) => {
+      await act(async () => {
+        // oxlint-disable-next-line typescript/unbound-method
+        const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+        set?.call(area, value);
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button(r.root, "送出").click());
+    };
+    const submitted = () =>
+      h
+        .last()
+        .messages()
+        .filter((m) => m.kind === "turn.submit")
+        .at(-1);
+    const openConv = async (title: string) =>
+      act(async () =>
+        (
+          [...r.root.querySelectorAll<HTMLButtonElement>(".conv-item")].find((b) =>
+            b.textContent?.startsWith(title),
+          ) as HTMLButtonElement
+        ).click(),
+      );
+    const seg = () => r.root.querySelector(".effort-anchor .run-seg") as HTMLButtonElement | null;
+    const menu = () => r.root.querySelector("[role=menu]") as HTMLElement | null;
+    const key = async (k: string) =>
+      act(async () => {
+        document.activeElement?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: k, bubbles: true }),
+        );
+      });
+    return { h, ...r, send, submitted, openConv, seg, menu, key };
+  }
+
+  test("a local end whose list has no levels: no effort control, nothing about it in the header", async () => {
+    const { root, seg, openConv, unmount } = await ready(
+      MODELS.map((m) => ({
+        provider: m.provider,
+        id: m.id,
+        label: m.label,
+        isDefault: m.isDefault,
+      })),
+    );
+    await openConv("甲");
+    expect(seg()).toBeNull();
+    expect(root.querySelector(".conv-header-effort")).toBeNull();
+    expect(root.querySelector(".run-seg")?.textContent).toBe("模型Model A");
+    unmount();
+  });
+
+  test("a conversation: its level shown; the menu moves by keys, closes on Esc, picks, says when it applies; the message carries it", async () => {
+    const { root, seg, menu, key, openConv, send, submitted, unmount } = await ready();
+    await openConv("甲");
+    expect(root.querySelector(".conv-header-effort")?.textContent).toBe("推理：高");
+    expect(seg()?.textContent).toBe("推理高");
+    await act(async () => seg()?.click());
+    expect(seg()?.getAttribute("aria-expanded")).toBe("true");
+    const options = () => [
+      ...(menu()?.querySelectorAll<HTMLButtonElement>("[role=menuitemradio]") ?? []),
+    ];
+    expect(options().map((o) => [o.textContent, o.getAttribute("aria-checked")])).toEqual([
+      ["低（low）回應最快，思考最少", "false"],
+      ["中（medium）預設平衡（建議）", "false"],
+      ["高（high）較仔細，花費較高", "true"],
+    ]);
+    expect(document.activeElement).toBe(options()[2]);
+    await key("ArrowDown");
+    expect(document.activeElement).toBe(options()[0]);
+    await key("End");
+    expect(document.activeElement).toBe(options()[2]);
+    await key("Escape");
+    expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(seg());
+
+    await act(async () => seg()?.click());
+    vi.useFakeTimers();
+    try {
+      await act(async () => options()[0]?.click());
+      expect(menu()).toBeNull();
+      expect(seg()?.textContent).toBe("推理低");
+      expect(document.activeElement).toBe(seg());
+      const toast = root.querySelector(".effort-toast") as HTMLElement;
+      expect([toast.hidden, toast.textContent]).toEqual([false, "下一則訊息起生效"]);
+      await act(async () => void vi.advanceTimersByTime(2_600));
+      expect(toast.hidden).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+    await send("再想想");
+    expect(submitted()).toMatchObject({ conv: "conv-1", p: { text: "再想想", effort: "low" } });
+    unmount();
+  });
+
+  test("an untouched conversation sends no level; a model that takes none says so and cannot open", async () => {
+    const { root, seg, openConv, send, submitted, unmount } = await ready();
+    await openConv("甲");
+    await send("嗨");
+    expect(submitted()?.p).not.toHaveProperty("effort");
+    await openConv("丙");
+    expect(root.querySelector(".conv-header-effort")?.textContent).toBe("推理：不適用");
+    expect([seg()?.textContent, seg()?.disabled, seg()?.title]).toEqual([
+      "推理不適用",
+      true,
+      "這個模型不支援推理強度",
+    ]);
+    unmount();
+  });
+
+  test("a new conversation: the model's default; a level its next model lacks moves to the nearest, with a warning, and is sent", async () => {
+    const { root, seg, menu, send, submitted, unmount } = await ready();
+    expect(seg()?.textContent).toBe("推理中");
+    await act(async () => seg()?.click());
+    await act(async () => button(menu() as HTMLElement, "高（high）較仔細，花費較高").click());
+    expect(seg()?.querySelector(".status-dot")).toBeNull();
+    await act(async () =>
+      (root.querySelector(".model-anchor .run-seg") as HTMLButtonElement).click(),
+    );
+    const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
+    await act(async () => button(sheet, "Model Bmodel-b100K").click());
+    await act(async () => button(sheet, "使用這個模型").click());
+    expect(seg()?.querySelector(".status-dot.warn")).not.toBeNull();
+    expect(seg()?.textContent).toBe("這個模型不支援推理 高，改用 中：推理中");
+    await send("嗨");
+    expect(submitted()?.p).toMatchObject({
+      model: { provider: "anthropic", id: "model-b" },
+      effort: "medium",
+    });
+    expect(submitted()?.conv).toBeUndefined();
+    unmount();
+  });
+
+  test("a continuation keeps the conversation's level, moved to the nearest the new model takes", async () => {
+    const { root, seg, openConv, send, submitted, unmount } = await ready();
+    await openConv("甲");
+    await act(async () => button(root, "以另一個模型接續").click());
+    const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
+    await act(async () => button(sheet, "Model Bmodel-b100K").click());
+    await act(async () => button(sheet, "建立接續對話").click());
+    expect(seg()?.textContent).toBe("這個模型不支援推理 高，改用 中：推理中");
+    await send("繼續");
+    expect(submitted()?.p).toMatchObject({ from: "conv-1", effort: "medium" });
+    unmount();
+  });
+
+  test("thinking used the output up: a card that opens the menu; a moved level in words", async () => {
+    const { h, root, menu, openConv, unmount } = await ready();
+    await openConv("甲");
+    await act(async () => {
+      h.last().receive(
+        server(
+          "notice",
+          { code: "effort_clamped", data: { effort: "medium" } },
+          { conv: "conv-1" },
+        ),
+      );
+      h.last().receive(server("notice", { code: "effort_truncated" }, { conv: "conv-1" }));
+    });
+    expect(root.querySelector(".compaction-meta")?.textContent).toBe(
+      "這個模型不支援原本的推理強度，這次用「中」",
+    );
+    const card = root.querySelector(".thread .task-notice.warn") as HTMLElement;
+    expect(card.textContent).toContain("輸出上限被思考用完，請降低推理強度");
+    await act(async () => button(card, "調整推理強度").click());
+    expect(menu()?.getAttribute("aria-label")).toBe("選擇推理強度");
+    unmount();
+  });
+
+  test("a phone: the level is picked in a sheet", async () => {
+    asPhone();
+    const { root, seg, menu, openConv, unmount } = await ready();
+    await openConv("甲");
+    await act(async () => seg()?.click());
+    expect(menu()).toBeNull();
+    const sheet = root.querySelector("[aria-labelledby=effort-sheet-title]") as HTMLElement;
+    expect(sheet.querySelector("h2")?.textContent).toBe("選擇推理強度（Model A）");
+    await act(async () => button(sheet, "低（low）回應最快，思考最少").click());
+    expect(root.querySelector("[aria-labelledby=effort-sheet-title]")).toBeNull();
+    expect(seg()?.textContent).toBe("推理低");
+    expect((root.querySelector(".effort-toast") as HTMLElement).hidden).toBe(false);
+    unmount();
+  });
+});

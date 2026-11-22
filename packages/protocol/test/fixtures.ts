@@ -104,6 +104,7 @@ export const SERVER: Record<string, object> = {
         model: "m",
         updatedAt: 1,
         parentId: ID,
+        effort: "high",
       },
     ],
   }),
@@ -132,7 +133,15 @@ export const SERVER: Record<string, object> = {
     "models.result",
     {
       models: [
-        { provider: "anthropic", id: "m", label: "M", window: 200_000, isDefault: true },
+        {
+          provider: "anthropic",
+          id: "m",
+          label: "M",
+          window: 200_000,
+          isDefault: true,
+          effortLevels: ["low", "medium", "high"],
+          defaultEffort: "medium",
+        },
         { provider: "gemini", id: "g", label: "G", isDefault: false, unusable: "no_key" },
       ],
     },

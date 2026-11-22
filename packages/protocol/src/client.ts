@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { envelope, id, inConv } from "./envelope.ts";
 import { KEEP_LAST, TEXT_BYTES } from "./limits.ts";
-import { wireModelRef } from "./wire.ts";
+import { wireEffort, wireModelRef } from "./wire.ts";
 
 const empty = z.strictObject({});
 
@@ -19,6 +19,10 @@ export const clientMessage = z.discriminatedUnion("kind", [
    * older than them refuses a turn.submit that has one (strictObject), so the page offers them
    * only after models.result came. The page can then go out before the local end is updated,
    * which status's optional fields need (see wireStatus).
+   *
+   * effort is the level from this turn on, as the terminal's /effort: kept on the conversation.
+   * It must be one the model takes. Optional and offered only when models.result lists levels,
+   * for the same reason.
    */
   envelope(
     "turn.submit",
@@ -29,6 +33,7 @@ export const clientMessage = z.discriminatedUnion("kind", [
         model: wireModelRef.optional(),
         from: id.optional(),
         keepLast: z.number().int().positive().max(KEEP_LAST).optional(),
+        effort: wireEffort.optional(),
       })
       .refine((p) => p.from === undefined || p.model !== undefined, "from needs model")
       .refine((p) => p.keepLast === undefined || p.from !== undefined, "keepLast needs from"),

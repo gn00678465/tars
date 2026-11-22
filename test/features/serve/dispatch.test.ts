@@ -885,3 +885,97 @@ describe("another model: models.get, a new conversation on it, a continuation", 
     expect(s.h.fake.messages()).toHaveLength(1);
   });
 });
+
+describe("effort: the levels models.get lists, a turn's level, a conversation's", () => {
+  const PLAIN = "plain-model";
+  // A model that takes no level, and the default one that takes low, medium and high.
+  const models = {
+    extraModels: [{ ...MODEL_ENTRY, id: PLAIN, label: "Plain", default: false, effortLevels: [] }],
+  };
+  const turnOf = (s: Setup, requestId: string) =>
+    s.hub
+      .to(CONN_A, "turn")
+      .map((m) => m.p as { requestId?: string; state: string; reason?: string })
+      .find((p) => p.requestId === requestId && p.state !== "started");
+  const turnEffort = (s: Setup, requestId: string) =>
+    (
+      s.db
+        .query("SELECT effort FROM turns WHERE id = ?")
+        .get(store.findTurnByRequest(s.db, requestId)?.id ?? "") as { effort: string | null }
+    ).effort;
+  async function send(s: Setup, p: Record<string, unknown>, conv?: string) {
+    s.h.fake.reply(text("好"));
+    await s.msg(CONN_A, "turn.submit", p, conv === undefined ? {} : { conv });
+    await until(() => turnOf(s, p.requestId as string) !== undefined);
+    await s.d.running;
+    return turnOf(s, p.requestId as string);
+  }
+
+  test("models.get: each model's levels, lowest first, and the level a new conversation gets", async () => {
+    const s = await setup(models);
+    await s.ready(CONN_A);
+    const r = reply(s, CONN_A, await s.msg(CONN_A, "models.get", {}));
+    type Listed = { id: string; effortLevels?: string[]; defaultEffort?: string };
+    const listed = (r?.p as { models: Listed[] } | undefined)?.models ?? [];
+    expect(listed.map((m) => [m.id, m.effortLevels, m.defaultEffort])).toEqual([
+      [MODEL_ENTRY.id, ["low", "medium", "high"], "medium"],
+      [PLAIN, [], undefined],
+    ]);
+    allValid(s);
+  });
+
+  test("on a conversation: the level is sent from that turn on and kept; one the model does not take is refused", async () => {
+    const s = await setup(models);
+    await s.ready(CONN_A);
+    await send(s, { requestId: "r-1", text: "嗨" });
+    const conv = store.findTurnByRequest(s.db, "r-1")?.convId as string;
+    expect(store.getConversation(s.db, conv).effort).toBe("medium");
+
+    expect(await send(s, { requestId: "r-2", text: "再想想", effort: "high" }, conv)).toMatchObject(
+      {
+        state: "completed",
+      },
+    );
+    expect(turnEffort(s, "r-2")).toBe("high");
+    expect(store.getConversation(s.db, conv).effort).toBe("high");
+    // The next turn, sent without one, keeps it.
+    await send(s, { requestId: "r-3", text: "繼續" }, conv);
+    expect(turnEffort(s, "r-3")).toBe("high");
+
+    const calls = s.h.fake.messages().length;
+    for (const [requestId, effort] of [
+      ["r-4", "max"],
+      ["r-5", "ultra"],
+    ] as const)
+      expect(await send(s, { requestId, text: "x", effort }, conv)).toMatchObject({
+        state: "rejected",
+        reason: "effort_unsupported",
+      });
+    expect(s.h.fake.messages()).toHaveLength(calls);
+    expect(store.getConversation(s.db, conv).effort).toBe("high");
+
+    s.hub.sent.length = 0;
+    const listed = reply(s, CONN_A, await s.msg(CONN_A, "conv.list", {}));
+    expect(
+      (listed?.p as { convs: { id: string; effort?: string }[] } | undefined)?.convs ?? [],
+    ).toContainEqual(expect.objectContaining({ id: conv, effort: "high" }));
+    allValid(s);
+  });
+
+  test("a new conversation: its level with its model; any level on a model that takes none is refused", async () => {
+    const s = await setup(models);
+    await s.ready(CONN_A);
+    await send(s, { requestId: "r-1", text: "嗨", effort: "low" });
+    const made = store.findTurnByRequest(s.db, "r-1")?.convId as string;
+    expect(store.getConversation(s.db, made).effort).toBe("low");
+    expect(turnEffort(s, "r-1")).toBe("low");
+    expect(
+      await send(s, {
+        requestId: "r-2",
+        text: "嗨",
+        model: { provider: "anthropic", id: PLAIN },
+        effort: "low",
+      }),
+    ).toMatchObject({ state: "rejected", reason: "effort_unsupported" });
+  });
+});
