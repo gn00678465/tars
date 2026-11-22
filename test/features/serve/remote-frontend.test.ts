@@ -333,3 +333,59 @@ describe("linkSend: what leaves for a browser", () => {
     expect(frames).toEqual([]);
   });
 });
+
+describe("RemoteFrontend: the turn's phase", () => {
+  const call = (callId: string, seq: number) =>
+    ({
+      seq,
+      turnId: TURN,
+      step: 1,
+      kind: "tool_call",
+      body: { callId, providerCallId: callId, name: "tars", input: { argv: ["cost"] } },
+    }) as Item;
+  const result = (callId: string, seq: number) =>
+    ({
+      seq,
+      turnId: TURN,
+      step: 1,
+      kind: "tool_result",
+      body: { callId, status: "done", text: "ok", truncated: false },
+    }) as Item;
+
+  test("thinking, replying, a step's scripts until the last result, approval; each once, none after the end", async () => {
+    const { hub, fe } = setup();
+    start(fe);
+    fe.emit({ type: "thinking" });
+    fe.emit({ type: "delta", text: "好" });
+    fe.emit({ type: "delta", text: "的" });
+    fe.emit({ type: "item", item: call("c1", 3) });
+    fe.emit({ type: "item", item: call("c2", 4) });
+    fe.emit({ type: "item", item: result("c1", 5) });
+    const waiting = fe.askApproval(approvalRecord(), new AbortController().signal);
+    fe.emit({
+      type: "approval_resolved",
+      approvalId: APPROVAL_ID,
+      state: "approved",
+      via: "remote",
+      at: 1,
+    });
+    fe.emit({ type: "item", item: result("c2", 6) });
+    fe.emit({ type: "turn_end", state: "completed", costUsd: 0 } as never);
+    fe.emit({ type: "thinking" });
+    const phases = hub.to(CONN_A, "turn.phase").map((m) => (m.p as { phase: string }).phase);
+    expect(phases).toEqual([
+      "thinking",
+      "replying",
+      "running_script",
+      "waiting_approval",
+      "running_script",
+      "thinking",
+    ]);
+    expect(fe.phase).toBeUndefined();
+    expect(hub.to(CONN_A, "turn.phase").every(valid)).toBe(true);
+    // Only who has the conversation open.
+    expect(hub.to(CONN_B, "turn.phase")).toEqual([]);
+    fe.dispose();
+    void waiting;
+  });
+});

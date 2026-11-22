@@ -1124,6 +1124,7 @@ export function createEngine(deps: EngineDeps) {
       replacedCount: plan.replacedCount,
       trigger: opts.trigger,
       usageId,
+      keptTokens: plan.keptTokens,
     };
     let seq = 0;
     final(() => {

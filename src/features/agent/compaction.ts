@@ -151,6 +151,8 @@ export interface CompactionPlan {
   readonly firstKeptSeq: number;
   readonly toSummarize: readonly ContextItem[];
   readonly replacedCount: number;
+  /** The verbatim part, estimated the way the cut was found. */
+  readonly keptTokens: number;
 }
 
 /**
@@ -165,8 +167,9 @@ export function planCompaction(
   const rows = buildActiveHistory(items).filter((i) => i.seq !== SYNTHETIC_SEQ);
   let candidate = -1;
   let tokens = 0;
+  const estimate = (r: ContextItem) => Math.ceil(sentBytes(r, limits.tool_result_bytes) / 2);
   for (let i = rows.length - 1; i >= 0; i--) {
-    tokens += Math.ceil(sentBytes(rows[i] as ContextItem, limits.tool_result_bytes) / 2);
+    tokens += estimate(rows[i] as ContextItem);
     if (tokens >= limits.compact_keep_recent_tokens) {
       candidate = i;
       break;
@@ -182,6 +185,7 @@ export function planCompaction(
     firstKeptSeq: (rows[cut] as ContextItem).seq,
     toSummarize,
     replacedCount: toSummarize.length,
+    keptTokens: rows.slice(cut).reduce((n, r) => n + estimate(r), 0),
   };
 }
 

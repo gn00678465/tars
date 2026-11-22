@@ -3,6 +3,7 @@ import {
   MESSAGE_BYTES,
   PROTOCOL_VERSION,
   type ClientMessage,
+  type Phase,
   type FrameToRelay,
   type ServerMessage,
 } from "@tars/protocol";
@@ -89,6 +90,12 @@ export class RemoteFrontend implements Frontend {
   turnId: string | undefined;
   /** The text streamed since the last assistant item, for a snapshot. */
   running = "";
+  /** What the turn is doing now, for the status line and a snapshot. */
+  phase: Phase | undefined;
+  /** After turn_end: the page has cleared its status line, and nothing may bring it back. */
+  private ended = false;
+  /** A step's calls come all at once, then run one by one: those without a result yet. */
+  private readonly openCalls = new Set<string>();
   private pendingDelta = "";
   private deltaTimer: unknown;
   private waiting:
@@ -135,6 +142,14 @@ export class RemoteFrontend implements Frontend {
     return this.convId === undefined ? {} : { conv: this.convId };
   }
 
+  /** Sent when it changes: a turn's phases are few, deltas are many. */
+  private setPhase(phase: Phase): void {
+    const turn = this.turnId;
+    if (turn === undefined || this.ended || this.phase === phase) return;
+    this.phase = phase;
+    this.toSubscribed(() => message(this.hub, "turn.phase", { turn, phase }, this.conv()));
+  }
+
   emit(e: FrontendEvent): void {
     switch (e.type) {
       case "turn_start": {
@@ -154,20 +169,32 @@ export class RemoteFrontend implements Frontend {
         if (reg !== undefined) reg.subscribed = e.convId;
         // The loop sends no item for the message the owner typed; another device has not seen it.
         for (const item of e.items) this.item(item);
+        // Until the model's first token: waiting on it reads as thinking.
+        this.setPhase("thinking");
         return;
       }
       case "delta":
+        this.setPhase("replying");
         this.running += e.text;
         this.pendingDelta += e.text;
         if (utf8Bytes(this.pendingDelta) >= DELTA_BYTES) this.flush();
         else this.deltaTimer ??= this.hub.timers.setTimeout(() => this.flush(), DELTA_EVERY_MS);
         return;
       case "thinking":
+        this.setPhase("thinking");
         return;
       case "item":
         this.flush();
         if (e.item.kind === "assistant") this.running = "";
         this.item(e.item);
+        if (e.item.kind === "tool_call") {
+          this.openCalls.add(e.item.body.callId);
+          this.setPhase("running_script");
+        } else if (e.item.kind === "tool_result") {
+          this.openCalls.delete(e.item.body.callId);
+          // The step's last result: the next request, waiting on the model again.
+          if (this.openCalls.size === 0) this.setPhase("thinking");
+        }
         return;
       case "notice":
         this.toSubscribed(() =>
@@ -180,6 +207,7 @@ export class RemoteFrontend implements Frontend {
         );
         return;
       case "approval_resolved": {
+        if (e.state === "approved") this.setPhase("running_script");
         const by =
           (e.via === "remote" || e.via === "tty") && this.decidedBy?.approvalId === e.approvalId
             ? this.decidedBy.conn
@@ -201,6 +229,9 @@ export class RemoteFrontend implements Frontend {
       case "turn_end":
         this.flush();
         this.running = "";
+        // The end itself clears the page's status line; no phase follows it.
+        this.phase = undefined;
+        this.ended = true;
         broadcast(this.hub, () =>
           message(
             this.hub,
@@ -243,6 +274,7 @@ export class RemoteFrontend implements Frontend {
   }
 
   async askApproval(record: ApprovalRecord, signal: AbortSignal): Promise<Decision> {
+    this.setPhase("waiting_approval");
     broadcast(this.hub, () =>
       message(this.hub, "approval.request", { approval: wireApproval(record) }),
     );

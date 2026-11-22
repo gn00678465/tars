@@ -9,8 +9,11 @@ import {
   SNAPSHOT_BYTES,
   type FrameToRelay,
   type ServerMessage,
+  type WireStatus,
 } from "@tars/protocol";
+import { SUMMARY_HEADINGS } from "../../../src/features/agent/compaction.ts";
 import { loadConfig } from "../../../src/features/agent/config.ts";
+import { adjust } from "../../../src/features/agent/ledger.ts";
 import * as store from "../../../src/features/agent/store.ts";
 import { Dispatch, DROP } from "../../../src/features/serve/dispatch.ts";
 import { wireLookup } from "../../../src/features/serve/wire.ts";
@@ -18,7 +21,9 @@ import type { Verdict } from "../../../src/features/serve/access.ts";
 import { tarsCall, text } from "../../fakes/anthropic.ts";
 import { tempHome } from "../../helpers.ts";
 import {
+  configWith,
   engineHarness,
+  writeCatalog,
   MODEL_ENTRY,
   type EngineHarness,
   type HarnessOptions,
@@ -353,12 +358,26 @@ describe("Dispatch: turns", () => {
       "ack",
       "turn",
       "item",
+      "turn.phase",
+      "turn.phase",
       "delta",
       "item",
       "item",
       "turn",
+      "conv.context",
       "status",
     ]);
+    // Waiting on the model, then its first token; nothing to the device that has not opened it.
+    expect(s.hub.to(CONN_A, "turn.phase").map((m) => (m.p as { phase: string }).phase)).toEqual([
+      "thinking",
+      "replying",
+    ]);
+    expect(s.hub.to(CONN_B, "turn.phase")).toEqual([]);
+    expect(s.hub.to(CONN_A, "conv.context")[0]?.p).toMatchObject({
+      contextLimit: 200_000,
+      warnRatio: 0.6,
+      stopRatio: 0.85,
+    });
     const items = s.hub
       .to(CONN_A, "item")
       .map((m) => (m.p as { item: { kind: string } }).item.kind);
@@ -1082,5 +1101,200 @@ describe("Dispatch: the knowledge base (wiki.*)", () => {
     await s.ready(CONN_A);
     const id = await s.msg(CONN_A, "wiki.page", { path: "people/../../MEMORY" });
     expect(reason(reply(s, CONN_A, id))).toBe("bad_message");
+  });
+});
+
+describe("conv.compact: the terminal's /compact from a page", () => {
+  // keep_recent 1,000 tokens: a few long turns leave earlier ones to replace.
+  const SHORT_KEEP = configWith({ compact_keep_recent_tokens: 1000 });
+  const SUMMARY = SUMMARY_HEADINGS.map((h) => `## ${h}\n- (none)`).join("\n\n");
+
+  async function longConv(s: Setup): Promise<string> {
+    let convId: string | undefined;
+    for (let i = 0; i < 4; i++) {
+      s.h.fake.reply(text("a".repeat(3000)));
+      const out = await s.h.engine.runTurn(
+        {
+          provider: "anthropic",
+          model: MODEL_ENTRY.id,
+          effort: "medium",
+          text: `${"u".repeat(3000)} ${i}`,
+          ...(convId === undefined ? {} : { convId }),
+        },
+        s.h.frontend,
+        new AbortController().signal,
+      );
+      if (out.kind !== "ended") throw new Error("turn did not run");
+      convId = out.convId;
+    }
+    return convId as string;
+  }
+
+  async function opened(): Promise<{ s: Setup; conv: string; items: () => number }> {
+    const s = await setup({ config: SHORT_KEEP });
+    await s.ready(CONN_A);
+    await s.ready(CONN_B);
+    const conv = await longConv(s);
+    await s.msg(CONN_B, "conv.open", {}, { conv });
+    const items = () => store.readItems(s.db, conv).length;
+    return { s, conv, items };
+  }
+
+  const states = (s: Setup, conn: string) =>
+    s.hub.to(conn, "compact").map((m) => (m.p as { state: string }).state);
+  const done = (s: Setup) => until(() => s.d.current === undefined).then(() => s.d.running);
+
+  test("done: started, the compaction item with its figures, completed, then the context", async () => {
+    const { s, conv, items } = await opened();
+    const before = items();
+    s.h.fake.reply(text(SUMMARY));
+    const id = await s.msg(CONN_A, "conv.compact", { focus: "保留路徑" }, { conv });
+    expect(reply(s, CONN_A, id)?.kind).toBe("ack");
+    await done(s);
+    expect(states(s, CONN_A)).toEqual(["started", "completed"]);
+    // The other device has it open: it hears the same.
+    expect(states(s, CONN_B)).toEqual(["started", "completed"]);
+    const item = s.hub
+      .to(CONN_B, "item")
+      .map((m) => (m.p as { item: Record<string, unknown> }).item)
+      .find((i) => i.kind === "compaction");
+    expect(item?.trigger).toBe("manual");
+    expect(item?.count).toBeGreaterThan(0);
+    expect(item?.keptTokens).toBeGreaterThan(0);
+    expect(items()).toBe(before + 1);
+    const prompt = JSON.stringify(s.h.fake.messages().at(-1)?.body);
+    expect(prompt).toContain("Additional focus: 保留路徑");
+    allValid(s);
+    const context = s.hub.to(CONN_A, "conv.context").at(-1)?.p as { lastCompactedAt?: number };
+    expect(context.lastCompactedAt).toBe(s.h.clock.now().getTime());
+  });
+
+  test("one at a time: a second compact and a turn while it runs are busy", async () => {
+    const { s, conv } = await opened();
+    s.h.fake.reply({ kind: "hang" });
+    await s.msg(CONN_A, "conv.compact", {}, { conv });
+    const again = await s.msg(CONN_B, "conv.compact", {}, { conv });
+    expect(reason(reply(s, CONN_B, again))).toBe("busy");
+    const turn = await s.msg(CONN_B, "turn.submit", { requestId: "r-x", text: "hi" }, { conv });
+    expect(reason(reply(s, CONN_B, turn))).toBe("busy");
+    s.d.current?.controller.abort();
+    await done(s);
+  });
+
+  test("turn.abort stops it: aborted, the conversation as it was", async () => {
+    const { s, conv, items } = await opened();
+    const before = items();
+    const requests = s.h.fake.messages().length;
+    s.h.fake.reply({ kind: "hang" });
+    await s.msg(CONN_A, "conv.compact", {}, { conv });
+    await until(() => s.h.fake.messages().length > requests);
+    const stop = await s.msg(CONN_B, "turn.abort", {}, { conv });
+    expect(reply(s, CONN_B, stop)?.kind).toBe("ack");
+    await done(s);
+    expect(states(s, CONN_A)).toEqual(["started", "aborted"]);
+    expect(items()).toBe(before);
+    expect(s.db.query("SELECT state FROM turns WHERE kind = 'compaction'").all()).toEqual([
+      { state: "aborted" },
+    ]);
+  });
+
+  test("a provider failure: failed with its reason, the conversation as it was", async () => {
+    const { s, conv, items } = await opened();
+    const before = items();
+    s.h.fake.reply({ kind: "http_error", status: 400, type: "invalid_request_error" });
+    await s.msg(CONN_A, "conv.compact", {}, { conv });
+    await done(s);
+    expect(s.hub.to(CONN_A, "compact").at(-1)?.p).toEqual({
+      state: "failed",
+      reason: "bad_request",
+    });
+    expect(items()).toBe(before);
+  });
+
+  test("at the stop line: refused by the budget before any request, with the figures", async () => {
+    const { s, conv, items } = await opened();
+    const before = items();
+    const requests = s.h.fake.messages().length;
+    adjust(s.db, "anthropic", 99, undefined, s.h.clock.now());
+    await s.msg(CONN_A, "conv.compact", {}, { conv });
+    await done(s);
+    expect(s.hub.to(CONN_A, "compact").at(-1)?.p).toMatchObject({
+      state: "failed",
+      reason: "budget_stopped",
+      data: { provider: "anthropic", stopUsd: 95 },
+    });
+    expect(s.h.fake.messages()).toHaveLength(requests);
+    expect(items()).toBe(before);
+  });
+
+  test("a conversation that does not exist, and a short one with nothing to replace", async () => {
+    const s = await setup();
+    await s.ready(CONN_A);
+    const missing = await s.msg(CONN_A, "conv.compact", {}, { conv: "nope" });
+    expect(reason(reply(s, CONN_A, missing))).toBe("not_found");
+    s.h.fake.reply(text("hi"));
+    const out = await s.h.engine.runTurn(
+      { provider: "anthropic", model: MODEL_ENTRY.id, effort: "medium", text: "hi" },
+      s.h.frontend,
+      new AbortController().signal,
+    );
+    const conv = out.kind === "ended" ? out.convId : "";
+    await s.msg(CONN_A, "conv.compact", {}, { conv });
+    await done(s);
+    expect(states(s, CONN_A)).toEqual(["started", "skipped"]);
+  });
+});
+
+describe("status and models.result: period, estimate, prices, the table", () => {
+  test("status: month and an estimate by default; a bill figure alone is not an estimate", async () => {
+    const s = await setup();
+    await s.ready(CONN_A);
+    const provider = () =>
+      (s.hub.to(CONN_A, "status").at(-1)?.p as WireStatus | undefined)?.providers.find(
+        (p) => p.name === "anthropic",
+      );
+    expect(provider()).toMatchObject({ period: "month", estimated: true });
+    adjust(s.db, "anthropic", 12.5, undefined, s.h.clock.now());
+    await s.msg(CONN_A, "status.get", {});
+    expect(provider()).toMatchObject({ spentUsd: 12.5, estimated: false });
+  });
+
+  test("status: which models' prices need confirming, and how many candidates wait", async () => {
+    const s = await setup();
+    writeCatalog(s.h.paths, [
+      { ...MODEL_ENTRY, pricedAt: "2026-10-10" },
+      { ...MODEL_ENTRY, id: "fresh", default: false },
+      { ...MODEL_ENTRY, id: "seen", default: false, status: "candidate" },
+    ]);
+    await s.ready(CONN_A);
+    const p = s.hub.to(CONN_A, "status").at(-1)?.p as WireStatus;
+    expect(p.prices).toEqual([
+      { provider: "anthropic", model: MODEL_ENTRY.id, ageDays: 40, state: "stale" },
+    ]);
+    expect([p.candidates, p.retired, p.pricesWarn]).toEqual([1, 0, true]);
+  });
+
+  test("models.result: the whole list as a read-only table, without asking a provider", async () => {
+    const s = await setup();
+    await s.ready(CONN_A);
+    const requests = s.h.fake.messages().length;
+    const before = readFileSync(s.h.paths.modelsFile, "utf8");
+    await s.msg(CONN_A, "models.get", {});
+    const p = s.hub.to(CONN_A, "models.result").at(-1)?.p as {
+      catalog: { id: string; status: string; price?: object }[];
+      catalogTotal: number;
+      updatedAt: string;
+    };
+    expect(p.catalogTotal).toBe(p.catalog.length);
+    expect(p.catalog[0]).toMatchObject({
+      id: MODEL_ENTRY.id,
+      status: "active",
+      price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      pricedAt: "2026-11-19",
+    });
+    expect(p.updatedAt).toBe("2026-11-19");
+    expect(s.h.fake.messages()).toHaveLength(requests);
+    expect(readFileSync(s.h.paths.modelsFile, "utf8")).toBe(before);
+    allValid(s);
   });
 });

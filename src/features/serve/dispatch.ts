@@ -25,6 +25,7 @@ import { defaultStart, modelChoices } from "../agent/start.ts";
 import { PROVIDERS, type SecretStore } from "../../core/secrets.ts";
 import type { TarsConfig } from "../agent/config.ts";
 import { budgetStatuses } from "../agent/cost-command.ts";
+import { latestAdjustment, spent } from "../agent/ledger.ts";
 import type { Engine, TurnInput } from "../agent/engine.ts";
 import type { Log } from "../agent/log.ts";
 import { loadSkillIndex } from "../agent/prompt.ts";
@@ -33,6 +34,8 @@ import type { AccessVerifier, Registry } from "./access.ts";
 import { alreadyDecided, broadcast, message, RemoteFrontend, type Hub } from "./remote-frontend.ts";
 import { answerWiki, type WikiRequest } from "./wiki.ts";
 import type { ReasonData } from "../agent/types.ts";
+import { convContext } from "./context.ts";
+import { catalogTable, priceWarnings } from "./prices.ts";
 import { toWire, wireApproval, wireBytes, wireConv, wireData, wireRunning } from "./wire.ts";
 
 /** Close codes the local end gives a browser connection. */
@@ -288,6 +291,8 @@ export class Dispatch {
         return this.snapshot(conn, m);
       case "turn.submit":
         return this.submit(conn, m);
+      case "conv.compact":
+        return this.compact(conn, m);
       case "turn.abort":
         if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
         // A new conversation's id is known once the turn started.
@@ -330,7 +335,8 @@ export class Dispatch {
   /** models.get: every active model, usable or why not, as the terminal's /model judges one. */
   private async models(conn: string, re: string): Promise<void> {
     if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", re);
-    const choices = await modelChoices(await this.d.config(), await loadCatalog(this.d.paths), {
+    const catalog = await loadCatalog(this.d.paths);
+    const choices = await modelChoices(await this.d.config(), catalog, {
       secrets: this.d.secrets,
       now: () => new Date(this.d.now()),
     });
@@ -344,7 +350,10 @@ export class Dispatch {
       effortLevels: [...c.effortLevels],
       ...(c.defaultEffort === undefined ? {} : { defaultEffort: c.defaultEffort }),
     }));
-    this.d.hub.send(conn, message(this.d.hub, "models.result", { models }, { re }));
+    this.d.hub.send(
+      conn,
+      message(this.d.hub, "models.result", { models, ...catalogTable(catalog) }, { re }),
+    );
   }
 
   private async hello(conn: string, m: Of<"hello">): Promise<void> {
@@ -370,7 +379,7 @@ export class Dispatch {
    * The newest items that fit: the running text's bytes come off SNAPSHOT_BYTES first, then
    * items go in newest first until the budget or SNAPSHOT_ITEMS runs out.
    */
-  private snapshot(conn: string, m: Of<"conv.open">): void {
+  private async snapshot(conn: string, m: Of<"conv.open">): Promise<void> {
     let conv: store.Conversation;
     try {
       conv = store.getConversation(this.d.db, m.conv);
@@ -385,7 +394,10 @@ export class Dispatch {
     const running =
       live === undefined || m.p.before !== undefined
         ? undefined
-        : wireRunning(live.turnId as string, live.running);
+        : {
+            ...wireRunning(live.turnId as string, live.running),
+            ...(live.phase === undefined ? {} : { phase: live.phase }),
+          };
     let budget = SNAPSHOT_BYTES - (running === undefined ? 0 : wireBytes(running));
     const page = store.readItemsPage(this.d.db, conv.id, {
       ...(m.p.before === undefined ? {} : { before: m.p.before }),
@@ -418,6 +430,102 @@ export class Dispatch {
         { conv: conv.id, re: m.id },
       ),
     );
+    // An older page of items changes nothing about the context.
+    if (m.p.before === undefined) await this.context(conv.id, [conn]);
+  }
+
+  /** Who has the conversation open. */
+  private subscribers(convId: string): string[] {
+    return this.registry
+      .ready()
+      .filter((r) => r.subscribed === convId)
+      .map((r) => r.conn);
+  }
+
+  /**
+   * conv.context to these connections. Best effort: config.toml or models.json unreadable
+   * leaves the page without the ring, and the turn's own checks still stop at the limits.
+   */
+  private async context(convId: string, to: readonly string[]): Promise<void> {
+    if (to.length === 0) return;
+    let body;
+    try {
+      const conv = store.getConversation(this.d.db, convId);
+      const config = await this.d.config();
+      body = convContext(this.d.db, conv, await loadCatalog(this.d.paths), config.limits);
+    } catch {
+      return;
+    }
+    for (const conn of to)
+      this.d.hub.send(conn, message(this.d.hub, "conv.context", body, { conv: convId }));
+  }
+
+  /**
+   * conv.compact: the terminal's /compact from a page. It bills a model request, so it is one
+   * at a time with turns (busy), its budget is the ledger's reservation as a turn's is, and
+   * turn.abort stops it. A failure or a stop leaves the conversation as it was: compactWith
+   * writes the summary only on success.
+   */
+  private async compact(conn: string, m: Of<"conv.compact">): Promise<void> {
+    if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
+    if (this.current !== undefined) return this.reply(conn, "nack", "busy", m.id);
+    try {
+      store.getConversation(this.d.db, m.conv);
+    } catch {
+      return this.reply(conn, "nack", "not_found", m.id);
+    }
+    const controller = new AbortController();
+    const frontend = new RemoteFrontend(this.d.hub, conn, m.id, () => undefined);
+    frontend.convId = m.conv;
+    const current: Current = { requestId: m.id, convId: m.conv, frontend, controller };
+    this.current = current;
+    this.d.changed();
+    this.ack(conn, m.id);
+    const reg = this.registry.get(conn);
+    if (reg !== undefined) reg.subscribed = m.conv;
+    const tell = (p: Extract<ServerMessage, { kind: "compact" }>["p"]) => {
+      for (const c of this.subscribers(m.conv))
+        this.d.hub.send(c, message(this.d.hub, "compact", p, { conv: m.conv }));
+    };
+    tell({ state: "started" });
+    this.running = (async () => {
+      try {
+        await this.d.hub.notifier.idle();
+        const out = await this.d.engine.compact(
+          m.conv,
+          { trigger: "manual", ...(m.p.focus === undefined ? {} : { focus: m.p.focus }) },
+          frontend,
+          controller.signal,
+        );
+        tell(
+          out.kind === "compacted"
+            ? { state: "completed" }
+            : out.kind === "failed"
+              ? {
+                  state: "failed",
+                  reason: out.reason.slice(0, 64),
+                  ...(out.data === undefined ? {} : { data: wireData(out.data) }),
+                }
+              : { state: out.kind },
+        );
+      } catch (err) {
+        tell({ state: "failed" });
+        this.d.log.log("warning", {
+          connId: store.shortId(conn),
+          kind: "conv.compact",
+          ...errorName(err),
+        });
+      } finally {
+        frontend.dispose();
+        if (this.current === current) this.current = undefined;
+        this.d.changed();
+        await this.context(m.conv, this.subscribers(m.conv));
+        const status = await this.status().catch(() => undefined);
+        if (status !== undefined)
+          broadcast(this.d.hub, () => ({ ...status, id: this.d.hub.newId() }) as ServerMessage);
+        this.d.hub.notifier.poke();
+      }
+    })();
   }
 
   /** With the turn and its conversation once it exists: enough for a page that missed its start. */
@@ -617,6 +725,8 @@ export class Dispatch {
       frontend.dispose();
       if (this.current === current) this.current = undefined;
       this.d.changed();
+      const convId = frontend.convId ?? current.convId;
+      if (convId !== undefined) await this.context(convId, this.subscribers(convId));
       const status = await this.status().catch(() => undefined);
       if (status !== undefined)
         broadcast(this.d.hub, () => ({ ...status, id: this.d.hub.newId() }) as ServerMessage);
@@ -652,6 +762,7 @@ export class Dispatch {
     const config = await this.d.config();
     const now = new Date(this.d.now());
     const providers = budgetStatuses(config, this.d.db, now, this.d.paths).slice(0, 8);
+    const catalog = await loadCatalog(this.d.paths).catch(() => undefined);
     const body: WireStatus = {
       now: now.getTime(),
       providers: providers.map((b) => ({
@@ -661,8 +772,11 @@ export class Dispatch {
         warnUsd: b.warnUsd,
         stopUsd: b.stopUsd,
         stopped: b.state === "stopped",
+        period: b.period === "utc-month" ? "month" : "cumulative",
+        estimated: this.estimated(config, b, now),
       })),
-      pricesWarn: await this.pricesWarn(config, now),
+      pricesWarn: catalog === undefined ? false : this.pricesWarn(config, catalog, now),
+      ...(catalog === undefined ? {} : priceWarnings(catalog, config.limits, now)),
       pendingApprovals: approvals.listPending(this.d.db).length,
       turnRunning: this.current !== undefined,
       notify: this.d.hub.notifier.configured ? "ok" : "not_configured",
@@ -704,14 +818,23 @@ export class Dispatch {
       }));
   }
 
+  /**
+   * Whether the period's figure is partly this machine's estimate: false only when it is the
+   * last tars cost adjust alone, with no usage after it and no wiki sync's share on top.
+   */
+  private estimated(
+    config: TarsConfig,
+    b: ReturnType<typeof budgetStatuses>[number],
+    now: Date,
+  ): boolean {
+    const cfg = config.providers[b.provider];
+    if (cfg === undefined || (b.wiki?.period ?? 0) > 0) return true;
+    const adj = latestAdjustment(this.d.db, b.provider, cfg, now);
+    return adj === null || spent(this.d.db, b.provider, cfg, now) !== adj.spentUsd;
+  }
+
   /** For the model a new conversation would use. */
-  private async pricesWarn(config: TarsConfig, now: Date): Promise<boolean> {
-    let catalog: Catalog;
-    try {
-      catalog = await loadCatalog(this.d.paths);
-    } catch {
-      return false;
-    }
+  private pricesWarn(config: TarsConfig, catalog: Catalog, now: Date): boolean {
     const start = defaultStart(config, catalog);
     if (!start.ok) return false;
     const r = resolve(catalog, start.provider, start.model, config.limits, now);

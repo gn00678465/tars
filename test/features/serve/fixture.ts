@@ -97,6 +97,7 @@ export function testHub(opts: {
         thinkingTokens: 0,
       }),
       duration: () => undefined,
+      compaction: () => undefined,
       decided: () => undefined,
     },
     sent,

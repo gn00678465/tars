@@ -17,6 +17,7 @@ const figures = {
 const lookup: WireLookup = {
   usage: () => figures,
   duration: () => undefined,
+  compaction: () => undefined,
   decided: () => undefined,
 };
 const wire = (item: Item, l: WireLookup = lookup) => toWire(item, l);
@@ -156,18 +157,32 @@ describe("toWire: the allow-list", () => {
     });
   });
 
-  test("compaction: the summary", () => {
-    const w = checked(
-      it("compaction", {
-        summary: "摘要",
-        firstKeptSeq: 1,
-        tokensBefore: 9,
-        replacedCount: 2,
-        trigger: "auto",
-        usageId: 1,
-      }),
-    );
-    expect(w).toEqual({ seq: 3, turn: T, kind: "compaction", text: "摘要", truncated: false });
+  test("compaction: the summary and its figures; a row from before keptTokens has none", () => {
+    const body = {
+      summary: "摘要",
+      firstKeptSeq: 1,
+      tokensBefore: 9,
+      replacedCount: 2,
+      trigger: "auto",
+      usageId: 1,
+    };
+    expect(checked(it("compaction", body))).toEqual({
+      seq: 3,
+      turn: T,
+      kind: "compaction",
+      text: "摘要",
+      truncated: false,
+      trigger: "auto",
+      beforeTokens: 9,
+      count: 2,
+      firstKeptSeq: 1,
+    });
+    const l = { ...lookup, compaction: () => ({ costUsd: 0.004, at: 1_800_000_000_000 }) };
+    expect(wire(it("compaction", { ...body, keptTokens: 5 }), l)).toMatchObject({
+      at: 1_800_000_000_000,
+      costUsd: 0.004,
+      keptTokens: 5,
+    });
   });
 
   test("wiki_index and a kind nobody knows are not sent", () => {

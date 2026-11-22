@@ -189,6 +189,8 @@ export interface CompactionBody {
   readonly replacedCount: number;
   readonly trigger: "manual" | "auto";
   readonly usageId: number;
+  /** About how many tokens the turns kept verbatim hold; rows written before it have none. */
+  readonly keptTokens?: number;
 }
 
 /** The wiki's page list as one context generation read it; replayed byte for byte after. */

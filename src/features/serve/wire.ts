@@ -30,6 +30,8 @@ export interface WireLookup {
   usage(usageId: number): UsageFigures | undefined;
   /** From a tool call's start to its end; undefined when it never started or has not ended. */
   duration(callId: string): number | undefined;
+  /** A compaction's request: what it cost and when it was sent. */
+  compaction(usageId: number): { costUsd: number; at: number } | undefined;
   /** An approval's settled state; undefined while pending or when there is no such approval. */
   decided(approvalId: string): Exclude<ApprovalState, "pending"> | undefined;
 }
@@ -44,6 +46,7 @@ export function wireLookup(db: Database): WireLookup {
   );
   const times = db.query("SELECT started_at AS s, ended_at AS e FROM tool_calls WHERE id = ?");
   const approval = db.query("SELECT state FROM approvals WHERE id = ?");
+  const request = db.query("SELECT cost_usd AS costUsd, at FROM usage WHERE id = ?");
   return {
     usage: (usageId) => {
       const row = usage.get(usageId) as (UsageFigures & { effort: string | null }) | null;
@@ -55,6 +58,8 @@ export function wireLookup(db: Database): WireLookup {
       const row = times.get(callId) as { s: number | null; e: number | null } | null;
       return row?.s == null || row.e == null ? undefined : Math.max(0, row.e - row.s);
     },
+    compaction: (usageId) =>
+      (request.get(usageId) as { costUsd: number; at: number } | null) ?? undefined,
     decided: (approvalId) => {
       const state = (approval.get(approvalId) as { state: ApprovalState } | null)?.state;
       return state === undefined || state === "pending" ? undefined : state;
@@ -185,8 +190,21 @@ export function toWire(item: Item, lookup: WireLookup): WireItem | undefined {
         code: item.body.code.slice(0, 64),
         ...(item.body.data === undefined ? {} : { data: wireData(item.body.data) }),
       };
-    case "compaction":
-      return { ...base, kind: "compaction", ...cut(item.body.summary, ITEM_TEXT_BYTES) };
+    case "compaction": {
+      const b = item.body;
+      const req = lookup.compaction(b.usageId);
+      return {
+        ...base,
+        kind: "compaction",
+        ...cut(b.summary, ITEM_TEXT_BYTES),
+        ...(req === undefined ? {} : { at: req.at, costUsd: req.costUsd }),
+        trigger: b.trigger,
+        beforeTokens: b.tokensBefore,
+        ...(b.keptTokens === undefined ? {} : { keptTokens: b.keptTokens }),
+        count: b.replacedCount,
+        firstKeptSeq: b.firstKeptSeq,
+      };
+    }
     default:
       return undefined;
   }
