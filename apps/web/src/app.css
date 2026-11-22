@@ -62,11 +62,75 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.msg-assistant-text pre.tool-code-box {
+/* The model's Markdown (components/Markdown.tsx): the prototype styles only p and inline code. */
+.msg-assistant-text > :is(pre, ul, ol, blockquote, .md-table, .md-heading, hr) {
   margin: 0 0 10px;
 }
-.msg-assistant-text pre.tool-code-box:last-child {
+.msg-assistant-text > :last-child {
   margin-bottom: 0;
+}
+.msg-assistant-text pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+}
+.msg-assistant-text :is(ul, ol) {
+  padding-left: 1.4em;
+}
+.msg-assistant-text ul {
+  list-style: disc;
+}
+.msg-assistant-text ol {
+  list-style: decimal;
+}
+.msg-assistant-text li p {
+  margin: 0;
+}
+.msg-assistant-text :is(li, blockquote) > :is(ul, ol) {
+  margin: 2px 0 0;
+}
+.msg-assistant-text .md-heading {
+  font-size: 1.05em;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.msg-assistant-text h3.md-heading {
+  font-size: 1.15em;
+}
+.msg-assistant-text blockquote {
+  padding-left: 10px;
+  border-left: 3px solid var(--glass-edge);
+  color: var(--muted-foreground);
+}
+.msg-assistant-text blockquote p {
+  margin: 0;
+}
+.msg-assistant-text hr {
+  border: 0;
+  border-top: 1px solid var(--glass-edge);
+}
+.msg-assistant-text a {
+  color: var(--status-active);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+.md-table {
+  overflow-x: auto;
+}
+.md-table table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.md-table :is(th, td) {
+  padding: 4px 8px;
+  border: 1px solid var(--glass-edge);
+  text-align: left;
+  white-space: nowrap;
+}
+.md-table th {
+  background: var(--muted);
+  font-weight: 600;
 }
 
 /*
