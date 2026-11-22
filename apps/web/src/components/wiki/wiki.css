@@ -1,0 +1,51 @@
+/* What the knowledge base shows beyond the prototype's scene 15 rules in styles.css. */
+
+.wiki-list-note {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--subtle-foreground);
+}
+
+.wiki-summary {
+  line-height: 1.6;
+}
+
+.wiki-summary .wiki-cite-pill {
+  margin: 0 4px;
+  vertical-align: baseline;
+}
+
+.wiki-assistant-mark {
+  color: var(--muted-foreground);
+}
+
+.wiki-record-gone {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.wiki-cite-pill:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wiki-cite-pill:disabled:hover {
+  background: var(--glass-control);
+  color: var(--muted-foreground);
+}
+
+.wiki-turn-text {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.wiki-turn-side p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
