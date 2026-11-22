@@ -19,7 +19,12 @@ import { composerBlocked, initial, localNow, reduce } from "./state.ts";
 
 /** Within this much of the end counts as at the bottom (rounding, a last line half shown). */
 const BOTTOM_PX = 24;
-const PING_MS = 10_000;
+/**
+ * 往返延遲 is measured all the time, for the top bar: on connecting, every PING_MS, and again when
+ * the status sheet opens or closes. Not more often: each status.get makes the local end total its budgets
+ * (its skills it reads at most once a minute).
+ */
+const PING_MS = 30_000;
 /** How long "from the next message" shows after a level is picked, as the prototype's toast. */
 const TOAST_MS = 2_600;
 
@@ -67,11 +72,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState(false);
-  // 往返延遲 is measured while the status sheet is open: on opening and every PING_MS. Not all
-  // the time, since each status.get makes the local end read its skills again.
   const live = state.connection === "open";
   useEffect(() => {
-    if (!sheet || !live) return;
+    if (!live) return;
     const ping = () => {
       const id = socket.send("status.get");
       if (id !== undefined) dispatch({ type: "pinged", id, at: now() });

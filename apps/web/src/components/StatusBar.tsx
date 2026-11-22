@@ -117,6 +117,13 @@ export function TopBar(props: {
         >
           <span className={`status-dot ${c.tone}`} />
           <span>{c.text}</span>
+          {/* Hidden from screen readers: the pill is a status region, and a figure changing every
+              half minute would be read out each time. The sheet says it too. */}
+          {c.tone === "ok" && props.state.rtt !== undefined ? (
+            <span className="mono conn-latency" aria-hidden="true">
+              {Math.round(props.state.rtt)} ms
+            </span>
+          ) : null}
           {props.state.connection === "auth_expired" ? (
             <button className="sg-btn sg-btn-sm" type="button" onClick={() => location.reload()}>
               重新登入

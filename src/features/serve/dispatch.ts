@@ -42,6 +42,8 @@ export const DROP = { auth: 4003, keys: 4004, flood: 4005 } as const;
 const QUEUE_FRAMES = 32;
 const RECONCILE_WAIT_MS = 5_000;
 const CONV_LIST = 500;
+/** How long status keeps the skill list it read (see skills()). */
+const SKILLS_TTL_MS = 60_000;
 
 export interface DispatchDeps {
   readonly db: Database;
@@ -98,6 +100,7 @@ export class Dispatch {
   readonly pending = new Map<string, string>();
   private readonly queues = new Map<string, Queue>();
   private readonly epoch: string;
+  private skillCache: { at: number; skills: NonNullable<WireStatus["skills"]> } | undefined;
 
   constructor(private readonly d: DispatchDeps) {
     this.epoch = store.readEpoch(d.db);
@@ -641,8 +644,22 @@ export class Dispatch {
     return message(this.d.hub, "status", body, re === undefined ? {} : { re });
   }
 
-  /** The / menu's skills, as the terminal's: a description is cut to what the protocol takes. */
+  /**
+   * The / menu's skills, as the terminal's: a description is cut to what the protocol takes.
+   * Read at most once per SKILLS_TTL_MS: every page asks for status every PING_MS to show its
+   * round trip, and a skill installed or edited may take that long to show. A minute, not the
+   * directory's mtime: editing a SKILL.md changes the file's, not the directory's.
+   */
   private async skills(): Promise<NonNullable<WireStatus["skills"]>> {
+    const now = this.d.now();
+    if (this.skillCache !== undefined && now - this.skillCache.at < SKILLS_TTL_MS)
+      return this.skillCache.skills;
+    const skills = await this.readSkills();
+    this.skillCache = { at: now, skills };
+    return skills;
+  }
+
+  private async readSkills(): Promise<NonNullable<WireStatus["skills"]>> {
     const { skills } = await loadSkillIndex(this.d.paths).catch(() => ({ skills: [] }));
     return skills
       .filter((s) => s.name.length <= ID_CHARS)

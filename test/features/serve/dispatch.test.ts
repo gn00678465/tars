@@ -75,6 +75,15 @@ interface Setup {
 
 let ids = 0;
 const CERT_EXPIRES = 1_900_000_000_000;
+/** A skill in the local end's skills directory, as tars install leaves it. */
+function skillIn(s: Setup, name: string, description: string): void {
+  mkdirSync(join(s.h.paths.skills, name), { recursive: true });
+  writeFileSync(
+    join(s.h.paths.skills, name, "SKILL.md"),
+    `---\nname: ${name}\ndescription: ${description}\n---\nbody\n`,
+  );
+}
+
 async function setup(extra: Omit<HarnessOptions, "selfCommand"> = {}): Promise<Setup> {
   const h = await engineHarness({ selfCommand: [fakeTars('echo "ran $*"')], ...extra });
   harnesses.push(h);
@@ -713,17 +722,10 @@ describe("Dispatch: snapshots", () => {
 
   test("status lists the skills for the / menu, local-only marked, and the certificate's expiry", async () => {
     const s = await setup();
+    skillIn(s, "demo", "長".repeat(400));
+    skillIn(s, "memory", "記憶");
     await s.open(CONN_A, "good");
     await s.msg(CONN_A, "hello", {});
-    const skill = (name: string, description: string) => {
-      mkdirSync(join(s.h.paths.skills, name), { recursive: true });
-      writeFileSync(
-        join(s.h.paths.skills, name, "SKILL.md"),
-        `---\nname: ${name}\ndescription: ${description}\n---\nbody\n`,
-      );
-    };
-    skill("demo", "長".repeat(400));
-    skill("memory", "記憶");
     const st = await s.msg(CONN_A, "status.get", {});
     const p = reply(s, CONN_A, st)!.p as {
       skills: { name: string; description: string; localOnly: boolean }[];
@@ -738,6 +740,27 @@ describe("Dispatch: snapshots", () => {
     expect(p.skills[0]!.description.endsWith("…")).toBe(true);
     expect(p.certExpiresAt).toBe(CERT_EXPIRES);
     allValid(s);
+  });
+
+  test("status reads the skills at most once a minute: one added shows on the next read", async () => {
+    const s = await setup();
+    skillIn(s, "demo", "示範");
+    await s.open(CONN_A, "good");
+    await s.msg(CONN_A, "hello", {});
+    const names = async () =>
+      (
+        (
+          reply(s, CONN_A, await s.msg(CONN_A, "status.get", {}))?.p as
+            | { skills: { name: string }[] }
+            | undefined
+        )?.skills ?? []
+      ).map((k) => k.name);
+    expect(await names()).toEqual(["demo"]);
+    skillIn(s, "memory", "記憶");
+    (s.hub.timers as ManualTimers).advance(59_000);
+    expect(await names()).toEqual(["demo"]);
+    (s.hub.timers as ManualTimers).advance(1_000);
+    expect(await names()).toEqual(["demo", "memory"]);
   });
 
   test("an unknown conversation is not_found; conv.list lists them", async () => {

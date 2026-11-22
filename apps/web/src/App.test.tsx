@@ -21,7 +21,7 @@ test("connects, asks for the list after hello, and shows what the relay says", a
       .last()
       .messages()
       .map((m) => m.kind),
-  ).toEqual(["hello", "conv.list", "models.get"]);
+  ).toEqual(["hello", "conv.list", "status.get", "models.get"]);
   await act(async () =>
     h.last().receive(server("relay.status", { online: true, localSince: 1_800_000_000_000 })),
   );
@@ -849,43 +849,56 @@ describe("the drawer and the status sheet hold the focus; Esc closes them", () =
   });
 });
 
-test("往返延遲: status.get while the sheet is open, timed to the status that answers it", async () => {
-  const h = socketHarness();
-  const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
-  await act(async () => h.last().ready());
-  const asked = () =>
-    h
-      .last()
-      .messages()
-      .filter((m) => m.kind === "status.get");
-  expect(asked()).toHaveLength(0);
-  await act(async () =>
-    (root.querySelector(".topbar-right .desktop-only") as HTMLButtonElement).click(),
-  );
-  const sheet = () => root.querySelector(".sheet-panel") as HTMLElement;
-  expect(asked()).toHaveLength(1);
-  expect(sheet().textContent).toContain("往返延遲量測中");
-  const status = {
-    now: 1,
-    providers: [],
-    pricesWarn: false,
-    pendingApprovals: 0,
-    turnRunning: false,
-    notify: "ok",
-  };
-  // A status nobody asked for (a broadcast) does not count.
-  await act(async () => h.advance(100));
-  await act(async () => h.last().receive(server("status", status)));
-  expect(sheet().textContent).toContain("往返延遲量測中");
-  await act(async () => h.advance(80));
-  await act(async () => h.last().receive(server("status", status, { re: asked()[0]?.id ?? "" })));
-  expect(sheet().textContent).toContain("往返延遲180 ms");
-  await act(async () => (root.querySelector('[aria-label="關閉"]') as HTMLButtonElement).click());
-  await act(async () =>
-    (root.querySelector(".topbar-right .desktop-only") as HTMLButtonElement).click(),
-  );
-  expect(asked()).toHaveLength(2);
-  unmount();
+test("往返延遲: measured from connecting, every half minute, and when the sheet opens; shown in the top bar", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    const h = socketHarness();
+    const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
+    await act(async () => h.last().ready());
+    await act(async () => h.last().receive(server("relay.status", { online: true })));
+    const asked = () =>
+      h
+        .last()
+        .messages()
+        .filter((m) => m.kind === "status.get");
+    const pill = () => root.querySelector(".conn-pill") as HTMLElement;
+    expect(asked()).toHaveLength(1);
+    expect(pill().querySelector(".conn-latency")).toBeNull();
+    const status = {
+      now: 1,
+      providers: [],
+      pricesWarn: false,
+      pendingApprovals: 0,
+      turnRunning: false,
+      notify: "ok",
+    };
+    // A status nobody asked for (a broadcast) does not count.
+    await act(async () => h.advance(100));
+    await act(async () => h.last().receive(server("status", status)));
+    expect(pill().querySelector(".conn-latency")).toBeNull();
+    await act(async () => h.advance(80));
+    await act(async () => h.last().receive(server("status", status, { re: asked()[0]?.id ?? "" })));
+    const latency = pill().querySelector(".conn-latency") as HTMLElement;
+    expect([pill().textContent, latency.getAttribute("aria-hidden")]).toEqual([
+      "在線180 ms",
+      "true",
+    ]);
+
+    await act(async () => void vi.advanceTimersByTime(29_999));
+    expect(asked()).toHaveLength(1);
+    await act(async () => void vi.advanceTimersByTime(1));
+    expect(asked()).toHaveLength(2);
+
+    await act(async () =>
+      (root.querySelector(".topbar-right .desktop-only") as HTMLButtonElement).click(),
+    );
+    expect(asked()).toHaveLength(3);
+    const sheet = root.querySelector(".sheet-panel") as HTMLElement;
+    expect(sheet.textContent).toContain("往返延遲180 ms");
+    unmount();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 describe("another model: chosen for a new conversation, or continuing one", () => {
