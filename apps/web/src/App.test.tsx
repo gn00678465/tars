@@ -1158,6 +1158,12 @@ describe("another model: chosen for a new conversation, or continuing one", () =
 
   test("the header names the model and provider; continuing waits for a message", async () => {
     const { root, unmount } = await ready(true);
+    // List entries name the model by its label, without the maker (1-04).
+    expect(
+      [...root.querySelectorAll(".conv-item .conv-meta span:first-child")].map(
+        (e) => e.textContent,
+      ),
+    ).toEqual(["Model A", "Model B", "接續自「甲」"]);
     const header = () => root.querySelector(".conv-header-bar") as HTMLElement;
     const fork = () => button(header(), "以另一個模型接續");
     // A new conversation: its model, and nothing to carry yet (9-06).

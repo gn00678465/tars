@@ -341,6 +341,10 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           drawerOpen={drawer && compact}
           onOpen={open}
           onCollapse={() => (compact ? setDrawer(false) : setCollapsed(true))}
+          now={tick}
+          modelName={(provider, id) =>
+            modelOf({ provider, id })?.label.replace(/^(Claude|OpenAI|Gemini) /, "") ?? id
+          }
           {...(cert === undefined ? {} : { cert })}
         />
         <div className="workspace">

@@ -2,7 +2,7 @@ import type { WireConv } from "@tars/protocol";
 import { useRef } from "react";
 import { Icon, Monolith } from "./Icon.tsx";
 import { useModal } from "./modal.ts";
-import { timeText } from "./time.ts";
+import { listTime } from "./time.ts";
 
 const titleOf = (c: WireConv) => (c.title === "" ? "（沒有標題）" : c.title);
 
@@ -24,6 +24,10 @@ export function ConversationList(props: {
   drawerOpen: boolean;
   onOpen: (conv: string | undefined) => void;
   onCollapse: () => void;
+  /** The page's clock, for 今天 and 昨天. */
+  now: number;
+  /** A model's short name for an entry: its label without the maker, else its id. */
+  modelName: (provider: string, id: string) => string;
   /** The local end's certificate, as the prototype's footer tag; absent until it is known. */
   cert?: { readonly tone: string; readonly text: string };
 }) {
@@ -100,8 +104,8 @@ export function ConversationList(props: {
                     {props.waiting.has(c.id) ? <span className="sg-tag wait">待核准</span> : null}
                   </div>
                   <div className="conv-meta">
-                    <span>{c.model}</span>
-                    <span className="num">{timeText(c.updatedAt)}</span>
+                    <span>{props.modelName(c.provider, c.model)}</span>
+                    <span className="num">{listTime(c.updatedAt, props.now)}</span>
                   </div>
                   {c.parentId === undefined ? null : (
                     <div className="conv-meta">
