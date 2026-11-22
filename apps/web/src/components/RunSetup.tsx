@@ -26,6 +26,9 @@ const NOTES: Readonly<Record<string, string>> = {
   max: "最高推理上限",
 };
 
+/** What a level is for, as the prototype says it; none for a level the page does not know. */
+export const effortNote = (level: string): string | undefined => NOTES[level];
+
 /** A level the page does not know is shown by its name. */
 export const effortName = (level: string) => NAMES[level] ?? level;
 

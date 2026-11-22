@@ -21,6 +21,7 @@ import {
   type EffortControl,
   EffortSheet,
   effortName,
+  effortNote,
   RunSetup,
 } from "./components/RunSetup.tsx";
 import { Thread } from "./components/Thread.tsx";
@@ -334,6 +335,22 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           },
         }
       : undefined;
+  /** /effort [level]: a level is picked as the control picks it; none opens the control. */
+  const effortCommand = (arg: string): string | undefined => {
+    if (effort === undefined) return undefined;
+    if (levels.length === 0) return "這個模型不支援推理強度";
+    if (effort.disabled !== undefined) return effort.disabled;
+    if (arg === "") {
+      effort.onOpen(true);
+      return undefined;
+    }
+    // The prototype's short form for medium.
+    const level = arg === "med" ? "medium" : arg;
+    if (!levels.includes(level))
+      return `不支援的推理強度「${arg}」，此模型可選：${levels.join("、")}`;
+    effort.onPick(level);
+    return undefined;
+  };
   const sendEffort =
     effort !== undefined && (effortPick !== undefined || movedFrom !== undefined)
       ? effortNow
@@ -597,24 +614,41 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                     ...(canCompact ? (["compact"] as const) : []),
                     ...(wiki.available ? (["wiki"] as const) : []),
                     ...(models === undefined ? [] : (["model"] as const)),
+                    ...(effort === undefined ? [] : (["effort"] as const)),
                     ...(["new", "cost", "help"] as const),
                   ] satisfies Builtin[]
                 }
+                {...(effort === undefined
+                  ? {}
+                  : {
+                      effort: {
+                        model: target?.label ?? nextLabel,
+                        levels,
+                        current: effortNow,
+                        ...(locked === undefined ? {} : { disabled: locked }),
+                        name: effortName,
+                        note: effortNote,
+                      },
+                    })}
                 onCommand={(name, arg) => {
-                  if (name === "wiki") return toWiki({ type: "slash", query: arg });
+                  if (name === "wiki") toWiki({ type: "slash", query: arg });
                   // Straight away, as the terminal's; the sheet says why when it cannot go, or
                   // holds what to keep when it is too long to send.
-                  if (name === "compact")
-                    return arg.length > COMPACT_FOCUS_CHARS || compactBlocked !== undefined
-                      ? setContextSheet({ focus: arg })
-                      : compactNow(arg === "" ? undefined : arg);
-                  if (name === "new") return open(undefined);
-                  if (name === "cost") return setSheet(true);
+                  else if (name === "compact")
+                    if (arg.length > COMPACT_FOCUS_CHARS || compactBlocked !== undefined)
+                      setContextSheet({ focus: arg });
+                    else compactNow(arg === "" ? undefined : arg);
+                  else if (name === "new") open(undefined);
+                  else if (name === "cost") setSheet(true);
+                  // The effort control's own pick and menu (14-16, 14-21).
+                  else if (name === "effort") return effortCommand(arg);
                   // As the model control: not while a turn runs or the local end is away.
-                  if (locked !== undefined) return;
+                  else if (locked !== undefined) return undefined;
                   // Nothing to carry yet: the composer's model menu switches in place.
-                  if (source !== undefined) return setPicking("continue");
-                  return phone ? pickModel() : setModelOpen(true);
+                  else if (source !== undefined) setPicking("continue");
+                  else if (phone) pickModel();
+                  else setModelOpen(true);
+                  return undefined;
                 }}
                 {...(models === undefined
                   ? {}

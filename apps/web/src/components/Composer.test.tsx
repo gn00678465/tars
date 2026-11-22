@@ -150,7 +150,7 @@ async function composer(skills: readonly Skill[] | undefined, builtins?: readonl
       skills={skills}
       onSend={(t) => sent.push(t)}
       onAbort={() => undefined}
-      onCommand={(c, arg) => commands.push(arg === "" ? c : `${c} ${arg}`)}
+      onCommand={(c, arg) => void commands.push(arg === "" ? c : `${c} ${arg}`)}
       {...(builtins === undefined ? {} : { builtins })}
     />,
   );
@@ -201,6 +201,26 @@ test("/ opens the menu: built-ins, the skills, local-only ones marked and not ch
   // No fake items: the terminal's /effort, /compact have nothing to run here yet; /wiki only
   // once the local end answered for its knowledge base.
   expect(c.root.textContent).not.toMatch(/\/(effort|compact|wiki)/);
+});
+
+test("14-04, 14-05: all six built-ins once offered, each that takes words with what goes after it", async () => {
+  const c = await composer(SKILLS, ["compact", "wiki", "model", "effort", "new", "cost", "help"]);
+  await c.type("/");
+  const rows = [...c.root.querySelectorAll<HTMLElement>("[role=option]")]
+    .slice(0, 7)
+    .map((o) => [
+      o.querySelector(".slash-cmd")?.textContent,
+      o.querySelector(".slash-args")?.textContent,
+    ]);
+  expect(rows).toEqual([
+    ["/compact", "[焦點]"],
+    ["/wiki", "[關鍵字]"],
+    ["/model", undefined],
+    ["/effort", "<等級>"],
+    ["/new", undefined],
+    ["/cost", undefined],
+    ["/help", undefined],
+  ]);
 });
 
 test("arrows skip the local-only one; Enter on a skill puts it in the box, then sends the terminal's wording", async () => {

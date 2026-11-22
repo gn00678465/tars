@@ -1,6 +1,15 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { TEXT_BYTES } from "@tars/protocol";
-import { type Builtin, menuFor, type Option, type Skill, slashOf, TAKES_ARG } from "./slash.ts";
+import { Icon } from "./Icon.tsx";
+import {
+  type Builtin,
+  type EffortMenu,
+  menuFor,
+  type Option,
+  type Skill,
+  slashOf,
+  TAKES_ARG,
+} from "./slash.ts";
 
 const n = (v: number) => v.toLocaleString("en-US");
 export const tooLong = (bytes: number) =>
@@ -20,10 +29,15 @@ export function Composer(props: {
   skills: readonly Skill[] | undefined;
   onSend: (text: string) => void;
   onAbort: () => void;
-  /** A built-in to run; `arg` is what follows its name (/wiki's keywords). */
-  onCommand: (name: Exclude<Builtin, "help">, arg: string) => void;
-  /** The built-ins this page can run now; all but /wiki and /compact when absent. */
+  /**
+   * A built-in to run; `arg` is what follows its name (/wiki's keywords). What it gives back is
+   * why it did not run, said under the box with the line kept.
+   */
+  onCommand: (name: Exclude<Builtin, "help">, arg: string) => string | undefined;
+  /** The built-ins this page can run now; all but /wiki, /compact and /effort when absent. */
   builtins?: readonly Builtin[];
+  /** /effort's levels, for the menu after `/effort `. */
+  effort?: EffortMenu;
   /** Beside the send button: the model and effort control; absent from an older local end. */
   setup?: ReactNode;
 }) {
@@ -40,7 +54,9 @@ export function Composer(props: {
   // Our own turn says so with the stop button; another one's (another conversation's, or one
   // being sent) says why the send button is off.
   const waitReason = props.canAbort ? undefined : props.busy;
-  const menu = closed || off ? undefined : menuFor(text, props.skills, props.builtins);
+  const menu =
+    closed || off ? undefined : menuFor(text, props.skills, props.builtins, props.effort);
+  const levels = menu?.some((o) => o.group.startsWith("選擇推理強度")) === true;
   // A press outside the menu, the text box and the / button closes the menu (14-14), as Esc.
   const menuBox = useRef<HTMLDivElement>(null);
   const slashButton = useRef<HTMLButtonElement>(null);
@@ -66,12 +82,14 @@ export function Composer(props: {
   };
   const run = (name: Builtin, arg = "") => {
     if (name === "help") return change("/");
-    change("");
-    props.onCommand(name, arg);
+    const why = props.onCommand(name, arg);
+    if (why === undefined) change("");
+    else setRefused(why);
   };
   const apply = (o: Option) => {
     if (!o.enabled) return;
-    if (o.builtin && !TAKES_ARG.has(o.name as Builtin)) run(o.name as Builtin);
+    if (o.level !== undefined) run("effort", o.level);
+    else if (o.builtin && !TAKES_ARG.has(o.name as Builtin)) run(o.name as Builtin);
     else change(`/${o.name} `);
   };
   const send = () => {
@@ -95,7 +113,7 @@ export function Composer(props: {
     // From the index React holds, not this render's: keys can come faster than renders.
     if (n > 0) setIndex((i) => (Math.min(i, n - 1) + by + n) % n);
   };
-  const optionId = (o: Option) => `slash-opt-${o.name}`;
+  const optionId = (o: Option) => `slash-opt-${o.name.replace(/\s/g, "-")}`;
 
   return (
     <form
@@ -139,7 +157,11 @@ export function Composer(props: {
                     role="option"
                     aria-selected={o === selected}
                     aria-disabled={!o.enabled}
-                    title={o.enabled ? o.description : "此 skill 僅限在本機終端 tars claude 執行"}
+                    title={
+                      o.localOnly === true
+                        ? "此 skill 僅限在本機終端 tars claude 執行"
+                        : o.description
+                    }
                     tabIndex={-1}
                     // Keep the focus in the text box.
                     onMouseDown={(e) => e.preventDefault()}
@@ -149,14 +171,29 @@ export function Composer(props: {
                       <span className="slash-cmd">/{o.name}</span>
                       <span className="slash-desc">{o.description}</span>
                     </div>
-                    {o.enabled ? null : <span className="sg-tag">僅限本機</span>}
+                    {o.localOnly === true ? (
+                      <span className="sg-tag">僅限本機</span>
+                    ) : o.args === undefined && o.checked !== true ? null : (
+                      <span className="slash-item-end">
+                        {o.args === undefined ? null : (
+                          <span className="mono slash-args">{o.args}</span>
+                        )}
+                        {o.checked === true ? <Icon name="check" /> : null}
+                      </span>
+                    )}
                   </button>
                 </div>
               ))
             )}
           </div>
           <div className="slash-menu-foot">
-            <span>共 {menu.length} 項（往下捲動檢視 Skills 與本機限定）</span>
+            <span>
+              {!levels
+                ? `共 ${menu.length} 項（往下捲動檢視 Skills 與本機限定）`
+                : enabled.length > 0
+                  ? "選取後自下一則訊息生效"
+                  : "沒有可選的推理強度"}
+            </span>
             <span>↑↓ 選擇 · Tab/Enter 套用 · Esc 關閉</span>
           </div>
         </div>

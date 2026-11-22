@@ -3,14 +3,19 @@ import { skillInvocationText, type WireStatus } from "@tars/protocol";
 export type Skill = NonNullable<WireStatus["skills"]>[number];
 
 /**
- * The terminal's built-ins that have a page here, in the prototype's order and words. /effort has
- * no message to the local end yet, so it is not offered at all. /compact and /wiki take words
- * after a space (what to keep, the keywords), so picking one from the menu leaves it in the box.
+ * The terminal's built-ins that have a page here, in the prototype's order and words. /compact,
+ * /wiki and /effort take words after a space (what to keep, the keywords, a level), so picking
+ * one from the menu leaves it in the box; `args` says what goes there (14-05).
  */
 export const BUILTINS = [
-  { name: "compact", description: "壓縮早期對話前綴，保留近期原文（送出一次模型請求）" },
-  { name: "wiki", description: "唯讀瀏覽個人知識庫與雙軌搜尋原始對話" },
+  {
+    name: "compact",
+    description: "壓縮早期對話前綴，保留近期原文（送出一次模型請求）",
+    args: "[焦點]",
+  },
+  { name: "wiki", description: "唯讀瀏覽個人知識庫與雙軌搜尋原始對話", args: "[關鍵字]" },
   { name: "model", description: "以另一個模型接續目前對話（開新對話）" },
+  { name: "effort", description: "切換推理強度或展開選單（預設中）", args: "<等級>" },
   { name: "new", description: "開啟新對話（模型與推理強度在輸入框選）" },
   { name: "cost", description: "檢視三家 Provider 花費與模型清單狀態" },
   { name: "help", description: "列出這裡能用的指令與 skills" },
@@ -18,23 +23,43 @@ export const BUILTINS = [
 
 export type Builtin = (typeof BUILTINS)[number]["name"];
 
-export const TAKES_ARG: ReadonlySet<Builtin> = new Set(["compact", "wiki"]);
+export const TAKES_ARG: ReadonlySet<Builtin> = new Set(["compact", "wiki", "effort"]);
 
 /**
- * /wiki only once the local end answered wiki.status, /compact once it sent conv.context: an
- * older one can do neither.
+ * /wiki only once the local end answered wiki.status, /compact once it sent conv.context,
+ * /effort once it lists levels: an older one can do none of them.
  */
 const ALL: readonly Builtin[] = BUILTINS.map((b) => b.name).filter(
-  (n) => n !== "wiki" && n !== "compact",
+  (n) => n !== "wiki" && n !== "compact" && n !== "effort",
 );
 
 export interface Option {
-  readonly group: "內建指令" | "Skills" | "僅限本機（tars claude）";
+  readonly group: string;
   readonly name: string;
   readonly description: string;
   readonly enabled: boolean;
   readonly builtin: boolean;
+  /** What goes after the name, or a level's name. */
+  readonly args?: string;
+  readonly localOnly?: boolean;
+  /** An effort level: picking it sets the level, as the effort control does. */
+  readonly level?: string;
+  /** The level the next message goes with. */
+  readonly checked?: boolean;
 }
+
+/** /effort's second menu (14-16): the levels of the model the next message goes to. */
+export interface EffortMenu {
+  readonly model: string;
+  readonly levels: readonly string[];
+  readonly current: string | undefined;
+  /** Why the level cannot change now (a turn runs, the local end is away). */
+  readonly disabled?: string;
+  readonly name: (level: string) => string;
+  readonly note: (level: string) => string | undefined;
+}
+
+const EFFORT = "/effort ";
 
 /** Every letter of the query, in order, somewhere in the name or description (the prototype's). */
 function matches(query: string, target: string): boolean {
@@ -51,7 +76,10 @@ export function menuFor(
   text: string,
   skills: readonly Skill[] | undefined,
   offered: readonly Builtin[] = ALL,
+  effort?: EffortMenu,
 ): Option[] | undefined {
+  if (effort !== undefined && offered.includes("effort") && text.startsWith(EFFORT))
+    return effortMenu(text.slice(EFFORT.length).trim(), effort);
   if (!text.startsWith("/") || text.startsWith("//") || /\s/.test(text)) return undefined;
   const query = text.slice(1);
   const all: Option[] = [
@@ -72,9 +100,37 @@ export function menuFor(
         description: s.description,
         enabled: false,
         builtin: false,
+        localOnly: true,
       })),
   ];
   return all.filter((o) => matches(query, o.name) || matches(query, o.description));
+}
+
+function effortMenu(query: string, e: EffortMenu): Option[] {
+  const group = `選擇推理強度（${e.model}）`;
+  // 14-21: said, and nothing to pick.
+  if (e.levels.length === 0)
+    return [
+      {
+        group,
+        name: "effort",
+        description: "這個模型不支援推理強度",
+        enabled: false,
+        builtin: true,
+      },
+    ];
+  return e.levels
+    .filter((l) => matches(query, l) || matches(query, e.name(l)))
+    .map((l) => ({
+      group,
+      name: `effort ${l}`,
+      description: e.disabled ?? e.note(l) ?? "",
+      args: e.name(l),
+      enabled: e.disabled === undefined,
+      builtin: true,
+      level: l,
+      checked: l === e.current,
+    }));
 }
 
 export type Slash =

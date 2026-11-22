@@ -1671,6 +1671,132 @@ describe("effort: the level beside the model, its menu, and what the message car
     expect((root.querySelector(".effort-toast") as HTMLElement).hidden).toBe(false);
     unmount();
   });
+
+  /** The composer's text box, typed into and keyed as the owner does. */
+  const box = (root: HTMLElement) => {
+    const area = root.querySelector("textarea") as HTMLTextAreaElement;
+    const type = (value: string) =>
+      act(async () => {
+        // oxlint-disable-next-line typescript/unbound-method
+        const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+        set?.call(area, value);
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    const press = (key: string) =>
+      act(async () => {
+        area.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      });
+    const rows = () =>
+      [...root.querySelectorAll<HTMLElement>(".slash-item")].map((b) => ({
+        cmd: b.querySelector(".slash-cmd")?.textContent,
+        args: b.querySelector(".slash-args")?.textContent,
+        checked: b.querySelector("svg") !== null,
+        off: b.getAttribute("aria-disabled") === "true",
+      }));
+    const label = () => root.querySelector(".slash-group-label")?.textContent;
+    const foot = () => root.querySelector(".slash-menu-foot span")?.textContent;
+    const said = () => root.querySelector(".composer-inline-err")?.textContent;
+    return { area, type, press, rows, label, foot, said };
+  };
+
+  test("/effort in the menu, with what goes after it; `/effort ` lists the levels, the one in use checked", async () => {
+    const { root, seg, openConv, send, submitted, unmount } = await ready();
+    await openConv("甲");
+    const b = box(root);
+    await b.type("/");
+    expect(b.rows().find((r) => r.cmd === "/effort")).toEqual({
+      cmd: "/effort",
+      args: "<等級>",
+      checked: false,
+      off: false,
+    });
+    // Picked from the menu, it opens the second menu.
+    await b.type("/eff");
+    await b.press("Enter");
+    expect(b.area.value).toBe("/effort ");
+    expect(b.label()).toBe("選擇推理強度（Model A）");
+    expect(b.rows()).toEqual([
+      { cmd: "/effort low", args: "低", checked: false, off: false },
+      { cmd: "/effort medium", args: "中", checked: false, off: false },
+      { cmd: "/effort high", args: "高", checked: true, off: false },
+    ]);
+    expect(b.foot()).toBe("選取後自下一則訊息生效");
+    // Narrowed by the level's name or its word; Enter picks it as the effort control does.
+    await b.type("/effort 低");
+    expect(b.rows().map((r) => r.cmd)).toEqual(["/effort low"]);
+    await b.press("Enter");
+    expect(b.area.value).toBe("");
+    expect(seg()?.textContent).toBe("推理低");
+    const toast = root.querySelector(".effort-toast") as HTMLElement;
+    expect([toast.hidden, toast.textContent]).toEqual([false, "下一則訊息起生效"]);
+    await send("再想想");
+    expect(submitted()).toMatchObject({ conv: "conv-1", p: { text: "再想想", effort: "low" } });
+    unmount();
+  });
+
+  test("/effort with a level the model lacks says which it takes and keeps the line; with none it opens the control", async () => {
+    const { root, seg, menu, openConv, unmount } = await ready();
+    await openConv("甲");
+    const b = box(root);
+    await b.type("/effort max");
+    expect(b.rows()).toEqual([]);
+    await b.press("Enter");
+    expect(b.said()).toBe("不支援的推理強度「max」，此模型可選：low、medium、high");
+    expect(b.area.value).toBe("/effort max");
+    expect(seg()?.textContent).toBe("推理高");
+    await b.type("/effort ");
+    await b.press("Escape");
+    await b.press("Enter");
+    expect(b.area.value).toBe("");
+    expect(seg()?.getAttribute("aria-expanded")).toBe("true");
+    expect(menu()?.querySelectorAll("[role=menuitemradio]")).toHaveLength(3);
+    unmount();
+  });
+
+  test("a model that takes no level: the second menu says so and has nothing to pick (14-21)", async () => {
+    const { root, openConv, unmount } = await ready();
+    await openConv("丙");
+    const b = box(root);
+    await b.type("/effort ");
+    expect(b.label()).toBe("選擇推理強度（Model C）");
+    expect(b.rows()).toEqual([{ cmd: "/effort", args: undefined, checked: false, off: true }]);
+    expect(root.querySelector(".slash-desc")?.textContent).toBe("這個模型不支援推理強度");
+    expect(b.foot()).toBe("沒有可選的推理強度");
+    await b.press("Enter");
+    expect(b.said()).toBe("這個模型不支援推理強度");
+    unmount();
+  });
+
+  test("while a turn runs, the levels are listed but cannot be picked, and say why", async () => {
+    const { h, root, seg, openConv, unmount } = await ready();
+    await openConv("甲");
+    await act(async () =>
+      h.last().receive(server("turn", { turn: "t-1", state: "started" }, { conv: "conv-1" })),
+    );
+    const b = box(root);
+    await b.type("/effort ");
+    expect(b.rows().map((r) => r.off)).toEqual([true, true, true]);
+    expect(root.querySelector(".slash-desc")?.textContent).toBe("回合結束後才能改");
+    await b.type("/effort low");
+    await b.press("Escape");
+    await b.press("Enter");
+    expect(b.said()).toBe("回合結束後才能改");
+    expect(seg()?.textContent).toBe("推理高");
+    unmount();
+  });
+
+  test("a phone: /effort alone opens the level sheet", async () => {
+    asPhone();
+    const { root, openConv, unmount } = await ready();
+    await openConv("甲");
+    const b = box(root);
+    await b.type("/effort ");
+    await b.press("Escape");
+    await b.press("Enter");
+    const sheet = root.querySelector("[aria-labelledby=effort-sheet-title]") as HTMLElement;
+    expect(sheet.querySelector("h2")?.textContent).toBe("選擇推理強度（Model A）");
+    unmount();
+  });
 });
 
 describe("the model menu: spending by provider, each model's window and levels, a menu on a desktop", () => {

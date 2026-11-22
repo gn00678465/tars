@@ -287,3 +287,11 @@
   font-size: 12px;
   color: var(--subtle-foreground);
 }
+
+/* A level's name and the check of the one in use sit together at the row's end. */
+.slash-item-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
