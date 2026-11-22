@@ -1175,6 +1175,12 @@ describe("conv.compact: the terminal's /compact from a page", () => {
     await s.msg(CONN_A, "conv.compact", {}, { conv });
     const again = await s.msg(CONN_B, "conv.compact", {}, { conv });
     expect(reason(reply(s, CONN_B, again))).toBe("busy");
+    // A page that reloads meanwhile sees it under way, though it has no turn to show.
+    const open = await s.msg(CONN_B, "conv.open", {}, { conv });
+    expect(reply(s, CONN_B, open)?.p).toMatchObject({ compacting: true });
+    expect(
+      (reply(s, CONN_B, open)?.p as { running?: unknown } | undefined)?.running,
+    ).toBeUndefined();
     const turn = await s.msg(CONN_B, "turn.submit", { requestId: "r-x", text: "hi" }, { conv });
     expect(reason(reply(s, CONN_B, turn))).toBe("busy");
     s.d.current?.controller.abort();
@@ -1192,6 +1198,10 @@ describe("conv.compact: the terminal's /compact from a page", () => {
     expect(reply(s, CONN_B, stop)?.kind).toBe("ack");
     await done(s);
     expect(states(s, CONN_A)).toEqual(["started", "aborted"]);
+    const after = await s.msg(CONN_B, "conv.open", {}, { conv });
+    expect(
+      (reply(s, CONN_B, after)?.p as { compacting?: true } | undefined)?.compacting,
+    ).toBeUndefined();
     expect(items()).toBe(before);
     expect(s.db.query("SELECT state FROM turns WHERE kind = 'compaction'").all()).toEqual([
       { state: "aborted" },

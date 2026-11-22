@@ -33,13 +33,7 @@ export const wireData = z
   .refine((d) => Object.keys(d).length <= DATA_KEYS, "too many keys");
 
 /** What a running turn is doing, for the page's status line. */
-export const PHASES = [
-  "thinking",
-  "replying",
-  "running_script",
-  "waiting_approval",
-  "compacting",
-] as const;
+export const PHASES = ["thinking", "replying", "running_script", "waiting_approval"] as const;
 export const wirePhase = z.enum(PHASES);
 
 /** Why a tool call was refused without running: the page names each. */

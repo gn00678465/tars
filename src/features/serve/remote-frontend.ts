@@ -92,6 +92,8 @@ export class RemoteFrontend implements Frontend {
   running = "";
   /** What the turn is doing now, for the status line and a snapshot. */
   phase: Phase | undefined;
+  /** A compaction of this conversation is under way, for a snapshot: it has no phase. */
+  compacting = false;
   /** After turn_end: the page has cleared its status line, and nothing may bring it back. */
   private ended = false;
   /** A step's calls come all at once, then run one by one: those without a result yet. */
@@ -155,6 +157,7 @@ export class RemoteFrontend implements Frontend {
       case "turn_start": {
         this.convId = e.convId;
         this.turnId = e.turnId;
+        this.compacting = false;
         this.running = "";
         this.onTurnStart(e.turnId);
         broadcast(this.hub, () =>
@@ -187,7 +190,8 @@ export class RemoteFrontend implements Frontend {
         this.flush();
         if (e.item.kind === "assistant") this.running = "";
         this.item(e.item);
-        if (e.item.kind === "tool_call") {
+        if (e.item.kind === "compaction") this.compacting = false;
+        else if (e.item.kind === "tool_call") {
           this.openCalls.add(e.item.body.callId);
           this.setPhase("running_script");
         } else if (e.item.kind === "tool_result") {
@@ -197,6 +201,9 @@ export class RemoteFrontend implements Frontend {
         }
         return;
       case "notice":
+        if (e.code === "compact_start") this.compacting = true;
+        else if (e.code === "compact_failed" || e.code === "compact_skipped")
+          this.compacting = false;
         this.toSubscribed(() =>
           message(
             this.hub,
@@ -232,6 +239,7 @@ export class RemoteFrontend implements Frontend {
         // The end itself clears the page's status line; no phase follows it.
         this.phase = undefined;
         this.ended = true;
+        this.compacting = false;
         broadcast(this.hub, () =>
           message(
             this.hub,

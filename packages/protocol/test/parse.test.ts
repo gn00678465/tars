@@ -300,13 +300,19 @@ describe("batch 4: every new field optional, each bounded", () => {
     expect(item({ ...ITEMS.compaction, trigger: "cron" })).toBe("bad_message");
   });
 
-  test("a turn's phase: one of five, as its own message and in a snapshot's running turn", () => {
+  test("a turn's phase: one of four, as its own message and in a snapshot's running turn", () => {
     expect(server("turn.phase", { turn: ID, phase: "waiting_approval" }, { conv: ID })).toBe("ok");
     expect(server("turn.phase", { turn: ID, phase: "sleeping" })).toBe("bad_message");
     const snapshot = (running: object) =>
       server("conv.snapshot", { epoch: "ab".repeat(16), items: [], more: false, running });
-    expect(snapshot({ turn: ID, text: "", truncated: false, phase: "compacting" })).toBe("ok");
-    expect(snapshot({ turn: ID, text: "", truncated: false, phase: "x" })).toBe("bad_message");
+    expect(snapshot({ turn: ID, text: "", truncated: false, phase: "replying" })).toBe("ok");
+    // A compaction has no turn the page knows: it is the snapshot's compacting, not a phase.
+    expect(snapshot({ turn: ID, text: "", truncated: false, phase: "compacting" })).toBe(
+      "bad_message",
+    );
+    const bare = { epoch: "ab".repeat(16), items: [], more: false };
+    expect(server("conv.snapshot", { ...bare, compacting: true })).toBe("ok");
+    expect(server("conv.snapshot", { ...bare, compacting: false })).toBe("bad_message");
   });
 
   test("approvals: when and which connection decided; already_decided says what", () => {

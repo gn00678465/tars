@@ -391,6 +391,8 @@ export class Dispatch {
     const c = this.current;
     const live =
       c?.frontend.convId === conv.id && c.frontend.turnId !== undefined ? c.frontend : undefined;
+    const compacting =
+      m.p.before === undefined && c?.frontend.convId === conv.id && c.frontend.compacting;
     const running =
       live === undefined || m.p.before !== undefined
         ? undefined
@@ -426,6 +428,7 @@ export class Dispatch {
           items: kept.toReversed(),
           more,
           ...(running === undefined ? {} : { running }),
+          ...(compacting ? { compacting: true as const } : {}),
         },
         { conv: conv.id, re: m.id },
       ),
@@ -477,6 +480,8 @@ export class Dispatch {
     const controller = new AbortController();
     const frontend = new RemoteFrontend(this.d.hub, conn, m.id, () => undefined);
     frontend.convId = m.conv;
+    // From the ack: a page that reloads before the request goes out still sees it.
+    frontend.compacting = true;
     const current: Current = { requestId: m.id, convId: m.conv, frontend, controller };
     this.current = current;
     this.d.changed();
@@ -597,6 +602,9 @@ export class Dispatch {
     const frontend = new RemoteFrontend(this.d.hub, conn, requestId, () =>
       this.pending.delete(requestId),
     );
+    // An existing conversation is known now: the compaction a turn may run before it starts
+    // speaks to the pages that have it open (compact_start, a snapshot's compacting).
+    if (conv !== undefined) frontend.convId = conv.id;
     const current: Current = { requestId, convId: conv?.id, frontend, controller };
     this.current = current;
     this.d.changed();

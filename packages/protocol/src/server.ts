@@ -68,6 +68,11 @@ export const serverMessage = z.discriminatedUnion("kind", [
       items: z.array(wireItem).max(SNAPSHOT_ITEMS),
       more: z.boolean(),
       running: wireRunning.optional(),
+      /**
+       * A compaction of this conversation is under way: one the owner asked for, or the one a
+       * turn runs before it starts. It has no turn the page knows, so it is not a phase.
+       */
+      compacting: z.literal(true).optional(),
     }),
   ),
   envelope(

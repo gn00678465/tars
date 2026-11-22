@@ -389,3 +389,69 @@ describe("RemoteFrontend: the turn's phase", () => {
     void waiting;
   });
 });
+
+describe("RemoteFrontend: a compaction under way, and a decision taken but not yet written", () => {
+  test("compact_start sets it, for the conversation's pages; the item, a failure or the turn clears it", () => {
+    const { hub, fe } = setup();
+    ready(hub, CONN_B, CONV);
+    // An existing conversation: dispatch sets it before the turn starts.
+    fe.convId = CONV;
+    fe.emit({ type: "notice", code: "compact_start" });
+    expect(fe.compacting).toBe(true);
+    expect(hub.to(CONN_B, "notice").map((m) => (m.p as { code: string }).code)).toEqual([
+      "compact_start",
+    ]);
+    fe.emit({ type: "notice", code: "compact_failed", data: { reason: "bad_request" } });
+    expect(fe.compacting).toBe(false);
+    fe.emit({ type: "notice", code: "compact_start" });
+    start(fe);
+    expect(fe.compacting).toBe(false);
+  });
+
+  test("a late decide while the first is carried out, and after the wait ends but before the row: told what and that it was another", async () => {
+    const { hub, fe } = setup();
+    const record = approvalRecord();
+    const answer = fe.askApproval(record, new AbortController().signal);
+    const decide = (conn: string, id: string) =>
+      fe.decide(
+        conn,
+        {
+          v: PROTOCOL_VERSION,
+          id,
+          kind: "approval.decide",
+          p: { approvalId: record.id, decision: "denied", hash: record.hash },
+        },
+        (m) => hub.send(conn, m),
+      );
+    const first = fe.decide(
+      CONN_A,
+      {
+        v: PROTOCOL_VERSION,
+        id: "d-a",
+        kind: "approval.decide",
+        p: { approvalId: record.id, decision: "approved", hash: record.hash },
+      },
+      (m) => hub.send(CONN_A, m),
+    );
+    const nackOf = (re: string) => hub.to(CONN_B).find((m) => m.re === re)?.p;
+    await decide(CONN_B, "d-b1");
+    expect(nackOf("d-b1")).toEqual({
+      reason: "already_decided",
+      state: "approved",
+      source: "other_device",
+    });
+    await first;
+    expect(await answer).toBe("approved");
+    // The wait is over; the loop has not written the row yet (the stub lookup knows nothing).
+    expect(fe.awaitingApproval).toBe(false);
+    await decide(CONN_B, "d-b2");
+    expect(nackOf("d-b2")).toEqual({
+      reason: "already_decided",
+      state: "approved",
+      source: "other_device",
+    });
+    // The device that decided, asking again, is told it was this one.
+    await decide(CONN_A, "d-a2");
+    expect(hub.to(CONN_A).find((m) => m.re === "d-a2")?.p).toMatchObject({ source: "this" });
+  });
+});
