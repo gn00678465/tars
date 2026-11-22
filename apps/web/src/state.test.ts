@@ -435,3 +435,35 @@ describe("state: the relay and the local end", () => {
     expect(composerBlocked(s)).toBe("登入已過期，請重新整理");
   });
 });
+
+test("往返延遲 belongs to its connection: a drop clears it, and a stale answer does not time", () => {
+  const status = server(
+    "status",
+    {
+      now: 1,
+      providers: [],
+      pricesWarn: false,
+      pendingApprovals: 0,
+      turnRunning: false,
+      notify: "ok",
+    },
+    { re: "c-9" },
+  );
+  const timed = run([
+    { type: "connection", connection: "open" },
+    { type: "pinged", id: "c-9", at: 900 },
+    { type: "message", m: status, at: 1150 },
+  ]);
+  expect(timed.rtt).toBe(250);
+  expect(timed.ping).toBeUndefined();
+  const dropped = run(
+    [
+      { type: "pinged", id: "c-10", at: 1200 },
+      { type: "connection", connection: "offline" },
+      { type: "connection", connection: "open" },
+      { type: "message", m: { ...status, re: "c-10" }, at: 9000 },
+    ],
+    timed,
+  );
+  expect(dropped.rtt).toBeUndefined();
+});

@@ -53,6 +53,13 @@ export interface State {
   readonly status?: WireStatus;
   /** The page's monotonic clock when status arrived, to count on from status.now. */
   readonly statusAt?: number;
+  /** A status.get waiting for its status: its id and when it went. */
+  readonly ping?: { readonly id: string; readonly at: number };
+  /**
+   * 往返延遲 in ms: status.get to its status, the whole way from this page through the relay to
+   * the local end and back. Not the model's latency. Kept for this connection only.
+   */
+  readonly rtt?: number;
   readonly convs: readonly WireConv[];
   /** conv.list.result came at least once: an empty list is empty, not still loading. */
   readonly listed?: boolean;
@@ -76,6 +83,7 @@ export type Event =
   | { readonly type: "message"; readonly m: ServerMessage; readonly at: number }
   | { readonly type: "open_conv"; readonly conv: string | undefined }
   | { readonly type: "submitted"; readonly requestId: string }
+  | { readonly type: "pinged"; readonly id: string; readonly at: number }
   | {
       readonly type: "submit_result";
       readonly requestId: string;
@@ -157,7 +165,9 @@ function message(s: State, m: ServerMessage, at: number): State {
         ? fresh(s, m.p.epoch)
         : { ...s, epoch: m.p.epoch };
     case "status":
-      return { ...s, status: m.p, statusAt: at };
+      return s.ping !== undefined && m.re === s.ping.id
+        ? { ...withoutKeys(s, "ping"), status: m.p, statusAt: at, rtt: at - s.ping.at }
+        : { ...s, status: m.p, statusAt: at };
     case "relay.status": {
       const since = m.p.localSince;
       const changed = since !== undefined && s.localSince !== undefined && since !== s.localSince;
@@ -315,7 +325,8 @@ export function reduce(s: State, e: Event): State {
       // message gives a card's state, only the pending ones come again after hello.
       const back = e.connection === "open" && s.connection !== "open";
       return {
-        ...s,
+        // A measurement belongs to the connection it was made on.
+        ...(e.connection === "open" ? s : withoutKeys(s, "ping", "rtt")),
         connection: e.connection,
         ...(back
           ? {
@@ -330,6 +341,8 @@ export function reduce(s: State, e: Event): State {
     }
     case "message":
       return message(s, e.m, e.at);
+    case "pinged":
+      return { ...s, ping: { id: e.id, at: e.at } };
     case "open_conv": {
       const base = withoutKeys(
         { ...s, items: [], more: false },

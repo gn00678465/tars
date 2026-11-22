@@ -847,3 +847,42 @@ describe("the drawer and the status sheet hold the focus; Esc closes them", () =
     unmount();
   });
 });
+
+test("往返延遲: status.get while the sheet is open, timed to the status that answers it", async () => {
+  const h = socketHarness();
+  const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
+  await act(async () => h.last().ready());
+  const asked = () =>
+    h
+      .last()
+      .messages()
+      .filter((m) => m.kind === "status.get");
+  expect(asked()).toHaveLength(0);
+  await act(async () =>
+    (root.querySelector(".topbar-right .desktop-only") as HTMLButtonElement).click(),
+  );
+  const sheet = () => root.querySelector(".sheet-panel") as HTMLElement;
+  expect(asked()).toHaveLength(1);
+  expect(sheet().textContent).toContain("往返延遲量測中");
+  const status = {
+    now: 1,
+    providers: [],
+    pricesWarn: false,
+    pendingApprovals: 0,
+    turnRunning: false,
+    notify: "ok",
+  };
+  // A status nobody asked for (a broadcast) does not count.
+  await act(async () => h.advance(100));
+  await act(async () => h.last().receive(server("status", status)));
+  expect(sheet().textContent).toContain("往返延遲量測中");
+  await act(async () => h.advance(80));
+  await act(async () => h.last().receive(server("status", status, { re: asked()[0]?.id ?? "" })));
+  expect(sheet().textContent).toContain("往返延遲180 ms");
+  await act(async () => (root.querySelector('[aria-label="關閉"]') as HTMLButtonElement).click());
+  await act(async () =>
+    (root.querySelector(".topbar-right .desktop-only") as HTMLButtonElement).click(),
+  );
+  expect(asked()).toHaveLength(2);
+  unmount();
+});

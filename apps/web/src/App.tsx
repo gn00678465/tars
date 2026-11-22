@@ -10,6 +10,7 @@ import { composerBlocked, initial, localNow, reduce } from "./state.ts";
 
 /** Within this much of the end counts as at the bottom (rounding, a last line half shown). */
 const BOTTOM_PX = 24;
+const PING_MS = 10_000;
 
 export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [state, dispatch] = useReducer(reduce, initial);
@@ -54,6 +55,19 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState(false);
+  // 往返延遲 is measured while the status sheet is open: on opening and every PING_MS. Not all
+  // the time, since each status.get makes the local end read its skills again.
+  const live = state.connection === "open";
+  useEffect(() => {
+    if (!sheet || !live) return;
+    const ping = () => {
+      const id = socket.send("status.get");
+      if (id !== undefined) dispatch({ type: "pinged", id, at: now() });
+    };
+    ping();
+    const t = setInterval(ping, PING_MS);
+    return () => clearInterval(t);
+  }, [sheet, live, socket, now]);
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
   /** The reconnection the owner closed; a later one shows again. */
   const [seenReconnect, setSeenReconnect] = useState<number | undefined>(undefined);

@@ -159,6 +159,12 @@ export function StatusSheet(props: { state: State; onClose: () => void }) {
                 <span className="mono">這一次連上 {timeText(props.state.localSince)}</span>
               )}
             </div>
+            <div className="model-option">
+              <span>往返延遲</span>
+              <span className="mono">
+                {props.state.rtt === undefined ? "量測中" : `${Math.round(props.state.rtt)} ms`}
+              </span>
+            </div>
           </div>
           <div className="provider-group">
             <div className="provider-group-head">
