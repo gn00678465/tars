@@ -12,7 +12,8 @@ const LABEL: Record<string, string> = {
   gemini: "Gemini",
   openrouter: "OpenRouter",
 };
-const label = (p: Provider) => LABEL[p.name] ?? p.name;
+export const providerName = (name: string) => LABEL[name] ?? name;
+const label = (p: Provider) => providerName(p.name);
 const level = (p: Provider) =>
   p.stopped || p.spentUsd >= p.stopUsd ? "error" : p.spentUsd >= p.warnUsd ? "warn" : "ok";
 

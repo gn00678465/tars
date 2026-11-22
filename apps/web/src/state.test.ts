@@ -467,3 +467,15 @@ test("往返延遲 belongs to its connection: a drop clears it, and a stale answ
   );
   expect(dropped.rtt).toBeUndefined();
 });
+
+test("the model list belongs to the local end that sent it: a drop forgets it", () => {
+  const listed = run([
+    { type: "connection", connection: "open" },
+    server("models.result", {
+      models: [{ provider: "anthropic", id: "m", label: "M", window: 1000, isDefault: true }],
+    }),
+  ]);
+  expect(listed.models).toHaveLength(1);
+  // The page may come back to an older local end, which refuses a turn.submit naming a model.
+  expect(run([{ type: "connection", connection: "offline" }], listed).models).toBeUndefined();
+});

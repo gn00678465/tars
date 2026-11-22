@@ -3,7 +3,7 @@ import { skillInvocationText } from "@tars/protocol";
 import { act } from "react";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
-import { buttons, render } from "./render.ts";
+import { button, buttons, render } from "./render.ts";
 import { server, socketHarness } from "./testing.ts";
 
 afterEach(() => {
@@ -20,7 +20,7 @@ test("connects, asks for the list after hello, and shows what the relay says", a
       .last()
       .messages()
       .map((m) => m.kind),
-  ).toEqual(["hello", "conv.list"]);
+  ).toEqual(["hello", "conv.list", "models.get"]);
   await act(async () =>
     h.last().receive(server("relay.status", { online: true, localSince: 1_800_000_000_000 })),
   );
@@ -885,4 +885,134 @@ test("往返延遲: status.get while the sheet is open, timed to the status that
   );
   expect(asked()).toHaveLength(2);
   unmount();
+});
+
+describe("another model: chosen for a new conversation, or continuing one", () => {
+  const MODELS = [
+    { provider: "anthropic", id: "model-a", label: "Model A", window: 200_000, isDefault: true },
+    { provider: "anthropic", id: "model-b", label: "Model B", window: 100_000, isDefault: false },
+    { provider: "gemini", id: "g", label: "G", isDefault: false, unusable: "no_key" },
+  ];
+  const CONVS = [
+    { id: "conv-1", title: "甲", provider: "anthropic", model: "model-a", updatedAt: 2 },
+    {
+      id: "conv-2",
+      title: "乙",
+      provider: "anthropic",
+      model: "model-b",
+      updatedAt: 1,
+      parentId: "conv-1",
+    },
+  ];
+  async function ready(models: boolean) {
+    const h = socketHarness();
+    const r = await render(<App socket={h.socket} now={h.now} />);
+    await act(async () => h.last().ready());
+    const asked = h
+      .last()
+      .messages()
+      .find((m) => m.kind === "models.get");
+    await act(async () => {
+      h.last().receive(server("relay.status", { online: true }));
+      h.last().receive(server("conv.list.result", { convs: CONVS }));
+      h.last().receive(
+        models
+          ? server("models.result", { models: MODELS }, { re: asked?.id ?? "" })
+          : server("nack", { reason: "bad_message" }, { re: asked?.id ?? "" }),
+      );
+    });
+    const area = r.root.querySelector("textarea") as HTMLTextAreaElement;
+    const send = async (value: string) => {
+      await act(async () => {
+        // oxlint-disable-next-line typescript/unbound-method
+        const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+        set?.call(area, value);
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button(r.root, "送出").click());
+    };
+    const submitted = () =>
+      h
+        .last()
+        .messages()
+        .filter((m) => m.kind === "turn.submit")
+        .at(-1);
+    return { h, ...r, send, submitted };
+  }
+
+  test("a local end that does not list models: no model control, no error", async () => {
+    const { root, unmount } = await ready(false);
+    expect(root.querySelector(".run-seg")).toBeNull();
+    expect(root.querySelector("[role=alert]")).toBeNull();
+    unmount();
+  });
+
+  test("a new conversation: the default shown, another picked, and the message names it", async () => {
+    const { root, send, submitted, unmount } = await ready(true);
+    const seg = root.querySelector(".run-seg") as HTMLButtonElement;
+    expect(seg.textContent).toBe("模型Model A");
+    await act(async () => seg.click());
+    const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
+    const g = [...sheet.querySelectorAll<HTMLButtonElement>(".model-option")].find((b) =>
+      b.textContent?.includes("G"),
+    );
+    expect(g?.disabled).toBe(true);
+    expect(g?.textContent).toContain("這家 provider 沒有 API 金鑰");
+    await act(async () => button(sheet, "Model Bmodel-b100K").click());
+    await act(async () => button(sheet, "使用這個模型").click());
+    expect(root.querySelector(".run-seg")?.textContent).toBe("模型Model B");
+    expect(root.querySelector(".empty-state")?.textContent).toContain("模型：Model B。");
+    await send("嗨");
+    expect(submitted()?.p).toMatchObject({
+      text: "嗨",
+      model: { provider: "anthropic", id: "model-b" },
+    });
+    expect(submitted()?.conv).toBeUndefined();
+    unmount();
+  });
+
+  test("continuing: the cost said first, then a new conversation that carries this one", async () => {
+    const { h, root, send, submitted, unmount } = await ready(true);
+    await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
+    await act(async () => button(root, "以另一個模型接續").click());
+    const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
+    expect(sheet.textContent).toContain("來源對話：甲（原模型 model-a）");
+    const a = [...sheet.querySelectorAll<HTMLButtonElement>(".model-option")][0];
+    expect([a?.disabled, a?.textContent?.includes("目前")]).toEqual([true, true]);
+    // Model B, the first one usable, is chosen: 40% of its 100K window.
+    expect(sheet.textContent).toContain("約 40,000 tokens，上限估計");
+    expect(sheet.textContent).toContain("工具輸出不會帶入");
+    await act(async () => button(sheet, "建立接續對話").click());
+    expect(root.querySelector(".empty-state")).not.toBeNull();
+    const banner = root.querySelector(".composer-wrap .task-notice.active") as HTMLElement;
+    expect(banner.textContent).toContain("下一則訊息會用 Model B 開新對話，接續「甲」");
+    expect(banner.textContent).toContain("新對話第一則請求以全價計費");
+    await act(async () => button(banner, "最後 3 回合").click());
+    await send("繼續");
+    expect(submitted()?.p).toMatchObject({
+      model: { provider: "anthropic", id: "model-b" },
+      from: "conv-1",
+      keepLast: 3,
+    });
+    expect(submitted()?.conv).toBeUndefined();
+    const requestId = String(submitted()?.p.requestId);
+    await act(async () =>
+      h.last().receive(server("turn", { requestId, state: "rejected", reason: "carry_over_stop" })),
+    );
+    // Refused: still here, with the choice, and what to do next.
+    expect(root.querySelector("[role=alert]")?.textContent).toContain("把帶入範圍改成更少的回合");
+    expect(root.querySelector(".composer-wrap .task-notice.active")).not.toBeNull();
+    await act(async () => button(root, "取消").click());
+    expect(h.last().messages().at(-1)).toMatchObject({ kind: "conv.open", conv: "conv-1" });
+    expect(root.querySelector(".composer-wrap .task-notice.active")).toBeNull();
+    unmount();
+  });
+
+  test("the list says which conversation one continues", async () => {
+    const { root, unmount } = await ready(true);
+    const rows = [...root.querySelectorAll(".conv-item")].map((e) => e.textContent ?? "");
+    expect(rows[1]).toContain("接續自「甲」");
+    expect(rows[0]).not.toContain("接續自");
+    unmount();
+  });
 });

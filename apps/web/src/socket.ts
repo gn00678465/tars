@@ -33,10 +33,18 @@ export interface SocketDeps {
   now(): number;
 }
 
+/** A new conversation's model, and the conversation it continues (turn.submit's options). */
+export interface Start {
+  readonly model: { readonly provider: string; readonly id: string };
+  readonly from?: string;
+  readonly keepLast?: number;
+}
+
 interface Submit {
   readonly requestId: string;
   readonly text: string;
   readonly conv: string | undefined;
+  readonly start: Start | undefined;
   /** Every turn.submit sent for it: an ack to an earlier one counts as well. */
   readonly ids: Set<string>;
   acked?: boolean;
@@ -111,10 +119,10 @@ export class Socket {
    * end's memory: tars serve stopping before the turn exists would lose it, and the resend is
    * what reaches the next one.
    */
-  submit(text: string, conv?: string): string {
+  submit(text: string, conv?: string, start?: Start): string {
     this.d.clearTimeout(this.submit_?.timer);
     const requestId = this.d.newId();
-    this.submit_ = { requestId, text, conv, ids: new Set() };
+    this.submit_ = { requestId, text, conv, start, ids: new Set() };
     this.listener({ type: "submitted", requestId });
     this.transmit();
     return requestId;
@@ -124,7 +132,11 @@ export class Socket {
     const s = this.submit_;
     if (s === undefined) return;
     this.d.clearTimeout(s.timer);
-    const id = this.send("turn.submit", { requestId: s.requestId, text: s.text }, s.conv);
+    const id = this.send(
+      "turn.submit",
+      { requestId: s.requestId, text: s.text, ...s.start },
+      s.conv,
+    );
     if (id !== undefined) s.ids.add(id);
     // Not sent while offline: hello sends it again.
     s.timer = this.d.setTimeout(() => this.transmit(), RESEND_MS);

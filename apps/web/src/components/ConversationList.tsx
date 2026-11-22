@@ -26,6 +26,11 @@ export function ConversationList(props: {
   onCollapse: () => void;
 }) {
   const aside = useRef<HTMLElement>(null);
+  // The parent may be past the list's 500: then it is named only as another conversation.
+  const parentTitle = (id: string) => {
+    const parent = props.convs.find((c) => c.id === id);
+    return parent === undefined ? "另一個對話" : titleOf(parent);
+  };
   // Only the drawer is modal: the desktop column sits beside the thread.
   useModal(aside, props.drawerOpen, props.onCollapse);
   const cls = ["sidebar"];
@@ -96,6 +101,11 @@ export function ConversationList(props: {
                     <span>{c.model}</span>
                     <span className="num">{timeText(c.updatedAt)}</span>
                   </div>
+                  {c.parentId === undefined ? null : (
+                    <div className="conv-meta">
+                      <span>接續自「{parentTitle(c.parentId)}」</span>
+                    </div>
+                  )}
                 </button>
               </div>
             );

@@ -196,7 +196,13 @@ function groups(items: readonly WireItem[]) {
   return out;
 }
 
-export function Thread(props: { state: State; onOlder: () => void; after: After }) {
+export function Thread(props: {
+  state: State;
+  onOlder: () => void;
+  after: After;
+  /** A new conversation's model, when one was chosen. */
+  model?: string;
+}) {
   const { items, running, turn, more, notices, conv } = props.state;
   if (conv === undefined && items.length === 0)
     return (
@@ -204,8 +210,8 @@ export function Thread(props: { state: State; onOlder: () => void; after: After 
         <Monolith large />
         <h2>新對話</h2>
         <p>
-          模型用本機端設定的預設。送出第一則訊息後，模型就綁在這個對話上。輸入 / 可查看指令與可用
-          skills。
+          {props.model === undefined ? "模型用本機端設定的預設。" : `模型：${props.model}。`}
+          送出第一則訊息後，模型就綁在這個對話上。輸入 / 可查看指令與可用 skills。
         </p>
       </div>
     );

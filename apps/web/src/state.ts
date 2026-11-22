@@ -334,7 +334,8 @@ export function reduce(s: State, e: Event): State {
       const back = e.connection === "open" && s.connection !== "open";
       return {
         // A measurement belongs to the connection it was made on.
-        ...(e.connection === "open" ? s : withoutKeys(s, "ping", "rtt")),
+        // models too: the local end the page reconnects to may be one that does not list them.
+        ...(e.connection === "open" ? s : withoutKeys(s, "ping", "rtt", "models")),
         connection: e.connection,
         ...(back
           ? {

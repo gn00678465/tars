@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Icon } from "./Icon.tsx";
 import { type Builtin, menuFor, type Option, type Skill, slashOf } from "./slash.ts";
 
 export function Composer(props: {
@@ -12,6 +13,8 @@ export function Composer(props: {
   onSend: (text: string) => void;
   onAbort: () => void;
   onCommand: (name: Exclude<Builtin, "help">) => void;
+  /** The model the next message goes to, and how to pick another; absent from an older local end. */
+  model?: { readonly label: string; readonly onPick: () => void };
 }) {
   const [text, setText] = useState("");
   // Esc closes the menu until the text changes.
@@ -164,6 +167,21 @@ export function Composer(props: {
             <span className="composer-hint desktop-only">Enter 送出 · Shift+Enter 換行</span>
           </div>
           <div className="composer-toolbar-right">
+            {props.model === undefined ? null : (
+              <div className="run-setup" role="group" aria-label="模型">
+                <button
+                  className="run-seg"
+                  type="button"
+                  aria-haspopup="dialog"
+                  title="選擇模型"
+                  onClick={props.model.onPick}
+                >
+                  <span className="run-seg-label">模型</span>
+                  <span>{props.model.label}</span>
+                  <Icon name="chevron" />
+                </button>
+              </div>
+            )}
             {props.canAbort ? (
               <button className="sg-btn sg-btn-danger" type="button" onClick={props.onAbort}>
                 中止

@@ -181,6 +181,22 @@ describe("Socket: heartbeat and resend", () => {
     expect(h.events.find((e) => e.type === "submit_result")).toMatchObject({ requestId, ok: true });
   });
 
+  test("a continuation is resent as itself: the model, the conversation it continues, keepLast", async () => {
+    const h = await opened();
+    const start = { model: { provider: "gemini", id: "g" }, from: "conv-1", keepLast: 3 };
+    h.socket.submit("繼續", undefined, start);
+    await h.advance(10_000);
+    const subs = h
+      .last()
+      .messages()
+      .filter((m) => m.kind === "turn.submit");
+    expect(subs).toHaveLength(2);
+    for (const m of subs) {
+      expect(m.p).toMatchObject(start);
+      expect(m.conv).toBeUndefined();
+    }
+  });
+
   test("a plain ack is only held in the local end's memory: resent until the turn is known", async () => {
     const h = await opened();
     const requestId = h.socket.submit("你好");

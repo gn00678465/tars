@@ -23,6 +23,16 @@ export const REASONS: Record<string, { text: string; fix?: (provider: string) =>
     fix: (p) => `tars models confirm-prices --provider ${p}`,
   },
   conv_too_long: { text: "對話太長，超過硬停線。請開新對話" },
+  // Continuing in another model: the local end's CARRY_TEXT, with the page's controls for it.
+  carry_summary_too_long: {
+    text: "前一個對話的摘要太長，帶不進這個模型。把帶入範圍改成「最後幾個回合」，或選視窗較大的模型",
+  },
+  carry_turn_too_long: {
+    text: "最近一個回合就超過這個模型能帶入的長度，縮小帶入範圍也帶不進去。選視窗較大的模型，或開新對話",
+  },
+  carry_over_stop: {
+    text: "這則訊息加上帶入的內容太長。縮短訊息，或把帶入範圍改成更少的回合",
+  },
   budget_stopped: { text: "本期花費已到停用門檻" },
   daily_cap: { text: "今日花費已到上限，明天重算" },
   turn_cap: { text: "這個回合的花費已到上限" },

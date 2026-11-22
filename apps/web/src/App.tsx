@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard } from "./components/ApprovalCard.tsx";
 import { Composer } from "./components/Composer.tsx";
+import { ContinueBanner, ModelSheet, type ModelRef } from "./components/ModelSheet.tsx";
 import { ConversationList } from "./components/ConversationList.tsx";
 import { StatusSheet, TopBar } from "./components/StatusBar.tsx";
 import { timeText } from "./components/time.ts";
@@ -68,6 +69,19 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     const t = setInterval(ping, PING_MS);
     return () => clearInterval(t);
   }, [sheet, live, socket, now]);
+  // Each time the local end is reached: one that answers lists its models, and only then does
+  // the page offer them. An older one answers bad_message, which no request waits on.
+  useEffect(() => {
+    if (live) socket.send("models.get");
+  }, [live, socket]);
+  /**
+   * The next message's model, and the conversation it continues: for the new conversation the
+   * page is on. Opening any conversation forgets it.
+   */
+  const [next, setNext] = useState<
+    { model: ModelRef; from?: string; keepLast?: number } | undefined
+  >(undefined);
+  const [picking, setPicking] = useState<"new" | "continue" | undefined>(undefined);
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
   /** The reconnection the owner closed; a later one shows again. */
   const [seenReconnect, setSeenReconnect] = useState<number | undefined>(undefined);
@@ -87,6 +101,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   }, [opened]);
 
   const open = (c: string | undefined) => {
+    setNext(undefined);
     dispatch({ type: "open_conv", conv: c });
     setDrawer(false);
     if (c === undefined) return;
@@ -147,6 +162,19 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const waiting = new Set(pending.map((c) => c.approval.conv));
   const titleOf = (id: string) => state.convs.find((c) => c.id === id)?.title || "另一個對話";
   const current = state.convs.find((c) => c.id === state.conv);
+  const { models } = state;
+  const chosen = state.conv === undefined ? next : undefined;
+  const modelOf = (r: ModelRef | undefined) =>
+    r === undefined ? undefined : models?.find((m) => m.provider === r.provider && m.id === r.id);
+  const currentRef =
+    current === undefined ? undefined : { provider: current.provider, id: current.model };
+  // The conversation a continuation comes from: this one, or the one the next message continues.
+  const source = state.conv ?? chosen?.from;
+  const sourceConv = state.convs.find((c) => c.id === source);
+  const nextLabel =
+    current !== undefined
+      ? (modelOf(currentRef)?.label ?? current.model)
+      : (modelOf(chosen?.model)?.label ?? models?.find((m) => m.isDefault)?.label ?? "預設");
   const card = (c: (typeof settled)[number]) => (
     <ApprovalCard
       key={c.approval.approvalId}
@@ -192,6 +220,16 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                 <span className="conv-header-model">{current.model}</span>
                 <span className="sg-tag">{current.provider}</span>
               </div>
+              {models === undefined ? null : (
+                <button
+                  className="sg-btn sg-btn-ghost"
+                  type="button"
+                  aria-haspopup="dialog"
+                  onClick={() => setPicking("continue")}
+                >
+                  以另一個模型接續
+                </button>
+              )}
             </div>
           )}
           {/* Outside the scrolling thread: it may mean another machine took the certificate. */}
@@ -225,6 +263,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             <div className="thread-inner thread">
               <Thread
                 state={state}
+                {...(chosen === undefined ? {} : { model: nextLabel })}
                 after={(seq) => anchored.get(seq)?.map(card)}
                 onOlder={() => {
                   if (state.conv !== undefined && oldest !== undefined)
@@ -259,13 +298,38 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                   />
                 ))}
               </div>
+              {chosen?.from === undefined ? null : (
+                <ContinueBanner
+                  title={titleOf(chosen.from)}
+                  label={modelOf(chosen.model)?.label ?? chosen.model.id}
+                  window={modelOf(chosen.model)?.window}
+                  keepLast={chosen.keepLast}
+                  onKeepLast={(n) =>
+                    setNext({
+                      model: chosen.model,
+                      from: chosen.from as string,
+                      ...(n === undefined ? {} : { keepLast: n }),
+                    })
+                  }
+                  onCancel={() => open(chosen.from)}
+                />
+              )}
               <Composer
                 blocked={composerBlocked(state)}
                 canAbort={running && state.connection === "open"}
                 error={state.error}
                 skills={state.status?.skills}
-                onSend={(text) => socket.submit(text, state.conv)}
+                onSend={(text) => socket.submit(text, state.conv, chosen)}
                 onCommand={(name) => (name === "new" ? open(undefined) : setSheet(true))}
+                {...(models === undefined
+                  ? {}
+                  : {
+                      model: {
+                        label: nextLabel,
+                        // With messages, another model is a continuation (D17).
+                        onPick: () => setPicking(source === undefined ? "new" : "continue"),
+                      },
+                    })}
                 onAbort={() => {
                   if (state.conv !== undefined) socket.send("turn.abort", {}, state.conv);
                 }}
@@ -274,6 +338,30 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           </footer>
         </div>
         {sheet ? <StatusSheet state={state} onClose={() => setSheet(false)} /> : null}
+        {picking === undefined ||
+        models === undefined ||
+        (picking === "continue" && sourceConv === undefined) ? null : (
+          <ModelSheet
+            models={models}
+            picked={chosen?.model}
+            {...(picking === "continue" && source !== undefined && sourceConv !== undefined
+              ? {
+                  from: {
+                    title: titleOf(source),
+                    model: { provider: sourceConv.provider, id: sourceConv.model },
+                  },
+                }
+              : {})}
+            onClose={() => setPicking(undefined)}
+            onConfirm={(model) => {
+              setPicking(undefined);
+              if (picking === "new") return setNext({ model });
+              // The page goes to the new conversation; the first message there makes it.
+              if (state.conv !== undefined) open(undefined);
+              setNext({ model, from: source as string });
+            }}
+          />
+        )}
       </div>
     </div>
   );
