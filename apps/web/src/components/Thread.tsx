@@ -24,17 +24,21 @@ const TURN_STATE: Record<string, string> = {
   rejected: "回合沒有開始",
 };
 
-/** ui_spec 5.3: a tool step's six results, as the prototype's tags. */
+/**
+ * ui_spec 5.3: a tool step's results, as the prototype's tags, keyed by the local end's
+ * ToolCallEndState. refused covers more than the whitelist (a script changed after approval, a
+ * budget reached), and the result says which only in its text, so its tag says what happened,
+ * not why.
+ */
 const RESULT: Record<string, [string, string]> = {
-  ok: ["ok", "完成"],
-  completed: ["ok", "完成"],
-  error: ["error", "失敗"],
+  done: ["ok", "完成"],
   failed: ["error", "失敗"],
   denied: ["error", "已拒絕"],
   expired: ["error", "已過期"],
   cancelled: ["", "已取消"],
+  skipped: ["", "已略過"],
+  refused: ["warn", "沒有執行"],
   interrupted: ["warn", "中斷（結果不明）"],
-  blocked: ["warn", "這個入口不提供"],
 };
 
 const OUTPUT_LINES = 20;
@@ -59,7 +63,7 @@ function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undef
       >
         <div className="tool-step-left">
           <Icon name="terminal" />
-          <span>{call.name}</span>
+          <span>{result?.status === "refused" ? "已擋下" : call.name}</span>
           <span className="tool-step-target">{call.input}</span>
         </div>
         <div className="tool-step-right">

@@ -351,7 +351,7 @@ describe("the sidebar and the open conversation", () => {
       turn: T,
       kind: "tool_result",
       callId: "call-00000001",
-      status: "ok",
+      status: "done",
       text: "done",
       truncated: false,
     };
