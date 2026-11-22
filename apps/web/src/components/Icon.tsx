@@ -28,6 +28,15 @@ const PATHS = {
       <line x1="6" y1="6" x2="18" y2="18" />
     </>
   ),
+  fork: (
+    <>
+      <circle cx="12" cy="18" r="3" />
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="6" r="3" />
+      <path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9" />
+      <path d="M12 12v3" />
+    </>
+  ),
   plus: (
     <>
       <line x1="12" y1="5" x2="12" y2="19" />

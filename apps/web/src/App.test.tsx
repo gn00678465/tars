@@ -1132,6 +1132,21 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     none.unmount();
   });
 
+  test("the header names the model and provider; continuing waits for a message", async () => {
+    const { root, unmount } = await ready(true);
+    const header = () => root.querySelector(".conv-header-bar") as HTMLElement;
+    const fork = () => button(header(), "以另一個模型接續");
+    // A new conversation: its model, and nothing to carry yet (9-06).
+    expect(header().querySelector(".conv-header-model")?.textContent).toBe("Model A");
+    expect(header().querySelector(".sg-tag")?.textContent).toBe("Anthropic");
+    expect([fork().disabled, fork().title]).toEqual([true, "對話還沒有訊息，直接在輸入框換模型"]);
+    expect(fork().querySelector("svg")).not.toBeNull();
+    await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
+    expect(header().querySelector(".conv-header-model")?.textContent).toBe("Model A");
+    expect([fork().disabled, fork().title]).toEqual([false, ""]);
+    unmount();
+  });
+
   test("continuing: the cost said first, then a new conversation that carries this one", async () => {
     const { h, root, send, submitted, unmount } = await ready(true);
     await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());

@@ -3,7 +3,8 @@ import { ApprovalCard, announceText } from "./components/ApprovalCard.tsx";
 import { Composer } from "./components/Composer.tsx";
 import { ContinueBanner, ModelSheet, type ModelRef } from "./components/ModelSheet.tsx";
 import { ConversationList } from "./components/ConversationList.tsx";
-import { providerSpend, StatusSheet, TopBar } from "./components/StatusBar.tsx";
+import { Icon } from "./components/Icon.tsx";
+import { providerName, providerSpend, StatusSheet, TopBar } from "./components/StatusBar.tsx";
 import { shortTime, timeText } from "./components/time.ts";
 import { PinnedDock } from "./components/PinnedDock.tsx";
 import {
@@ -340,11 +341,11 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             onMenu={() => (compact ? setDrawer(true) : setCollapsed(false))}
             onSheet={() => setSheet(true)}
           />
-          {current === undefined ? null : (
+          {targetRef === undefined ? null : (
             <div className="conv-header-bar">
               <div className="conv-header-info">
-                <span className="conv-header-model">{current.model}</span>
-                <span className="sg-tag">{current.provider}</span>
+                <span className="conv-header-model conv-header-model-mobile-hide">{nextLabel}</span>
+                <span className="sg-tag">{providerName(targetRef.provider)}</span>
                 {effort === undefined ? null : (
                   <span className="conv-header-effort">
                     推理：{effortNow === undefined ? "不適用" : effortName(effortNow)}
@@ -356,9 +357,16 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                   className="sg-btn sg-btn-ghost"
                   type="button"
                   aria-haspopup="dialog"
+                  // As the prototype (9-06): there is nothing to carry yet; the composer's model
+                  // control switches in place.
+                  disabled={state.conv === undefined}
+                  {...(state.conv === undefined
+                    ? { title: "對話還沒有訊息，直接在輸入框換模型" }
+                    : {})}
                   onClick={() => setPicking("continue")}
                 >
-                  以另一個模型接續
+                  <Icon name="fork" />
+                  <span>以另一個模型接續</span>
                 </button>
               )}
             </div>
