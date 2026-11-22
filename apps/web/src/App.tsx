@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard, announceText } from "./components/ApprovalCard.tsx";
 import { Composer } from "./components/Composer.tsx";
+import { ContinueHints } from "./components/ContinueHints.tsx";
 import { ContinueBanner, ModelSheet, type ModelRef } from "./components/ModelSheet.tsx";
 import { ConversationList } from "./components/ConversationList.tsx";
 import { Icon } from "./components/Icon.tsx";
@@ -400,6 +401,14 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             }}
           >
             <div className="thread-inner thread">
+              {current === undefined || models === undefined ? null : (
+                <ContinueHints
+                  conv={current}
+                  models={models}
+                  status={state.status}
+                  onContinue={() => setPicking("continue")}
+                />
+              )}
               <Thread
                 state={state}
                 {...(models === undefined ? {} : { model: models.length === 0 ? "" : nextLabel })}
