@@ -197,6 +197,21 @@ describe("--message", () => {
     expect(err(deps)).toContain("用量：");
   });
 
+  test("a bookkeeping message goes to the model, whose prompt offers fava-ledger for it", async () => {
+    const h = await setup();
+    h.fake.reply(text("先用 --dry-run 給你看預覽"));
+    const { deps } = chatDeps(h);
+    expect(await run(["chat", "--message", "幫我記一筆午餐 120 元"], deps)).toBe(0);
+    const requests = h.fake.messages();
+    expect(requests).toHaveLength(1);
+    const blocks = (requests[0]?.body.system ?? []) as { text: string }[];
+    const system = blocks.map((b) => b.text).join("\n");
+    const refused = system.split("\n").find((l) => l.startsWith("這個入口不提供")) ?? "";
+    expect(refused).not.toContain("記帳");
+    expect(system).toContain("記帳與查帳在這裡用入庫的 fava-ledger 腳本");
+    expect(lastUserText(h, 0)).toBe("幫我記一筆午餐 120 元");
+  });
+
   test("a turn that does not complete exits 1", async () => {
     const h = await setup();
     h.fake.reply({ kind: "http_error", status: 401, type: "authentication_error" });

@@ -125,6 +125,21 @@ describe("PREAMBLE", () => {
     for (const tool of TOOL_SPECS) expect(PREAMBLE).toContain(tool.name);
   });
 
+  test("bookkeeping is offered here through fava-ledger; the other local-only flows are not", () => {
+    const sentence = PREAMBLE.split("\n").find((l) => l.startsWith("這個入口不提供")) as string;
+    expect(sentence).not.toContain("記帳");
+    for (const flow of ["寫入記憶", "學習教材", "投資研究", "寫或送審腳本"])
+      expect(sentence).toContain(flow);
+    expect(PREAMBLE).toContain("記帳與查帳在這裡用入庫的 fava-ledger 腳本");
+    expect(PREAMBLE).toContain("script show fava-ledger");
+    expect(PREAMBLE).toContain("--dry-run");
+    expect(PREAMBLE).toContain("擁有者確認後才正式寫入");
+    expect(PREAMBLE).toContain("不讀 tars-mode 的 bookkeeping 劇本，也不載入 beancount-ledger");
+    // Still not loadable here, now for the reason that holds: no shell, no credentials in env.
+    expect(LOCAL_ONLY_SKILLS["beancount-ledger"]).toContain("shell");
+    expect(PREAMBLE).not.toContain("要本機的帳本");
+  });
+
   test("the wiki paragraph comes after the tars claude list, and that sentence leaves wiki out", () => {
     const sentence = PREAMBLE.split("\n").find((l) => l.startsWith("這個入口不提供"));
     expect(sentence).toContain("改用 tars claude");

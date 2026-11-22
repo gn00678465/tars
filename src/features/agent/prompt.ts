@@ -12,7 +12,7 @@ import type { CacheTtl, Effort, SystemBlock, ToolSpec } from "./types.ts";
  */
 export const LOCAL_ONLY_SKILLS: Readonly<Record<string, string>> = {
   memory: "要寫入記憶",
-  "beancount-ledger": "要本機的帳本",
+  "beancount-ledger": "要 shell 與環境變數裡的憑證；記帳與查帳改用 fava-ledger 腳本",
   "serenity-skill": "要網路搜尋",
 };
 
@@ -91,11 +91,17 @@ export const PREAMBLE = `你在 tars 自己的入口裡（終端的 tars chat，
 
 skill_load 與 file_read 一次最多回 400 行（limit 最多 2000）。結果第一行寫著第幾行到第幾行、共幾行；還有後續時會寫「下一頁 offset=N」，用那個 offset 再讀一次。
 
-這個入口不提供下面這些流程：寫入記憶、記帳與查帳、學習教材、投資研究、寫或送審腳本。遇到時告訴擁有者改用 tars claude。
-下面三個 skill 只能在 tars claude 裡用，不要自己 skill_load 它們，請擁有者改用 tars claude：
+這個入口不提供下面這些流程：寫入記憶、學習教材、投資研究、寫或送審腳本。遇到時告訴擁有者改用 tars claude。
+下面三個 skill 只能在 tars claude 裡用，不要自己 skill_load 它們：
 ${Object.entries(LOCAL_ONLY_SKILLS)
   .map(([name, why]) => `- ${name}（${why}）`)
   .join("\n")}
+
+記帳與查帳在這裡用入庫的 fava-ledger 腳本：
+- 先用 script show fava-ledger 看它的用法，照那份用法帶參數。
+- 新增交易先加 --dry-run 執行，把預覽給擁有者看，並確認每個帳戶對應的是哪一個；擁有者確認後才正式寫入。
+- 金額、日期、帳戶都照擁有者說的，不猜。缺的就問。
+- 不讀 tars-mode 的 bookkeeping 劇本，也不載入 beancount-ledger：它們要用 curl 與環境變數裡的憑證，這裡沒有 shell。
 
 擁有者有一個個人知識庫（wiki）。對話裡的 <wiki-index> 是它的頁面清單。
 - 問到人、專案、過去談過的事，先用 wiki search。--also 可以多給最多 6 個同義詞或另一種語言的寫法。
