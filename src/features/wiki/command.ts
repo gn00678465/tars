@@ -13,7 +13,6 @@ import { findConversation, findTurn } from "../agent/store.ts";
 import { visible } from "../agent/tty-frontend.ts";
 import { NEWER_WIKI_DB, openWikiDb, rawSpend } from "./db.ts";
 import { readTurnParts, sourceRef, toolLine } from "./evidence.ts";
-import { byUpdated } from "./index-file.ts";
 import {
   CATEGORIES,
   minuteText,
@@ -34,6 +33,7 @@ import {
   unindexedTurns,
   type SearchJson,
 } from "./search.ts";
+import { categoryCounts, listPages } from "./read.ts";
 import { reasonLabel, runSync } from "./sync.ts";
 import { matchQuery } from "./tokenize.ts";
 
@@ -286,21 +286,11 @@ Examples:
     .action((category: Category | undefined, opts: { json?: boolean }) => {
       const db = readWikiDb(resolvePaths(ctx.env));
       try {
-        const rows = (db?.query("SELECT * FROM pages").all() ?? []) as PageListRow[];
-        const pages = CATEGORIES.filter((c) => category === undefined || c === category).flatMap(
-          (c) =>
-            rows
-              .filter((r) => r.path.startsWith(`${c}/`))
-              .map((r) => ({ ...r, aliases: JSON.parse(r.aliases) as string[], type: c }))
-              .toSorted(byUpdated),
-        );
+        const pages = listPages(db, category);
         if (opts.json === true) {
-          const counts = Object.fromEntries(
-            CATEGORIES.map((c) => [c, rows.filter((r) => r.path.startsWith(`${c}/`)).length]),
-          );
           return out(
             JSON.stringify({
-              counts,
+              counts: categoryCounts(db),
               pages: pages.map((p) => ({
                 path: p.path,
                 title: p.title,
@@ -473,16 +463,8 @@ export function chatWikiLines(paths: TarsPaths, agent: Database, query: string):
 /** Pages per category, and how far both indexes reach. */
 function overviewLines(db: Database, agent: Database | undefined): string[] {
   const out: string[] = [];
-  const byCategory = new Map(
-    (
-      db
-        .query(
-          "SELECT substr(path, 1, instr(path, '/') - 1) AS c, COUNT(*) AS n FROM pages GROUP BY c",
-        )
-        .all() as { c: string; n: number }[]
-    ).map((r) => [r.c, r.n]),
-  );
-  out.push(`頁面：${CATEGORIES.map((c) => `${c} ${byCategory.get(c) ?? 0}`).join("、")}`);
+  const counts = categoryCounts(db);
+  out.push(`頁面：${CATEGORIES.map((c) => `${c} ${counts[c]}`).join("、")}`);
   const scanned = db.query("SELECT value FROM meta WHERE key = 'scanned_at'").get() as {
     value: string;
   } | null;

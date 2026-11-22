@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { exportJWK, generateKeyPair, SignJWT, type JWK } from "jose";
 import { PROTOCOL_VERSION } from "@tars/protocol";
@@ -253,6 +253,27 @@ async function inner(): Promise<number> {
       JSON.stringify(hello),
     );
     await ready(B);
+
+    // --- The knowledge base, read only: a page file is shown, a symlink in its place is not.
+    mkdirSync(join(data, "wiki/people"), { recursive: true });
+    writeFileSync(
+      join(data, "wiki/people/wang.md"),
+      "---\ntitle: 王小明\ntype: people\ncreated: 2026-11-01\nupdated: 2026-11-02\n---\n## 事實\n- [i1] 搬到台中。\n",
+    );
+    symlinkSync(join(data, "MEMORY.md"), join(data, "wiki/people/linked.md"));
+    const wikiStatus = await reply(A, send(A, "wiki.status"));
+    const wikiPage = await reply(A, send(A, "wiki.page", { path: "people/wang" }));
+    const wikiLinked = await reply(A, send(A, "wiki.page", { path: "people/linked" }));
+    check(
+      "wiki",
+      "wiki.status before any sync, wiki.page reads a page file and refuses a symlink",
+      wikiStatus.kind === "wiki.status.result" &&
+        wikiStatus.p.synced === false &&
+        wikiPage.p.state === "ok" &&
+        wikiPage.p.title === "王小明" &&
+        wikiLinked.p.state === "missing",
+      `${JSON.stringify(wikiStatus.p)}; ${JSON.stringify(wikiPage.p).slice(0, 200)}; ${JSON.stringify(wikiLinked.p)}`,
+    );
 
     // --- 2. A message: ack, started, the user item, delta, the reply, completed.
     fake.reply(text("你好，這裡是 tars"));

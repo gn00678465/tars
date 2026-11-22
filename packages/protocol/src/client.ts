@@ -2,6 +2,7 @@ import { z } from "zod";
 import { envelope, id, inConv } from "./envelope.ts";
 import { KEEP_LAST, TEXT_BYTES } from "./limits.ts";
 import { wireEffort, wireModelRef } from "./wire.ts";
+import { WIKI_PATH, wikiSearchRequest, wikiSourceRequest } from "./wiki.ts";
 
 const empty = z.strictObject({});
 
@@ -50,6 +51,15 @@ export const clientMessage = z.discriminatedUnion("kind", [
   envelope("status.get", empty),
   /** The models a new conversation can be started on; answered by models.result. */
   envelope("models.get", empty),
+  /**
+   * The knowledge base, read only (wiki.ts). A local end older than these answers bad_message:
+   * the page offers the knowledge base only after wiki.status.result came.
+   */
+  envelope("wiki.status", empty),
+  envelope("wiki.list", empty),
+  envelope("wiki.page", z.strictObject({ path: z.string().regex(WIKI_PATH) })),
+  envelope("wiki.search", wikiSearchRequest),
+  envelope("wiki.source", wikiSourceRequest),
 ]);
 
 export type ClientMessage = z.infer<typeof clientMessage>;

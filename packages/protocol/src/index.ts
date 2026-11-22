@@ -6,4 +6,5 @@ export * from "./limits.ts";
 export * from "./parse.ts";
 export * from "./server.ts";
 export * from "./skill.ts";
+export * from "./wiki.ts";
 export * from "./wire.ts";

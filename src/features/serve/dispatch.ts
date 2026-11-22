@@ -31,6 +31,7 @@ import { loadSkillIndex } from "../agent/prompt.ts";
 import * as store from "../agent/store.ts";
 import type { AccessVerifier, Registry } from "./access.ts";
 import { broadcast, message, RemoteFrontend, type Hub } from "./remote-frontend.ts";
+import { answerWiki, type WikiRequest } from "./wiki.ts";
 import { toWire, wireApproval, wireBytes, wireConv, wireRunning } from "./wire.ts";
 
 /** Close codes the local end gives a browser connection. */
@@ -305,7 +306,21 @@ export class Dispatch {
         return this.d.hub.send(conn, await this.status(m.id));
       case "models.get":
         return this.models(conn, m.id);
+      case "wiki.status":
+      case "wiki.list":
+      case "wiki.page":
+      case "wiki.search":
+      case "wiki.source":
+        return this.wiki(conn, m);
     }
+  }
+
+  /** The knowledge base, read only and never through a model (serve/wiki.ts). */
+  private async wiki(conn: string, m: WikiRequest): Promise<void> {
+    if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
+    const a = await answerWiki(this.d.paths, m);
+    if (a === "newer") return this.reply(conn, "nack", "version", m.id, "local");
+    this.d.hub.send(conn, message(this.d.hub, a.kind, a.p, { re: m.id }));
   }
 
   /** models.get: every active model, usable or why not, as the terminal's /model judges one. */

@@ -31,3 +31,31 @@ export const EFFORT_LEVELS = 8;
 export const EFFORT_NAME = 16;
 /** turn.submit's keepLast: the turns a continuation carries at most. */
 export const KEEP_LAST = 1_000;
+
+/**
+ * The knowledge base (wiki.*). The page's own rules live in the local end's wiki/page.ts
+ * LIMITS, which this package cannot import; a local test keeps the two equal.
+ */
+export const WIKI_TITLE = 80;
+export const WIKI_ALIAS = 40;
+export const WIKI_ALIASES = 10;
+export const WIKI_SUMMARY = 3_000;
+export const WIKI_ENTRY = 300;
+export const WIKI_RELATED = 20;
+/** A search's query, in characters, as `tars wiki search` takes it. */
+export const WIKI_QUERY = 100;
+/** The local end cuts these, so a hand-edited page still fits one message. */
+export const WIKI_PAGES = 500;
+export const WIKI_ENTRIES = 40;
+export const WIKI_ENTRY_SOURCES = 8;
+export const WIKI_CHANGELOG = 50;
+export const WIKI_CHANGELOG_TEXT = 500;
+export const WIKI_ERROR = 200;
+/** Results per track in wiki.search.result. */
+export const WIKI_RESULTS = 50;
+export const WIKI_SNIPPET = 160;
+export const WIKI_CONV_TITLE = 200;
+/** Each side of a source turn, cut in the middle as sync cuts what the model reads. */
+export const WIKI_TURN_TEXT_BYTES = 4_000;
+export const WIKI_QUOTES = 5;
+export const WIKI_QUOTE = 200;

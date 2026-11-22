@@ -1002,3 +1002,58 @@ describe("effort: the levels models.get lists, a turn's level, a conversation's"
     ).toMatchObject({ state: "rejected", reason: "effort_unsupported" });
   });
 });
+
+describe("Dispatch: the knowledge base (wiki.*)", () => {
+  test("each request gets its result, only to the page that asked, and no model runs", async () => {
+    const s = await setup();
+    await s.ready(CONN_A);
+    await s.ready(CONN_B);
+    const asked: [string, object][] = [
+      ["wiki.status", {}],
+      ["wiki.list", {}],
+      ["wiki.page", { path: "people/nobody" }],
+      ["wiki.search", { query: "西屯" }],
+      ["wiki.source", { ref: "deadbeef/deadbeef" }],
+    ];
+    for (const [kind, p] of asked) {
+      const id = await s.msg(CONN_A, kind, p);
+      expect(reply(s, CONN_A, id)?.kind).toBe(`${kind}.result` as ServerMessage["kind"]);
+    }
+    expect(reply(s, CONN_A, await s.msg(CONN_A, "wiki.status", {}))?.p).toMatchObject({
+      synced: false,
+      total: 0,
+    });
+    expect(s.hub.to(CONN_B).filter((m) => m.kind.startsWith("wiki."))).toEqual([]);
+    expect(s.h.fake.messages()).toEqual([]);
+    allValid(s);
+  });
+
+  test("a login run out gets auth_expired, and nothing is read", async () => {
+    const s = await setup();
+    await s.ready(CONN_A);
+    // Only the check before reading fails: the hub itself sends to a connection it still holds.
+    spyOn(s.hub.registry, "valid").mockReturnValueOnce(false);
+    const id = await s.msg(CONN_A, "wiki.status", {});
+    expect(reply(s, CONN_A, id)?.kind).toBe("nack");
+    expect(reason(reply(s, CONN_A, id))).toBe("auth_expired");
+    expect(s.hub.to(CONN_A, "wiki.status.result")).toEqual([]);
+  });
+
+  test("a wiki.db from a newer tars: a version nack that asks for the local end", async () => {
+    const s = await setup();
+    await s.ready(CONN_A);
+    const { openWikiDb } = await import("../../../src/features/wiki/db.ts");
+    const db = await openWikiDb(s.h.paths);
+    db.run("UPDATE meta SET value = '99' WHERE key = 'schema_version'");
+    db.close();
+    const id = await s.msg(CONN_A, "wiki.list", {});
+    expect(reply(s, CONN_A, id)?.p).toEqual({ reason: "version", need: "local" });
+  });
+
+  test("a request outside the rules is bad_message, as an older local end answers any wiki.*", async () => {
+    const s = await setup();
+    await s.ready(CONN_A);
+    const id = await s.msg(CONN_A, "wiki.page", { path: "people/../../MEMORY" });
+    expect(reason(reply(s, CONN_A, id))).toBe("bad_message");
+  });
+});

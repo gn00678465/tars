@@ -202,6 +202,13 @@ function message(s: State, m: ServerMessage, at: number): State {
         : { ...s, epoch: m.p.epoch };
     case "models.result":
       return { ...s, models: m.p.models };
+    // This page never asks for the knowledge base yet.
+    case "wiki.status.result":
+    case "wiki.list.result":
+    case "wiki.page.result":
+    case "wiki.search.result":
+    case "wiki.source.result":
+      return s;
     case "status":
       return s.ping !== undefined && m.re === s.ping.id
         ? { ...withoutKeys(s, "ping"), status: m.p, statusAt: at, rtt: at - s.ping.at }

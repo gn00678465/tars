@@ -2,6 +2,7 @@ import { z } from "zod";
 import { envelope, id } from "./envelope.ts";
 import { DELTA_BYTES, MODELS, SNAPSHOT_ITEMS } from "./limits.ts";
 import { wireApproval, wireConv, wireItem, wireModel, wireRunning, wireStatus } from "./wire.ts";
+import { wikiList, wikiPage, wikiSearch, wikiSource, wikiStatus } from "./wiki.ts";
 
 export const NACK = [
   "offline",
@@ -66,6 +67,12 @@ export const serverMessage = z.discriminatedUnion("kind", [
     }),
   ),
   envelope("status", wireStatus),
+  /** The answers to wiki.*, only to the page that asked. */
+  envelope("wiki.status.result", wikiStatus),
+  envelope("wiki.list.result", wikiList),
+  envelope("wiki.page.result", wikiPage),
+  envelope("wiki.search.result", wikiSearch),
+  envelope("wiki.source.result", wikiSource),
   envelope(
     "relay.status",
     z.strictObject({

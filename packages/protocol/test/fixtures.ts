@@ -1,6 +1,30 @@
 export const ID = "01a1fd71-be41-71e7-809a-4bb1e568ad68";
 export const CONN = "3f2b8c1e-9a4d-4e2f-8b6a-1c2d3e4f5a6b";
 export const HASH = "a".repeat(64);
+export const REF = "0123abcd/89abcdef";
+
+export const wikiEntry = {
+  id: "i1",
+  text: "搬到台中西屯。",
+  assistant: false,
+  verified: true,
+  sources: [REF],
+};
+
+export const wikiOkPage = {
+  state: "ok",
+  path: "people/wang-xiaoming",
+  title: "王小明",
+  aliases: ["小明"],
+  created: "2026-11-01",
+  updated: "2026-11-19",
+  summary: `大學同學。[[source:${REF}]]`,
+  facts: [wikiEntry],
+  open: [],
+  related: ["projects/moving"],
+  changeLog: [{ date: "2026-11-19", text: "建立。事實：新增 [i1]。" }],
+  truncated: false,
+};
 
 export const msg = (kind: string, p: object, extra: object = {}) => ({
   v: 1,
@@ -89,6 +113,11 @@ export const CLIENT: Record<string, object> = {
   "approval.decide": msg("approval.decide", { approvalId: ID, decision: "approved", hash: HASH }),
   "status.get": msg("status.get", {}),
   "models.get": msg("models.get", {}),
+  "wiki.status": msg("wiki.status", {}),
+  "wiki.list": msg("wiki.list", {}),
+  "wiki.page": msg("wiki.page", { path: "people/wang-xiaoming" }),
+  "wiki.search": msg("wiki.search", { query: "王小明", limit: 20 }),
+  "wiki.source": msg("wiki.source", { ref: REF, page: "people/wang-xiaoming" }),
 };
 
 export const SERVER: Record<string, object> = {
@@ -148,6 +177,76 @@ export const SERVER: Record<string, object> = {
     { re: ID },
   ),
   "relay.status": msg("relay.status", { online: true, lastSeenAt: 1, localSince: 2 }),
+  "wiki.status.result": msg(
+    "wiki.status.result",
+    {
+      synced: true,
+      counts: { people: 1, projects: 0, topics: 0, life: 0, learning: 0, investment: 0 },
+      total: 1,
+      lastSyncAt: 1,
+      indexedAt: 2,
+    },
+    { re: ID },
+  ),
+  "wiki.list.result": msg(
+    "wiki.list.result",
+    {
+      pages: [
+        { path: "people/wang-xiaoming", title: "王小明", updated: "2026-11-19", blocked: false },
+      ],
+      more: false,
+    },
+    { re: ID },
+  ),
+  "wiki.page.result": msg("wiki.page.result", wikiOkPage, { re: ID }),
+  "wiki.search.result": msg(
+    "wiki.search.result",
+    {
+      query: "王小明",
+      pages: {
+        indexedAt: 1,
+        results: [
+          {
+            path: "people/wang-xiaoming",
+            title: "王小明",
+            updated: "2026-11-19",
+            section: "facts",
+            item: "i1",
+            snippet: "搬到台中西屯。",
+          },
+        ],
+      },
+      records: {
+        indexedAt: 1,
+        results: [
+          {
+            conv: ID,
+            convTitle: "近況",
+            turnNo: 2,
+            at: 1,
+            speaker: "owner",
+            snippet: "王小明上個月搬到台中西屯了",
+          },
+        ],
+      },
+    },
+    { re: ID },
+  ),
+  "wiki.source.result": msg(
+    "wiki.source.result",
+    {
+      ref: REF,
+      found: true,
+      conv: ID,
+      convTitle: "近況",
+      turnNo: 2,
+      at: 1,
+      owner: "王小明上個月搬到台中西屯了",
+      assistant: "記下了。",
+      quotes: ["搬到台中西屯"],
+    },
+    { re: ID },
+  ),
 };
 
 /** A required key of each kind's p, when it has one. */
@@ -167,6 +266,14 @@ export const REQUIRED_P: Record<string, string> = {
   status: "now",
   "models.result": "models",
   "relay.status": "online",
+  "wiki.page": "path",
+  "wiki.search": "query",
+  "wiki.source": "ref",
+  "wiki.status.result": "counts",
+  "wiki.list.result": "pages",
+  "wiki.page.result": "state",
+  "wiki.search.result": "records",
+  "wiki.source.result": "found",
 };
 
 export const TO_LOCAL: Record<string, object> = {
