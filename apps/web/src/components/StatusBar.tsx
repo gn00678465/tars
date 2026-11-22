@@ -17,6 +17,28 @@ const label = (p: Provider) => providerName(p.name);
 const level = (p: Provider) =>
   p.stopped || p.spentUsd >= p.stopUsd ? "error" : p.spentUsd >= p.warnUsd ? "warn" : "ok";
 
+/**
+ * A provider's spending beside its models in the model menus: the figure, or, past its stop
+ * threshold, that threshold as a share of the quota, since its models cannot be used then.
+ * status carries neither the period nor where the figure came from: 本期, and 估, as the sheet.
+ */
+export function providerSpend(
+  status: WireStatus | undefined,
+  name: string,
+): { readonly text: string; readonly stopped: boolean } | undefined {
+  const p = status?.providers.find((x) => x.name === name);
+  if (p === undefined) return undefined;
+  if (level(p) === "error")
+    return {
+      text: `已達停用門檻（${Math.round((p.stopUsd / p.quotaUsd) * 100)}%）`,
+      stopped: true,
+    };
+  return {
+    text: `本期 ${p.spentUsd.toFixed(2)} / ${p.quotaUsd.toLocaleString("en-US")} USD 估`,
+    stopped: false,
+  };
+}
+
 /** ui_spec 5.2's connection pill: [dot tone, text]. */
 export function connection(state: State): { tone: string; text: string } {
   if (state.connection === "auth_expired") return { tone: "error", text: "登入已過期" };

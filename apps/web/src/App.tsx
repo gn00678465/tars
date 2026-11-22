@@ -3,7 +3,7 @@ import { ApprovalCard } from "./components/ApprovalCard.tsx";
 import { Composer } from "./components/Composer.tsx";
 import { ContinueBanner, ModelSheet, type ModelRef } from "./components/ModelSheet.tsx";
 import { ConversationList } from "./components/ConversationList.tsx";
-import { StatusSheet, TopBar } from "./components/StatusBar.tsx";
+import { providerSpend, StatusSheet, TopBar } from "./components/StatusBar.tsx";
 import { shortTime, timeText } from "./components/time.ts";
 import { PinnedDock } from "./components/PinnedDock.tsx";
 import {
@@ -96,6 +96,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // The level picked for the next message here, kept until another conversation opens; the
   // menu; and the note that it applies from the next message, a new one each pick.
   const [effortPick, setEffortPick] = useState<string | undefined>(undefined);
+  // The desktop model menu, and the model it picked to continue in, for the sheet to start on.
+  const [modelOpen, setModelOpen] = useState(false);
+  const [forkPick, setForkPick] = useState<ModelRef | undefined>(undefined);
   const [effortOpen, setEffortOpen] = useState(false);
   const [toast, setToast] = useState(0);
   useEffect(() => {
@@ -125,6 +128,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     setNext(undefined);
     setEffortPick(undefined);
     setEffortOpen(false);
+    setModelOpen(false);
     dispatch({ type: "open_conv", conv: c });
     setDrawer(false);
     if (c === undefined) return;
@@ -216,6 +220,13 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     current !== undefined
       ? modelOf(currentRef)
       : (modelOf(chosen?.model) ?? models?.find((m) => m.isDefault));
+  const targetRef =
+    currentRef ??
+    chosen?.model ??
+    (target === undefined ? undefined : { provider: target.provider, id: target.id });
+  const spend = (provider: string) => providerSpend(state.status, provider);
+  // With messages, another model is a continuation (D17).
+  const pickModel = () => setPicking(source === undefined ? "new" : "continue");
   const levels = target?.effortLevels ?? [];
   const wanted =
     effortPick ??
@@ -425,8 +436,27 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                           compact={phone}
                           model={{
                             label: nextLabel,
-                            // With messages, another model is a continuation (D17).
-                            onPick: () => setPicking(source === undefined ? "new" : "continue"),
+                            models,
+                            current: targetRef,
+                            spend,
+                            note:
+                              source === undefined
+                                ? "這個對話還沒有訊息，可以直接換模型。送出第一則訊息後，模型就綁在對話上。"
+                                : "模型綁在對話上。這個對話已有訊息，選另一個模型會開新對話接續。",
+                            open: modelOpen,
+                            onOpen: (o) => (phone ? o && pickModel() : setModelOpen(o)),
+                            onChoose: (model) => {
+                              setModelOpen(false);
+                              if (
+                                targetRef !== undefined &&
+                                model.provider === targetRef.provider &&
+                                model.id === targetRef.id
+                              )
+                                return;
+                              if (source === undefined) return setNext({ model });
+                              setForkPick(model);
+                              setPicking("continue");
+                            },
                           }}
                           effort={effort}
                           toast={toast !== 0}
@@ -449,7 +479,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
         (picking === "continue" && sourceConv === undefined) ? null : (
           <ModelSheet
             models={models}
-            picked={chosen?.model}
+            picked={picking === "continue" ? (forkPick ?? chosen?.model) : chosen?.model}
+            spend={spend}
             {...(picking === "continue" && source !== undefined && sourceConv !== undefined
               ? {
                   from: {
@@ -458,9 +489,13 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                   },
                 }
               : {})}
-            onClose={() => setPicking(undefined)}
+            onClose={() => {
+              setPicking(undefined);
+              setForkPick(undefined);
+            }}
             onConfirm={(model) => {
               setPicking(undefined);
+              setForkPick(undefined);
               if (picking === "new") return setNext({ model });
               // The page goes to the new conversation; the first message there makes it.
               if (state.conv !== undefined) open(undefined);

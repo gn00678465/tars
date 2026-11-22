@@ -5,6 +5,21 @@ import { Icon } from "./Icon.tsx";
 import { useModal } from "./modal.ts";
 import { providerName } from "./StatusBar.tsx";
 
+export interface Spend {
+  readonly text: string;
+  readonly stopped: boolean;
+}
+
+/** Beside a provider's name in either model menu: its spending, or a red tag once stopped. */
+export function SpendText(props: { spend: Spend | undefined; className?: string }) {
+  if (props.spend === undefined) return null;
+  return props.spend.stopped ? (
+    <span className="sg-tag error">{props.spend.text}</span>
+  ) : (
+    <span className={props.className ?? "mono provider-group-sub"}>{props.spend.text}</span>
+  );
+}
+
 export interface ModelRef {
   readonly provider: string;
   readonly id: string;
@@ -23,7 +38,7 @@ const CARRY_SHARE = 0.4;
 export const carryNote = (window: number) =>
   `會帶入這個對話的文字，最多約為新模型視窗的 40%（約 ${Math.round(window * CARRY_SHARE).toLocaleString("en-US")} tokens，上限估計）。新對話第一則請求以全價計費，之後才吃得到快取；工具輸出不會帶入。`;
 
-const windowText = (w: number) =>
+export const windowText = (w: number) =>
   w >= 1_000_000 ? `${(w / 1_000_000).toLocaleString("en-US")}M` : `${Math.round(w / 1000)}K`;
 
 /**
@@ -37,10 +52,15 @@ export function ModelSheet(props: {
   from?: { readonly title: string; readonly model: ModelRef };
   onConfirm: (model: ModelRef) => void;
   onClose: () => void;
+  /** A provider's spending, from status; past its stop threshold its models cannot be chosen. */
+  spend?: (provider: string) => Spend | undefined;
 }) {
   const panel = useRef<HTMLElement>(null);
   useModal(panel, true, props.onClose);
-  const usable = (m: WireModel) => m.unusable === undefined && !same(m, props.from?.model);
+  const usable = (m: WireModel) =>
+    m.unusable === undefined &&
+    !same(m, props.from?.model) &&
+    props.spend?.(m.provider)?.stopped !== true;
   const [choice, setChoice] = useState<ModelRef | undefined>(() => {
     const start =
       props.models.find((m) => same(m, props.picked)) ?? props.models.find((m) => m.isDefault);
@@ -91,6 +111,7 @@ export function ModelSheet(props: {
               <div className="provider-group" key={p} role="group" aria-label={providerName(p)}>
                 <div className="provider-group-head">
                   <span>{providerName(p)}</span>
+                  <SpendText spend={props.spend?.(p)} />
                 </div>
                 {props.models
                   .filter((m) => m.provider === p)

@@ -953,14 +953,15 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     const seg = root.querySelector(".run-seg") as HTMLButtonElement;
     expect(seg.textContent).toBe("模型Model A");
     await act(async () => seg.click());
-    const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
-    const g = [...sheet.querySelectorAll<HTMLButtonElement>(".model-option")].find((b) =>
-      b.textContent?.includes("G"),
+    const menu = root.querySelector("[role=menu][aria-label=選擇模型]") as HTMLElement;
+    const g = [...menu.querySelectorAll<HTMLButtonElement>(".model-menu-option")].find((b) =>
+      b.textContent?.startsWith("G"),
     );
     expect(g?.disabled).toBe(true);
     expect(g?.textContent).toContain("這家 provider 沒有 API 金鑰");
-    await act(async () => button(sheet, "Model Bmodel-b100K").click());
-    await act(async () => button(sheet, "使用這個模型").click());
+    // A new conversation switches in place: no sheet.
+    await act(async () => button(menu, "Model Bcontext 100K").click());
+    expect(root.querySelector("[aria-labelledby=model-sheet-title]")).toBeNull();
     expect(root.querySelector(".run-seg")?.textContent).toBe("模型Model B");
     expect(root.querySelector(".empty-state")?.textContent).toContain("模型：Model B。");
     await send("嗨");
@@ -1329,9 +1330,12 @@ describe("effort: the level beside the model, its menu, and what the message car
     await act(async () =>
       (root.querySelector(".model-anchor .run-seg") as HTMLButtonElement).click(),
     );
-    const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
-    await act(async () => button(sheet, "Model Bmodel-b100K").click());
-    await act(async () => button(sheet, "使用這個模型").click());
+    await act(async () =>
+      button(
+        root.querySelector("[aria-label=選擇模型]") as HTMLElement,
+        "Model Bcontext 100K · 推理 低–中",
+      ).click(),
+    );
     expect(seg()?.querySelector(".status-dot.warn")).not.toBeNull();
     expect(seg()?.textContent).toBe("這個模型不支援推理 高，改用 中：推理中");
     await send("嗨");
@@ -1391,6 +1395,170 @@ describe("effort: the level beside the model, its menu, and what the message car
     expect(root.querySelector("[aria-labelledby=effort-sheet-title]")).toBeNull();
     expect(seg()?.textContent).toBe("推理低");
     expect((root.querySelector(".effort-toast") as HTMLElement).hidden).toBe(false);
+    unmount();
+  });
+});
+
+describe("the model menu: spending by provider, each model's window and levels, a menu on a desktop", () => {
+  const MODELS = [
+    {
+      provider: "anthropic",
+      id: "model-a",
+      label: "Model A",
+      window: 200_000,
+      isDefault: true,
+      effortLevels: ["low", "medium", "high"],
+      defaultEffort: "medium",
+    },
+    {
+      provider: "anthropic",
+      id: "model-c",
+      label: "Model C",
+      window: 128_000,
+      isDefault: false,
+      effortLevels: [],
+    },
+    {
+      provider: "gemini",
+      id: "g",
+      label: "G",
+      window: 1_000_000,
+      isDefault: false,
+      effortLevels: ["low", "high"],
+      defaultEffort: "low",
+    },
+  ];
+  const CONVS = [
+    {
+      id: "conv-1",
+      title: "甲",
+      provider: "anthropic",
+      model: "model-a",
+      updatedAt: 2,
+      effort: "medium",
+    },
+  ];
+  const provider = (name: string, spentUsd: number) => ({
+    name,
+    spentUsd,
+    quotaUsd: 100,
+    warnUsd: 80,
+    stopUsd: 95,
+    stopped: false,
+  });
+  const media = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = media;
+  });
+  async function ready() {
+    const h = socketHarness();
+    const r = await render(<App socket={h.socket} now={h.now} />);
+    await act(async () => h.last().ready());
+    const asked = h
+      .last()
+      .messages()
+      .find((m) => m.kind === "models.get");
+    await act(async () => {
+      h.last().receive(server("relay.status", { online: true }));
+      h.last().receive(server("conv.list.result", { convs: CONVS }));
+      h.last().receive(server("models.result", { models: MODELS }, { re: asked?.id ?? "" }));
+      h.last().receive(
+        server("status", {
+          now: 1,
+          providers: [provider("anthropic", 12.4), provider("gemini", 96)],
+          pricesWarn: false,
+          pendingApprovals: 0,
+          turnRunning: false,
+          notify: "ok",
+        }),
+      );
+    });
+    const seg = () => r.root.querySelector(".model-anchor .run-seg") as HTMLButtonElement;
+    const menu = () =>
+      r.root.querySelector("[role=menu][aria-label=選擇模型]") as HTMLElement | null;
+    const key = async (k: string) =>
+      act(async () => {
+        document.activeElement?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: k, bubbles: true }),
+        );
+      });
+    return { h, ...r, seg, menu, key };
+  }
+
+  test("a new conversation: groups with their spending, a stopped one closed, each model's line; keys move past what cannot be picked", async () => {
+    const { seg, menu, key, unmount } = await ready();
+    await act(async () => seg().click());
+    expect(seg().getAttribute("aria-expanded")).toBe("true");
+    const heads = [...(menu()?.querySelectorAll(".model-menu-head") ?? [])].map(
+      (e) => e.textContent,
+    );
+    expect(heads).toEqual(["Anthropic本期 12.40 / 100 USD 估", "Gemini已達停用門檻（95%）"]);
+    expect(menu()?.querySelector(".model-menu-head .sg-tag.error")?.textContent).toBe(
+      "已達停用門檻（95%）",
+    );
+    const options = [
+      ...(menu()?.querySelectorAll<HTMLButtonElement>("[role=menuitemradio]") ?? []),
+    ];
+    expect(options.map((o) => [o.textContent, o.getAttribute("aria-checked"), o.disabled])).toEqual(
+      [
+        ["Model Acontext 200K · 推理 低–高", "true", false],
+        ["Model Ccontext 128K · 不支援推理強度", "false", false],
+        ["Gcontext 1M · 推理 低–高", "false", true],
+      ],
+    );
+    expect(menu()?.querySelector(".model-menu-note")?.textContent).toBe(
+      "這個對話還沒有訊息，可以直接換模型。送出第一則訊息後，模型就綁在對話上。",
+    );
+    expect(document.activeElement).toBe(options[0]);
+    await key("ArrowDown");
+    expect(document.activeElement).toBe(options[1]);
+    await key("ArrowDown");
+    expect(document.activeElement).toBe(options[0]);
+    await key("Escape");
+    expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(seg());
+    unmount();
+  });
+
+  test("a conversation with messages: another model in the menu opens the continue sheet on it, which shows the spending too", async () => {
+    const { root, seg, menu, unmount } = await ready();
+    await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
+    await act(async () => seg().click());
+    expect(menu()?.querySelector(".model-menu-note")?.textContent).toBe(
+      "模型綁在對話上。這個對話已有訊息，選另一個模型會開新對話接續。",
+    );
+    await act(async () =>
+      button(menu() as HTMLElement, "Model Ccontext 128K · 不支援推理強度").click(),
+    );
+    expect(menu()).toBeNull();
+    const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
+    expect(sheet.querySelector("h2")?.textContent).toBe("以另一個模型接續對話");
+    expect(sheet.querySelector(".model-option.selected")?.textContent).toContain("Model C");
+    expect([...sheet.querySelectorAll(".provider-group-head")].map((e) => e.textContent)).toEqual([
+      "Anthropic本期 12.40 / 100 USD 估",
+      "Gemini已達停用門檻（95%）",
+    ]);
+    const g = [...sheet.querySelectorAll<HTMLButtonElement>(".model-option")].find((b) =>
+      b.textContent?.startsWith("G"),
+    );
+    expect(g?.disabled).toBe(true);
+    unmount();
+  });
+
+  test("a phone: the model button opens the sheet, not a menu", async () => {
+    window.matchMedia = ((q: string) => ({
+      matches: true,
+      media: q,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    })) as unknown as typeof window.matchMedia;
+    const { root, seg, menu, unmount } = await ready();
+    expect(seg().getAttribute("aria-haspopup")).toBe("dialog");
+    await act(async () => seg().click());
+    expect(menu()).toBeNull();
+    expect(root.querySelector("[aria-labelledby=model-sheet-title] h2")?.textContent).toBe(
+      "選擇模型",
+    );
     unmount();
   });
 });
