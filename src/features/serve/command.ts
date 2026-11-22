@@ -250,6 +250,7 @@ export async function serve(ctx: ServeContext): Promise<number> {
       sleep: (ms) => Bun.sleep(ms),
       changed,
       certExpiresAt: () => certExpiresAt,
+      secrets: ctx.secrets,
     });
 
     const d = dispatch;

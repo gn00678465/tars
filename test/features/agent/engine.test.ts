@@ -1381,20 +1381,23 @@ describe("continuing with another model", () => {
       ],
       "x",
       "前一個對話的摘要太長，帶不進這個模型。用 --keep-last <N> 只帶最後幾個回合",
+      "summary_too_long" as const,
     ],
     [
       "the latest turn too long",
       () => [said("t".repeat(9000)), replied("ok")],
       "x",
       "最近一個回合就超過這個模型能帶入的長度，--keep-last 也帶不進去。換視窗較大的模型，或開新對話",
+      "turn_too_long" as const,
     ],
     [
       "the message with it over the stop line",
       () => [said("t".repeat(6000)), replied("ok")],
       "m".repeat(14000),
       "這則訊息加上帶入的內容太長。縮短訊息，或用 --keep-last <N> 少帶幾個回合",
+      "over_stop" as const,
     ],
-  ])("conv_too_long when %s; nothing is created", async (_, items, message, expected) => {
+  ])("conv_too_long when %s; nothing is created", async (_, items, message, expected, carry) => {
     const h = await harness({ config: SMALL });
     const old = stored(h, items());
     const before = counts(h.db);
@@ -1402,6 +1405,7 @@ describe("continuing with another model", () => {
       kind: "rejected",
       reason: "conv_too_long",
       message: expected,
+      carry,
     });
     expect(counts(h.db)).toEqual(before);
     expect(h.fake.messages()).toHaveLength(0);

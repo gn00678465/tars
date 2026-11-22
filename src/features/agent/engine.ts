@@ -54,6 +54,7 @@ import {
   settleEnd,
   retryWait,
   settleFailure,
+  type CarryFailure,
   type Consumed,
   type Rejected,
   type Setup,
@@ -118,12 +119,12 @@ export interface TurnInput {
 }
 
 /** conv_too_long when continuing: none of them sends the owner back to /compact (S2-13). */
-export const CARRY_TEXT = {
+export const CARRY_TEXT: Readonly<Record<CarryFailure, string>> = {
   summary_too_long: "前一個對話的摘要太長，帶不進這個模型。用 --keep-last <N> 只帶最後幾個回合",
   turn_too_long:
     "最近一個回合就超過這個模型能帶入的長度，--keep-last 也帶不進去。換視窗較大的模型，或開新對話",
   over_stop: "這則訊息加上帶入的內容太長。縮短訊息，或用 --keep-last <N> 少帶幾個回合",
-} as const;
+};
 
 type EndState = Exclude<TurnState, "running" | "interrupted">;
 
@@ -325,7 +326,8 @@ export function createEngine(deps: EngineDeps) {
         maxBytes: carryoverMaxBytes(s.model, s.limits),
         ...(input.keepLast === undefined ? {} : { keepLast: input.keepLast }),
       });
-      if (typeof rendered === "string") return rejected("conv_too_long", CARRY_TEXT[rendered]);
+      if (typeof rendered === "string")
+        return { ...rejected("conv_too_long", CARRY_TEXT[rendered]), carry: rendered };
       carry = {
         ...pending,
         body: { text: rendered.text, carriedFrom: input.continueFrom },
@@ -374,7 +376,7 @@ export function createEngine(deps: EngineDeps) {
     const first = reserveChat({ s, system, prefix }, conv, history, undefined);
     if (!first.ok)
       return first.reason === "conv_too_long" && carry !== undefined
-        ? rejected("conv_too_long", CARRY_TEXT.over_stop)
+        ? { ...rejected("conv_too_long", CARRY_TEXT.over_stop), carry: "over_stop" }
         : rejected(first.reason);
 
     const convId = conv?.id ?? store.newId();

@@ -88,6 +88,7 @@ export const CLIENT: Record<string, object> = {
   "turn.abort": msg("turn.abort", {}, { conv: ID }),
   "approval.decide": msg("approval.decide", { approvalId: ID, decision: "approved", hash: HASH }),
   "status.get": msg("status.get", {}),
+  "models.get": msg("models.get", {}),
 };
 
 export const SERVER: Record<string, object> = {
@@ -127,6 +128,16 @@ export const SERVER: Record<string, object> = {
     via: "remote",
   }),
   status: msg("status", status),
+  "models.result": msg(
+    "models.result",
+    {
+      models: [
+        { provider: "anthropic", id: "m", label: "M", window: 200_000, isDefault: true },
+        { provider: "gemini", id: "g", label: "G", isDefault: false, unusable: "no_key" },
+      ],
+    },
+    { re: ID },
+  ),
   "relay.status": msg("relay.status", { online: true, lastSeenAt: 1, localSince: 2 }),
 };
 
@@ -145,6 +156,7 @@ export const REQUIRED_P: Record<string, string> = {
   "approval.request": "approval",
   "approval.resolved": "via",
   status: "now",
+  "models.result": "models",
   "relay.status": "online",
 };
 

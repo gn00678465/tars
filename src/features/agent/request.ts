@@ -56,10 +56,15 @@ export interface Setup {
   readonly pricesWarn: boolean;
 }
 
+/** Why a continuation's text could not be carried; reason is conv_too_long with each. */
+export type CarryFailure = "summary_too_long" | "turn_too_long" | "over_stop";
+
 export interface Rejected {
   readonly kind: "rejected";
   readonly reason: RejectReason;
   readonly message: string;
+  /** conv_too_long from carrying: which next step helps, for a page that gets only codes. */
+  readonly carry?: CarryFailure;
 }
 
 export const rejected = (reason: RejectReason, message = REASON_TEXT[reason]): Rejected => ({

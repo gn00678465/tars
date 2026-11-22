@@ -2,21 +2,14 @@ import type { Database } from "bun:sqlite";
 import { InvalidArgumentError, Option, type Command } from "commander";
 import { EXIT, TarsError } from "../../core/exit.ts";
 import { inSession, resolvePaths, type TarsPaths } from "../../core/paths.ts";
-import { PROVIDERS, type Provider } from "../../core/secrets.ts";
+import type { Provider } from "../../core/secrets.ts";
 import type { Terminal } from "../../core/terminal.ts";
 import { SLUG } from "../script/metadata.ts";
 import { wikiSpend } from "../wiki/db.ts";
 import { carryoverMaxBytes, renderCarryover } from "./carryover.ts";
-import {
-  activeModels,
-  defaultModel,
-  findModel,
-  loadCatalog,
-  resolve,
-  type Catalog,
-  type ResolvedModel,
-} from "./catalog.ts";
+import { activeModels, findModel, loadCatalog, resolve, type ResolvedModel } from "./catalog.ts";
 import { parseModelRef, type AgentCommandContext, type ModelRef } from "./cli.ts";
+import { usableModel } from "./start.ts";
 import { loadConfig, type Limits, type TarsConfig } from "./config.ts";
 import { budgetStatuses, statusLine, wikiLine, withReadDb } from "./cost-command.ts";
 import { acquireLock, openDb } from "./db.ts";
@@ -289,61 +282,6 @@ async function startingPoint(
           },
         }),
   };
-}
-
-/**
- * The provider enabled, its key, then the model (its default when none is named): what a new
- * conversation and /model both check.
- */
-export type DefaultStart =
-  | {
-      readonly ok: true;
-      readonly provider: Provider;
-      readonly model: string;
-      readonly effort: Effort;
-    }
-  | { readonly ok: false; readonly reason: "provider_disabled" | "unknown_model" };
-
-/** A new conversation with no model named: [chat] provider's default model, at [chat] effort. */
-export function defaultStart(config: TarsConfig, catalog: Catalog): DefaultStart {
-  const provider = config.chat.provider;
-  if (config.providers[provider]?.enabled !== true)
-    return { ok: false, reason: "provider_disabled" };
-  const model = defaultModel(catalog, provider)?.id;
-  return model === undefined
-    ? { ok: false, reason: "unknown_model" }
-    : { ok: true, provider, model, effort: config.chat.effort };
-}
-
-async function usableModel(
-  provider: Provider,
-  wanted: string | undefined,
-  config: TarsConfig,
-  paths: TarsPaths,
-  ctx: ChatContext,
-): Promise<{ model: string; resolved: ResolvedModel }> {
-  if (config.providers[provider]?.enabled !== true) {
-    const enabled = PROVIDERS.filter((p) => config.providers[p]?.enabled === true);
-    throw new TarsError(
-      `${provider} 沒有啟用：在 config.toml 的 [providers.${provider}] 設 enabled = true。啟用的：${enabled.join(", ") || "（沒有）"}`,
-    );
-  }
-  const key = await ctx.secrets.get(`llm:${provider}`);
-  if (key === null || key === "")
-    throw new TarsError(`沒有 ${provider} 的 API 金鑰。設定：tars llm key set ${provider}`);
-  const catalog = await loadCatalog(paths);
-  // Without a conversation or --model, provider is [chat] provider: the rule tars serve uses too.
-  const fallback = wanted === undefined ? defaultStart(config, catalog) : undefined;
-  const model = wanted ?? (fallback?.ok === true ? fallback.model : undefined);
-  if (model === undefined) {
-    const active = activeModels(catalog, provider).map((m) => `  ${provider}/${m.id}`);
-    throw new TarsError(
-      `${provider} 沒有預設模型。${active.length === 0 ? "清單上沒有 active 的模型；先執行 tars models refresh" : `active 的模型：\n${active.join("\n")}`}\n設定預設：tars models default ${provider}/<id>`,
-    );
-  }
-  const r = resolve(catalog, provider, model, config.limits, ctx.now());
-  if (!r.ok) throw new TarsError(r.message);
-  return { model, resolved: r.model };
 }
 
 const firstLine = (text: string) => {

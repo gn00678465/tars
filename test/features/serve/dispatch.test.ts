@@ -16,7 +16,12 @@ import { Dispatch, DROP } from "../../../src/features/serve/dispatch.ts";
 import type { Verdict } from "../../../src/features/serve/access.ts";
 import { tarsCall, text } from "../../fakes/anthropic.ts";
 import { tempHome } from "../../helpers.ts";
-import { engineHarness, type EngineHarness } from "../agent/engine-fixture.ts";
+import {
+  engineHarness,
+  MODEL_ENTRY,
+  type EngineHarness,
+  type HarnessOptions,
+} from "../agent/engine-fixture.ts";
 import { installSample, sampleScript } from "../script/sample.ts";
 import {
   CONN_A,
@@ -70,8 +75,8 @@ interface Setup {
 
 let ids = 0;
 const CERT_EXPIRES = 1_900_000_000_000;
-async function setup(): Promise<Setup> {
-  const h = await engineHarness({ selfCommand: [fakeTars('echo "ran $*"')] });
+async function setup(extra: Omit<HarnessOptions, "selfCommand"> = {}): Promise<Setup> {
+  const h = await engineHarness({ selfCommand: [fakeTars('echo "ran $*"')], ...extra });
   harnesses.push(h);
   const timers = manualTimers(h.clock.now().getTime());
   const log = recordedLog();
@@ -110,6 +115,7 @@ async function setup(): Promise<Setup> {
     sleep: (ms) => Bun.sleep(Math.min(ms, 5)),
     changed: () => undefined,
     certExpiresAt: () => CERT_EXPIRES,
+    secrets: h.secrets,
   });
   const s: Setup = {
     h,
@@ -745,5 +751,137 @@ describe("Dispatch: snapshots", () => {
     const st = await s.msg(CONN_A, "status.get", {});
     expect(reply(s, CONN_A, st)?.kind).toBe("status");
     allValid(s);
+  });
+});
+
+describe("another model: models.get, a new conversation on it, a continuation", () => {
+  const SMALL = "small-model";
+  const models = {
+    extraModels: [
+      // A window so small that one turn of text is too long to carry.
+      { ...MODEL_ENTRY, id: SMALL, label: "Small", default: false, contextWindow: 200 },
+      { ...MODEL_ENTRY, provider: "gemini" as const, id: "g", label: "G", default: false },
+    ],
+  };
+  // The same model under another id, with a window a turn fits in.
+  const wide = { extraModels: [{ ...MODEL_ENTRY, id: SMALL, label: "Small", default: false }] };
+  const B = { provider: "anthropic", id: SMALL };
+  const turnOf = (s: Setup, conn: string, requestId: string) =>
+    s.hub
+      .to(conn, "turn")
+      .map((m) => m.p as { requestId?: string; state: string; reason?: string })
+      .find((p) => p.requestId === requestId && p.state !== "started");
+
+  async function firstConversation(s: Setup): Promise<string> {
+    s.h.fake.reply(text("一"));
+    await s.msg(CONN_A, "turn.submit", { requestId: "r-1", text: "嗨".repeat(200) });
+    await until(() => ended(s, CONN_A));
+    await s.d.running;
+    return store.findTurnByRequest(s.db, "r-1")?.convId as string;
+  }
+
+  test("models.get: every active model, the default marked, the unusable with their reason", async () => {
+    const s = await setup(models);
+    await s.ready(CONN_A);
+    const id = await s.msg(CONN_A, "models.get", {});
+    const r = reply(s, CONN_A, id);
+    expect(r?.kind).toBe("models.result");
+    type Listed = { id: string; isDefault: boolean; window?: number; unusable?: string };
+    const listed = (r?.p as { models?: Listed[] } | undefined)?.models ?? [];
+    expect(listed.map((m) => [m.id, m.isDefault, m.unusable])).toEqual([
+      [MODEL_ENTRY.id, true, undefined],
+      [SMALL, false, undefined],
+      ["g", false, "provider_disabled"],
+    ]);
+    expect(listed[1]?.window).toBe(200);
+    expect(listed[2]?.window).toBeUndefined();
+    allValid(s);
+  });
+
+  test("model alone: a new conversation on that model", async () => {
+    const s = await setup(wide);
+    await s.ready(CONN_A);
+    s.h.fake.reply(text("好"));
+    await s.msg(CONN_A, "turn.submit", { requestId: "r-b", text: "嗨", model: B });
+    await until(() => ended(s, CONN_A));
+    await s.d.running;
+    const conv = store.getConversation(
+      s.db,
+      store.findTurnByRequest(s.db, "r-b")?.convId as string,
+    );
+    expect([conv.provider, conv.model, conv.parentId]).toEqual(["anthropic", SMALL, undefined]);
+  });
+
+  test("from: a new conversation that carries the text, keeps the level, and is resent as itself", async () => {
+    const s = await setup(wide);
+    await s.ready(CONN_A);
+    const parent = await firstConversation(s);
+    s.h.fake.reply(text("接續了"));
+    const p = { requestId: "r-2", text: "繼續", model: B, from: parent };
+    await s.msg(CONN_A, "turn.submit", p);
+    await until(() => turnOf(s, CONN_A, "r-2") !== undefined);
+    await s.d.running;
+    const made = store.getConversation(
+      s.db,
+      store.findTurnByRequest(s.db, "r-2")?.convId as string,
+    );
+    expect([made.model, made.parentId, made.effort]).toEqual([
+      SMALL,
+      parent,
+      store.getConversation(s.db, parent).effort,
+    ]);
+    const kinds = s.hub
+      .to(CONN_A, "item")
+      .filter((m) => m.conv === made.id)
+      .map((m) => (m.p as { item: { kind: string } }).item.kind);
+    expect(kinds.slice(0, 2)).toEqual(["carried", "user"]);
+    const again = await s.msg(CONN_A, "turn.submit", p);
+    expect(reply(s, CONN_A, again)?.kind).toBe("ack");
+    const elsewhere = await s.msg(CONN_A, "turn.submit", {
+      ...p,
+      model: { provider: "anthropic", id: MODEL_ENTRY.id },
+    });
+    expect(reason(reply(s, CONN_A, elsewhere))).toBe("bad_message");
+    allValid(s);
+  });
+
+  test("a carry too long for the model is refused with a code that says what to do", async () => {
+    const s = await setup(models);
+    await s.ready(CONN_A);
+    const parent = await firstConversation(s);
+    await s.msg(CONN_A, "turn.submit", { requestId: "r-3", text: "繼續", model: B, from: parent });
+    await until(() => turnOf(s, CONN_A, "r-3") !== undefined);
+    expect(turnOf(s, CONN_A, "r-3")).toMatchObject({
+      state: "rejected",
+      reason: "carry_turn_too_long",
+    });
+  });
+
+  test("model or from on an open conversation, from that does not exist, a provider no one has", async () => {
+    const s = await setup(models);
+    await s.ready(CONN_A);
+    const parent = await firstConversation(s);
+    const onConv = await s.msg(
+      CONN_A,
+      "turn.submit",
+      { requestId: "r-4", text: "x", model: B },
+      { conv: parent },
+    );
+    expect(reason(reply(s, CONN_A, onConv))).toBe("bad_message");
+    const missing = await s.msg(CONN_A, "turn.submit", {
+      requestId: "r-5",
+      text: "x",
+      model: B,
+      from: "nope",
+    });
+    expect(reason(reply(s, CONN_A, missing))).toBe("not_found");
+    await s.msg(CONN_A, "turn.submit", {
+      requestId: "r-6",
+      text: "x",
+      model: { provider: "nope", id: "m" },
+    });
+    await until(() => turnOf(s, CONN_A, "r-6") !== undefined);
+    expect(turnOf(s, CONN_A, "r-6")).toMatchObject({ state: "rejected", reason: "unknown_model" });
+    expect(s.h.fake.messages()).toHaveLength(1);
   });
 });

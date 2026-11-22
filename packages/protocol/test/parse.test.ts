@@ -3,7 +3,9 @@ import {
   ARGV_ITEMS,
   checkClient,
   FRAME_BYTES,
+  KEEP_LAST,
   MESSAGE_BYTES,
+  MODELS,
   parseClient,
   parseFrame,
   parseRelayFrame,
@@ -103,6 +105,35 @@ describe("status's skills and certificate expiry", () => {
     expect(skillInvocationText("demo", "內容")).toBe(
       "請用 skill「demo」處理下面的內容。先用 skill_load 讀它。\n\n內容",
     );
+  });
+});
+
+describe("turn.submit's model, from and keepLast; models.result", () => {
+  const with_ = (extra: Record<string, unknown>) =>
+    JSON.stringify(msg("turn.submit", { requestId: ID, text: "hi", ...extra }));
+  const model = { provider: "gemini", id: "g" };
+
+  test("all three optional: a new conversation on a model, a continuation, the last turns only", () => {
+    expect(reason(parseClient(with_({})))).toBe("ok");
+    expect(reason(parseClient(with_({ model })))).toBe("ok");
+    expect(reason(parseClient(with_({ model, from: ID })))).toBe("ok");
+    expect(reason(parseClient(with_({ model, from: ID, keepLast: KEEP_LAST })))).toBe("ok");
+  });
+
+  test("from without model, keepLast without from, keepLast out of range, a key no one knows", () => {
+    expect(reason(parseClient(with_({ from: ID })))).toBe("bad_message");
+    expect(reason(parseClient(with_({ model, keepLast: 3 })))).toBe("bad_message");
+    for (const keepLast of [0, -1, 1.5, KEEP_LAST + 1])
+      expect(reason(parseClient(with_({ model, from: ID, keepLast })))).toBe("bad_message");
+    expect(reason(parseClient(with_({ model: { ...model, effort: "high" } })))).toBe("bad_message");
+  });
+
+  test("models.result: window and unusable optional; at most MODELS", () => {
+    const one = { provider: "anthropic", id: "m", label: "M", isDefault: false };
+    const result = (models: unknown[]) => JSON.stringify(msg("models.result", { models }));
+    expect(reason(parseServer(result([one])))).toBe("ok");
+    expect(reason(parseServer(result([{ ...one, window: 0 }])))).toBe("bad_message");
+    expect(reason(parseServer(result(Array(MODELS + 1).fill(one))))).toBe("bad_message");
   });
 });
 

@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import {
   checkClient,
   ID_CHARS,
+  MODELS,
   PROTOCOL_VERSION,
   SKILL_TEXT,
   SKILLS,
@@ -19,7 +20,8 @@ import { sha256 } from "../../core/hash.ts";
 import type { TarsPaths } from "../../core/paths.ts";
 import * as approvals from "../agent/approvals.ts";
 import { loadCatalog, resolve, type Catalog } from "../agent/catalog.ts";
-import { defaultStart } from "../agent/chat.ts";
+import { defaultStart, modelChoices } from "../agent/start.ts";
+import { PROVIDERS, type SecretStore } from "../../core/secrets.ts";
 import type { TarsConfig } from "../agent/config.ts";
 import { budgetStatuses } from "../agent/cost-command.ts";
 import type { Engine, TurnInput } from "../agent/engine.ts";
@@ -60,6 +62,8 @@ export interface DispatchDeps {
   changed(): void;
   /** The link certificate's expiry (epoch ms), once it was read; undefined before or without. */
   certExpiresAt?(): number | undefined;
+  /** The keyring, to tell models.get which providers have a key. */
+  readonly secrets: Pick<SecretStore, "get">;
 }
 
 interface Current {
@@ -295,7 +299,27 @@ export class Dispatch {
         return this.current.frontend.decide(conn, m, (out) => this.d.hub.send(conn, out));
       case "status.get":
         return this.d.hub.send(conn, await this.status(m.id));
+      case "models.get":
+        return this.models(conn, m.id);
     }
+  }
+
+  /** models.get: every active model, usable or why not, as the terminal's /model judges one. */
+  private async models(conn: string, re: string): Promise<void> {
+    if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", re);
+    const choices = await modelChoices(await this.d.config(), await loadCatalog(this.d.paths), {
+      secrets: this.d.secrets,
+      now: () => new Date(this.d.now()),
+    });
+    const models = choices.slice(0, MODELS).map((c) => ({
+      provider: c.provider,
+      id: c.id.slice(0, 128),
+      label: c.label.slice(0, 128),
+      isDefault: c.isDefault,
+      ...(c.window === undefined ? {} : { window: c.window }),
+      ...(c.unusable === undefined ? {} : { unusable: c.unusable }),
+    }));
+    this.d.hub.send(conn, message(this.d.hub, "models.result", { models }, { re }));
   }
 
   private async hello(conn: string, m: Of<"hello">): Promise<void> {
@@ -394,7 +418,21 @@ export class Dispatch {
         return this.reply(conn, "nack", "not_found", m.id);
       }
     const { requestId, text } = m.p;
-    const hash = sha256(text);
+    // A conversation's model is its own (D17): another model is a new conversation, continued
+    // from it if the page says so.
+    if (conv !== undefined && (m.p.model !== undefined || m.p.from !== undefined))
+      return this.reply(conn, "nack", "bad_message", m.id);
+    let parent: store.Conversation | undefined;
+    if (m.p.from !== undefined)
+      try {
+        parent = store.getConversation(this.d.db, m.p.from);
+      } catch {
+        return this.reply(conn, "nack", "not_found", m.id);
+      }
+    // What a resend must match: the text, and the model and the conversation it continues.
+    const hash = sha256(
+      JSON.stringify([text, m.p.model ?? null, m.p.from ?? null, m.p.keepLast ?? null]),
+    );
     // A resend: the table while the turn is not there yet, then the database.
     const held = this.pending.get(requestId);
     if (held !== undefined)
@@ -404,7 +442,12 @@ export class Dispatch {
       const sent = store
         .readItems(this.d.db, turn.convId)
         .find((i) => i.turnId === turn.id && i.kind === "user" && i.body.carriedFrom === undefined);
-      return sent?.kind === "user" && sent.body.text === text
+      const made = store.getConversation(this.d.db, turn.convId);
+      const same =
+        (m.p.model === undefined ||
+          (made.provider === m.p.model.provider && made.model === m.p.model.id)) &&
+        (m.p.from === undefined || made.parentId === m.p.from);
+      return sent?.kind === "user" && sent.body.text === text && same
         ? this.ack(conn, m.id, turn)
         : this.reply(conn, "nack", "bad_message", m.id);
     }
@@ -420,7 +463,8 @@ export class Dispatch {
     this.d.changed();
     this.ack(conn, m.id);
     // In the background: the next message (an approval, an abort) must not wait for this turn.
-    this.running = this.run(conn, current, text, conv).catch((err) =>
+    const start = { model: m.p.model, parent, keepLast: m.p.keepLast };
+    this.running = this.run(conn, current, text, conv, start).catch((err) =>
       this.d.log.log("warning", {
         connId: store.shortId(conn),
         kind: "turn.submit",
@@ -434,6 +478,11 @@ export class Dispatch {
     current: Current,
     text: string,
     conv: store.Conversation | undefined,
+    start: {
+      readonly model: { readonly provider: string; readonly id: string } | undefined;
+      readonly parent: store.Conversation | undefined;
+      readonly keepLast: number | undefined;
+    },
   ): Promise<void> {
     const { requestId, frontend, controller } = current;
     try {
@@ -449,16 +498,33 @@ export class Dispatch {
           text,
           requestId,
         };
-      else {
-        const start = defaultStart(config, await loadCatalog(this.d.paths));
-        if (!start.ok) {
+      else if (start.model !== undefined) {
+        // The engine checks the model as for any turn; only a name no provider has stops here.
+        const provider = PROVIDERS.find((p) => p === start.model?.provider);
+        if (provider === undefined) {
           this.pending.delete(requestId);
-          return this.rejected(conn, requestId, start.reason);
+          return this.rejected(conn, requestId, "unknown_model");
         }
         input = {
-          provider: start.provider,
-          model: start.model,
-          effort: start.effort,
+          provider,
+          model: start.model.id,
+          // A continuation keeps its conversation's level, as the terminal's /model does.
+          effort: start.parent?.effort ?? config.chat.effort,
+          text,
+          requestId,
+          ...(start.parent === undefined ? {} : { continueFrom: start.parent.id }),
+          ...(start.keepLast === undefined ? {} : { keepLast: start.keepLast }),
+        };
+      } else {
+        const begin = defaultStart(config, await loadCatalog(this.d.paths));
+        if (!begin.ok) {
+          this.pending.delete(requestId);
+          return this.rejected(conn, requestId, begin.reason);
+        }
+        input = {
+          provider: begin.provider,
+          model: begin.model,
+          effort: begin.effort,
           text,
           requestId,
         };
@@ -466,7 +532,9 @@ export class Dispatch {
       const out = await this.d.engine.runTurn(input, frontend, controller.signal);
       if (out.kind === "rejected") {
         this.pending.delete(requestId);
-        return this.rejected(conn, requestId, out.reason, conv?.id);
+        // The page gets codes only: which carry failed says what to do next.
+        const reason = out.carry === undefined ? out.reason : `carry_${out.carry}`;
+        return this.rejected(conn, requestId, reason, conv?.id);
       }
       await Promise.race([
         this.d.reconcile(input.provider).catch(() => undefined),

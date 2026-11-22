@@ -71,6 +71,26 @@ export const wireItem = z.discriminatedUnion("kind", [
   }),
 ]);
 
+export const wireModelRef = z.strictObject({
+  provider: z.string().max(32),
+  id: z.string().max(128),
+});
+
+/** A model in models.result. */
+export const wireModel = z.strictObject({
+  ...wireModelRef.shape,
+  label: z.string().max(128),
+  /**
+   * The effective window in tokens, for a usable one: what a continuation's carried text is at
+   * most 40% of.
+   */
+  window: z.number().int().positive().optional(),
+  /** The model a new conversation gets when none is named. */
+  isDefault: z.boolean(),
+  /** Why it cannot be used now, as a turn's rejection code; absent when it can. */
+  unusable: z.string().max(64).optional(),
+});
+
 export const wireConv = z.strictObject({
   id,
   title: z.string().max(200),
@@ -173,3 +193,4 @@ export type WireConv = z.infer<typeof wireConv>;
 export type WireApproval = z.infer<typeof wireApproval>;
 export type WireRunning = z.infer<typeof wireRunning>;
 export type WireStatus = z.infer<typeof wireStatus>;
+export type WireModel = z.infer<typeof wireModel>;

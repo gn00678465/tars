@@ -24,3 +24,7 @@ export const ARGV_CHARS = 4_096;
 /** The skills status lists: at most this many, each description cut to SKILL_TEXT characters. */
 export const SKILLS = 200;
 export const SKILL_TEXT = 300;
+/** The models models.result lists. */
+export const MODELS = 200;
+/** turn.submit's keepLast: the turns a continuation carries at most. */
+export const KEEP_LAST = 1_000;

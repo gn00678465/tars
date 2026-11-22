@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { envelope, id } from "./envelope.ts";
-import { DELTA_BYTES, SNAPSHOT_ITEMS } from "./limits.ts";
-import { wireApproval, wireConv, wireItem, wireRunning, wireStatus } from "./wire.ts";
+import { DELTA_BYTES, MODELS, SNAPSHOT_ITEMS } from "./limits.ts";
+import { wireApproval, wireConv, wireItem, wireModel, wireRunning, wireStatus } from "./wire.ts";
 
 export const NACK = [
   "offline",
@@ -26,6 +26,8 @@ export const serverMessage = z.discriminatedUnion("kind", [
     z.strictObject({ reason: z.enum(NACK), need: z.enum(["client", "local"]).optional() }),
   ),
   envelope("conv.list.result", z.strictObject({ convs: z.array(wireConv).max(500) })),
+  /** The answer to models.get, only to the page that asked: a page older than it never asks. */
+  envelope("models.result", z.strictObject({ models: z.array(wireModel).max(MODELS) })),
   envelope(
     "conv.snapshot",
     z.strictObject({

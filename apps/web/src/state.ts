@@ -5,6 +5,7 @@ import type {
   WireApproval,
   WireConv,
   WireItem,
+  WireModel,
   WireStatus,
 } from "@tars/protocol";
 
@@ -60,6 +61,11 @@ export interface State {
    * the local end and back. Not the model's latency. Kept for this connection only.
    */
   readonly rtt?: number;
+  /**
+   * models.result's list. Only a local end that knows models.get sends it: until it comes, the
+   * page offers no other model, since such a local end refuses a turn.submit that names one.
+   */
+  readonly models?: readonly WireModel[];
   readonly convs: readonly WireConv[];
   /** conv.list.result came at least once: an empty list is empty, not still loading. */
   readonly listed?: boolean;
@@ -164,6 +170,8 @@ function message(s: State, m: ServerMessage, at: number): State {
       return s.epoch !== undefined && s.epoch !== m.p.epoch
         ? fresh(s, m.p.epoch)
         : { ...s, epoch: m.p.epoch };
+    case "models.result":
+      return { ...s, models: m.p.models };
     case "status":
       return s.ping !== undefined && m.re === s.ping.id
         ? { ...withoutKeys(s, "ping"), status: m.p, statusAt: at, rtt: at - s.ping.at }
