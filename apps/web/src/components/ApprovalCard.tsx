@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { WireApproval } from "@tars/protocol";
 import type { Card } from "../state.ts";
 import { Icon } from "./Icon.tsx";
 import { leftText, shortId, timeText } from "./time.ts";
@@ -8,6 +9,19 @@ const EFFECTS: Record<string, string> = {
   "local-write": "寫本機",
   "external-write": "寫外部",
 };
+
+/**
+ * What a screen reader says when a card comes to wait (the prototype's approval-live-alert): the
+ * script, its effect and where it connects, the fields an owner decides on first.
+ */
+export function announceText(a: WireApproval): string {
+  const hosts = a.domains.map((d) => (d === "*" ? "任意主機" : d)).join("、");
+  // As the prototype: a space before a host name, none before Chinese.
+  const where =
+    a.domains.length === 0 ? "不連線" : `連線${hosts.startsWith("任意主機") ? "" : " "}${hosts}`;
+  const action = a.action === "run_script" ? "執行腳本" : a.action;
+  return `需要核准：${action} ${a.script}，影響${EFFECTS[a.effects] ?? a.effects}，${where}。預設焦點在拒絕按鈕。`;
+}
 
 // Everything that prints as nothing or as something else: control and format characters
 // (zero-width, bidi overrides), line and paragraph separators, every space but U+0020, the
@@ -130,7 +144,7 @@ export function ApprovalCard(props: {
   const cls = ["approval-card"];
   if (resolved !== undefined) cls.push("state-resolved");
   return (
-    <article className={cls.join(" ")} aria-label="核准">
+    <article className={cls.join(" ")} role="region" aria-label="腳本執行核准卡">
       {props.origin === undefined ? null : (
         <div className="approval-origin-bar">
           <div className="approval-origin-text">
@@ -215,6 +229,12 @@ export function ApprovalCard(props: {
           ) : null}
           <dt className="sr-only">核准編號、雜湊前 8 碼</dt>
           <dd className="approval-ids">{`${shortId(a.approvalId)}、${a.hash.slice(0, 8)}`}</dd>
+          {resolved === undefined ? (
+            <>
+              <dt className="sr-only">鍵盤</dt>
+              <dd className="compaction-meta">無單鍵快捷鍵 · 預設焦點在拒絕</dd>
+            </>
+          ) : null}
         </dl>
         {resolved === undefined ? (
           <div className="approval-actions">

@@ -231,6 +231,68 @@ describe("the sidebar and the open conversation", () => {
   const pinnedCard = (root: HTMLElement) =>
     root.querySelector(".composer-dock .approval-card") as HTMLElement | null;
 
+  test("a screen reader hears a card come to wait, once; and each reply that comes, not old ones", async () => {
+    const { h, root, unmount } = await listed();
+    const alert = () => root.querySelector(".sr-only[role=alert]") as HTMLElement;
+    const polite = () => root.querySelector(".sr-only[aria-live=polite]") as HTMLElement;
+    expect([alert().getAttribute("aria-live"), alert().textContent]).toEqual(["assertive", ""]);
+    await act(async () => entry(root, "對話 1").click());
+    await act(async () =>
+      h.last().receive(
+        server(
+          "conv.snapshot",
+          {
+            epoch: "epoch-1",
+            more: false,
+            items: [
+              { seq: 1, turn: "t1", kind: "user", text: "舊", truncated: false },
+              {
+                seq: 2,
+                turn: "t1",
+                kind: "assistant",
+                text: "舊回覆",
+                truncated: false,
+                state: "complete",
+              },
+            ],
+          },
+          { conv: "conv-1" },
+        ),
+      ),
+    );
+    expect(polite().textContent).toBe("");
+    await act(async () =>
+      h.last().receive(
+        server(
+          "item",
+          {
+            item: {
+              seq: 3,
+              turn: "t2",
+              kind: "assistant",
+              text: "新回覆",
+              truncated: false,
+              state: "complete",
+            },
+          },
+          { conv: "conv-1" },
+        ),
+      ),
+    );
+    expect(polite().textContent).toBe("新回覆");
+
+    await act(async () => h.last().receive(request("conv-1")));
+    expect(alert().textContent).toBe(
+      "需要核准：執行腳本 push，影響寫外部，不連線。預設焦點在拒絕按鈕。",
+    );
+    await act(async () => h.last().receive(resolved("approved")));
+    expect(alert().textContent).toBe("");
+    // The local end's resend after a reconnect: not new, not said again.
+    await act(async () => h.last().receive(request("conv-1")));
+    expect(alert().textContent).toBe("");
+    unmount();
+  });
+
   test("decided on another device, a card from another conversation stays with its result until closed", async () => {
     const { h, root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());
@@ -957,7 +1019,7 @@ describe("another model: chosen for a new conversation, or continuing one", () =
   test("a local end that does not list models: no model control, no error", async () => {
     const { root, unmount } = await ready(false);
     expect(root.querySelector(".run-seg")).toBeNull();
-    expect(root.querySelector("[role=alert]")).toBeNull();
+    expect(root.querySelector("[role=alert]:not(.sr-only)")).toBeNull();
     unmount();
   });
 
@@ -1015,7 +1077,9 @@ describe("another model: chosen for a new conversation, or continuing one", () =
       h.last().receive(server("turn", { requestId, state: "rejected", reason: "carry_over_stop" })),
     );
     // Refused: still here, with the choice, and what to do next.
-    expect(root.querySelector("[role=alert]")?.textContent).toContain("把帶入範圍改成更少的回合");
+    expect(root.querySelector("[role=alert]:not(.sr-only)")?.textContent).toContain(
+      "把帶入範圍改成更少的回合",
+    );
     expect(root.querySelector(".composer-wrap .task-notice.active")).not.toBeNull();
     await act(async () => button(root, "取消").click());
     expect(h.last().messages().at(-1)).toMatchObject({ kind: "conv.open", conv: "conv-1" });

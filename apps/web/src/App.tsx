@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
-import { ApprovalCard } from "./components/ApprovalCard.tsx";
+import { ApprovalCard, announceText } from "./components/ApprovalCard.tsx";
 import { Composer } from "./components/Composer.tsx";
 import { ContinueBanner, ModelSheet, type ModelRef } from "./components/ModelSheet.tsx";
 import { ConversationList } from "./components/ConversationList.tsx";
@@ -126,6 +126,19 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   useEffect(() => {
     if (opened > 0) thread.current?.focus();
   }, [opened]);
+
+  // A card that comes to wait is announced once, assertively (the prototype's
+  // approval-live-alert); the local end's resend of it after a reconnect is not new.
+  const announced = useRef(new Set<string>());
+  const [announce, setAnnounce] = useState("");
+  useEffect(() => {
+    const waiting = state.cards.filter((c) => c.resolved === undefined);
+    const fresh = waiting.filter((c) => !announced.current.has(c.approval.approvalId));
+    for (const c of fresh) announced.current.add(c.approval.approvalId);
+    const last = fresh.at(-1);
+    if (last !== undefined) setAnnounce(announceText(last.approval));
+    else if (waiting.length === 0) setAnnounce("");
+  }, [state.cards]);
 
   const open = (c: string | undefined) => {
     setNext(undefined);
@@ -281,6 +294,13 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   return (
     <div className="app-viewport">
       <h1 className="sr-only">TARS 本機 Agent 遠端介面</h1>
+      {/* Live regions are there before what they say, or a screen reader may miss it. */}
+      <div className="sr-only" role="alert" aria-live="assertive">
+        {announce}
+      </div>
+      <div className="sr-only" aria-live="polite">
+        {state.spoken ?? ""}
+      </div>
       <div className="app-shell">
         <div
           className={drawer ? "drawer-scrim visible" : "drawer-scrim"}

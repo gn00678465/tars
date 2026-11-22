@@ -4,7 +4,7 @@ import { act } from "react";
 import { afterEach, expect, test } from "vite-plus/test";
 import { button, render } from "../render.ts";
 import type { Card } from "../state.ts";
-import { ApprovalCard } from "./ApprovalCard.tsx";
+import { ApprovalCard, announceText } from "./ApprovalCard.tsx";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -44,6 +44,7 @@ test("the nine fields, as text, in the prototype's two parts", async () => {
     "內容",
     "到期時間",
     "核准編號、雜湊前 8 碼",
+    "鍵盤",
   ]);
   const values = [...root.querySelectorAll("dd")].map((d) => d.textContent);
   expect(values[0]).toBe("push（版本 v1）");
@@ -319,4 +320,37 @@ test("waiting: the countdown is shown", async () => {
     />,
   );
   expect(root.textContent).toContain("剩 9 分 36 秒");
+});
+
+test("a region named as the prototype's; waiting, it says how the keyboard works", async () => {
+  const waiting = await render(
+    <ApprovalCard card={card()} localNow={1_800_000_000_000} onDecide={() => undefined} />,
+  );
+  const region = waiting.root.querySelector("article") as HTMLElement;
+  expect([region.getAttribute("role"), region.getAttribute("aria-label")]).toEqual([
+    "region",
+    "腳本執行核准卡",
+  ]);
+  expect(region.textContent).toContain("無單鍵快捷鍵 · 預設焦點在拒絕");
+  waiting.unmount();
+  const decided = await render(
+    <ApprovalCard
+      card={card({ resolved: { state: "approved", here: true } })}
+      localNow={1_800_000_000_000}
+      onDecide={() => undefined}
+    />,
+  );
+  expect(decided.root.textContent).not.toContain("無單鍵快捷鍵");
+});
+
+test("the announcement: script, effect and where it connects, and where the focus is", () => {
+  expect(announceText(approval)).toBe(
+    "需要核准：執行腳本 push，影響寫外部，連線 api.example.com、任意主機。預設焦點在拒絕按鈕。",
+  );
+  expect(announceText({ ...approval, effects: "read-only", domains: [] })).toBe(
+    "需要核准：執行腳本 push，影響只讀，不連線。預設焦點在拒絕按鈕。",
+  );
+  expect(announceText({ ...approval, domains: ["*"] })).toBe(
+    "需要核准：執行腳本 push，影響寫外部，連線任意主機。預設焦點在拒絕按鈕。",
+  );
 });

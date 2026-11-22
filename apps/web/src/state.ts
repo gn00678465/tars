@@ -74,6 +74,11 @@ export interface State {
   readonly items: readonly WireItem[];
   readonly more: boolean;
   readonly running?: { readonly turn: string; readonly text: string };
+  /**
+   * The last reply that came while the page was open, for a screen reader (polite): a whole reply
+   * once, not each delta, and nothing from a snapshot.
+   */
+  readonly spoken?: string;
   readonly turn?: { readonly state: TurnState; readonly turn?: string; readonly reason?: string };
   /** Sent, not yet started or refused. */
   readonly submitting?: string;
@@ -243,7 +248,7 @@ function message(s: State, m: ServerMessage, at: number): State {
       if (!here || s.items.some((i) => i.seq === m.p.item.seq)) return s;
       const items = bySeq([...s.items, m.p.item]);
       return m.p.item.kind === "assistant"
-        ? withoutKeys({ ...s, items }, "running")
+        ? { ...withoutKeys(s, "running"), items, spoken: m.p.item.text }
         : { ...s, items };
     }
     case "delta": {
@@ -363,6 +368,7 @@ export function reduce(s: State, e: Event): State {
         "turn",
         "error",
         "conv",
+        "spoken",
       );
       return e.conv === undefined ? base : { ...base, conv: e.conv };
     }
