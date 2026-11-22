@@ -207,7 +207,8 @@ describe("the sidebar and the open conversation", () => {
     const fresh = l.root.querySelector(".new-chat-btn") as HTMLElement;
     const first = entry(l.root, "對話 0");
     expect(fresh.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(l.root.querySelector(".empty-state h2")?.textContent).toBe("新對話");
+    // Nothing started yet: the page says it is connected (11-02).
+    expect(l.root.querySelector(".empty-state h2")?.textContent).toBe("已連線至本機 TARS");
     l.unmount();
   });
 
@@ -228,7 +229,9 @@ describe("the sidebar and the open conversation", () => {
     await act(async () => entry(root, "對話 1").click());
     await act(async () => (root.querySelector(".new-chat-btn") as HTMLButtonElement).click());
     expect(root.querySelector(".conv-item[aria-current]")).toBeNull();
-    expect(root.querySelector(".empty-state")).not.toBeNull();
+    expect(root.querySelector(".empty-state h2")?.textContent).toBe("新對話");
+    // 7-19: typing can start at once.
+    expect(document.activeElement).toBe(root.querySelector("textarea"));
     unmount();
   });
 
@@ -1076,7 +1079,9 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     await act(async () => button(menu, "Model Bcontext 100K").click());
     expect(root.querySelector("[aria-labelledby=model-sheet-title]")).toBeNull();
     expect(root.querySelector(".run-seg")?.textContent).toBe("模型Model B");
-    expect(root.querySelector(".empty-state")?.textContent).toContain("模型：Model B。");
+    expect(root.querySelector(".empty-state p")?.textContent).toBe(
+      "目前用 Model B。要換模型或推理強度，在輸入框右下角選。送出第一則訊息後，模型就綁在這個對話上。",
+    );
     await send("嗨");
     expect(submitted()?.p).toMatchObject({
       text: "嗨",

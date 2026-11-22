@@ -205,8 +205,13 @@ export function Thread(props: {
   state: State;
   onOlder: () => void;
   after: After;
-  /** A new conversation's model, when one was chosen. */
+  /**
+   * The new conversation's model label; "" when the local end lists none; absent from a local
+   * end older than models.list.
+   */
   model?: string;
+  /** No conversation was opened or started yet: the page says it is connected. */
+  welcome?: boolean;
   /** Opens the effort control; absent when the page offers none. */
   onEffort?: () => void;
 }) {
@@ -215,11 +220,24 @@ export function Thread(props: {
     return (
       <div className="empty-state">
         <Monolith large />
-        <h2>新對話</h2>
-        <p>
-          {props.model === undefined ? "模型用本機端設定的預設。" : `模型：${props.model}。`}
-          送出第一則訊息後，模型就綁在這個對話上。輸入 / 可查看指令與可用 skills。
-        </p>
+        {props.welcome === true ? (
+          <>
+            <h2>已連線至本機 TARS</h2>
+            <p>
+              可進行日常對話，或透過白名單查詢與執行已入庫的安全腳本。輸入 / 可查看指令與可用
+              skills。
+            </p>
+          </>
+        ) : (
+          <>
+            <h2>新對話</h2>
+            <p>
+              {props.model === ""
+                ? "還沒有可用的模型。請先在本機終端更新模型清單。"
+                : `${props.model === undefined ? "模型用本機端設定的預設。" : `目前用 ${props.model}。要換模型或推理強度，在輸入框右下角選。`}送出第一則訊息後，模型就綁在這個對話上。`}
+            </p>
+          </>
+        )}
       </div>
     );
   const all = groups(items);

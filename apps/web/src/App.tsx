@@ -140,6 +140,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     else if (waiting.length === 0) setAnnounce("");
   }, [state.cards]);
 
+  // How many times a new conversation was started: until then the empty page greets; each one
+  // gives the composer the focus (7-19).
+  const [started, setStarted] = useState(0);
   const open = (c: string | undefined) => {
     setNext(undefined);
     setEffortPick(undefined);
@@ -147,7 +150,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     setModelOpen(false);
     dispatch({ type: "open_conv", conv: c });
     setDrawer(false);
-    if (c === undefined) return;
+    if (c === undefined) return setStarted((n) => n + 1);
     socket.send("conv.open", {}, c);
     setOpened((n) => n + 1);
   };
@@ -217,9 +220,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
         };
   };
   const { models } = state;
-  const chosen = state.conv === undefined ? next : undefined;
   const modelOf = (r: ModelRef | undefined) =>
     r === undefined ? undefined : models?.find((m) => m.provider === r.provider && m.id === r.id);
+  const chosen = state.conv === undefined ? next : undefined;
   const currentRef =
     current === undefined ? undefined : { provider: current.provider, id: current.model };
   // The conversation a continuation comes from: this one, or the one the next message continues.
@@ -380,7 +383,13 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             <div className="thread-inner thread">
               <Thread
                 state={state}
-                {...(chosen === undefined ? {} : { model: nextLabel })}
+                {...(models === undefined ? {} : { model: models.length === 0 ? "" : nextLabel })}
+                welcome={
+                  started === 0 &&
+                  next === undefined &&
+                  state.connection === "open" &&
+                  state.relay.online
+                }
                 {...(effort === undefined || levels.length === 0
                   ? {}
                   : { onEffort: () => setEffortOpen(true) })}
@@ -437,6 +446,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                 />
               )}
               <Composer
+                focus={started}
                 blocked={composerBlocked(state)}
                 busy={sendBusy(state)}
                 canAbort={running && state.connection === "open"}

@@ -1,7 +1,9 @@
-import { type ReactNode, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type Builtin, menuFor, type Option, type Skill, slashOf } from "./slash.ts";
 
 export function Composer(props: {
+  /** Each change gives the text box the focus: a new conversation was started. */
+  focus?: number;
   /** Why the composer is off; undefined when it is on. */
   blocked: string | undefined;
   /** Why a message cannot go yet (a turn runs, one is being sent); typing goes on. */
@@ -24,6 +26,9 @@ export function Composer(props: {
   const [refused, setRefused] = useState<string | undefined>(undefined);
   const off = props.blocked !== undefined;
   const input = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if ((props.focus ?? 0) > 0) input.current?.focus();
+  }, [props.focus]);
   // Our own turn says so with the stop button; another one's (another conversation's, or one
   // being sent) says why the send button is off.
   const waitReason = props.canAbort ? undefined : props.busy;
