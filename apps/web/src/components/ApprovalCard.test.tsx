@@ -287,3 +287,36 @@ test("acked and no result for 15 s: the card says to reload, buttons still off",
   );
   expect(button(late.root, DENY).disabled).toBe(true);
 });
+
+test("decided: no countdown, only the result and the two ids; timed out says 已逾時", async () => {
+  const at = (state: "approved" | "expired") =>
+    render(
+      <ApprovalCard
+        card={card({ resolved: { state, here: true } })}
+        localNow={approval.expiresAt - 576_000}
+        onDecide={() => undefined}
+      />,
+    );
+  const done = await at("approved");
+  expect(done.root.textContent).not.toContain("到期");
+  expect(done.root.textContent).not.toContain("剩");
+  expect(done.root.querySelector(".approval-ids")?.textContent).toBe(
+    `${approval.approvalId.slice(-8)}、${approval.hash.slice(0, 8)}`,
+  );
+  done.unmount();
+  const late = await at("expired");
+  expect(late.root.querySelector(".approval-head .sg-tag")?.textContent).toContain("已逾時");
+  expect(late.root.textContent).not.toContain("剩");
+  late.unmount();
+});
+
+test("waiting: the countdown is shown", async () => {
+  const { root } = await render(
+    <ApprovalCard
+      card={card()}
+      localNow={approval.expiresAt - 576_000}
+      onDecide={() => undefined}
+    />,
+  );
+  expect(root.textContent).toContain("剩 9 分 36 秒");
+});

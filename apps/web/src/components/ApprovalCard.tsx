@@ -49,7 +49,7 @@ export function argText(arg: string): string {
 const STATUS: Record<string, [string, string]> = {
   approved: ["ok", "已核准"],
   denied: ["error", "已拒絕"],
-  expired: ["error", "已過期"],
+  expired: ["error", "已逾時"],
   cancelled: ["", "已取消"],
 };
 
@@ -196,10 +196,15 @@ export function ApprovalCard(props: {
       </div>
       <div className="approval-foot">
         <dl className="approval-foot-meta">
-          <dt className="sr-only">到期時間</dt>
-          <dd className="compaction-meta">
-            {`到期 ${timeText(a.expiresAt)}${left === undefined ? "" : `（${leftText(left)}）`}`}
-          </dd>
+          {/* Decided, a countdown would read as still waiting: only the result and the ids. */}
+          {resolved === undefined ? (
+            <>
+              <dt className="sr-only">到期時間</dt>
+              <dd className="compaction-meta">
+                {`到期 ${timeText(a.expiresAt)}${left === undefined ? "" : `（${leftText(left)}）`}`}
+              </dd>
+            </>
+          ) : null}
           <dt className="sr-only">核准編號、雜湊前 8 碼</dt>
           <dd className="approval-ids">{`${shortId(a.approvalId)}、${a.hash.slice(0, 8)}`}</dd>
         </dl>
