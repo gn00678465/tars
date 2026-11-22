@@ -36,25 +36,28 @@ test("the nine fields, as text, in the prototype's two parts", async () => {
   expect(root.querySelector(".approval-head-title")?.textContent).toContain("執行腳本");
   const labels = [...root.querySelectorAll("dt")].map((d) => d.textContent);
   expect(labels).toEqual([
-    "對象",
-    "影響",
+    "對象與版本",
+    "影響範圍",
     "腳本說明",
     "連線對象",
     "用到的金鑰",
     "內容",
-    "到期時間",
     "核准編號、雜湊前 8 碼",
     "鍵盤",
   ]);
   const values = [...root.querySelectorAll("dd")].map((d) => d.textContent);
-  expect(values[0]).toBe("push（版本 v1）");
-  expect(values[1]).toBe("寫外部");
+  expect(values[0]).toBe("push @ v1");
+  expect(values[1]).toBe("寫外部（高風險）");
+  expect(root.querySelector(".approval-field-val .sg-tag")?.className).toBe("sg-tag warn");
   expect(values[2]).toBe("推播一則通知");
-  expect(values[3]).toBe("api.example.com、任意主機");
+  expect(values[3]).toBe("api.example.com、任意主機（*）");
+  const hosts = root.querySelectorAll(".approval-field")[3]?.querySelectorAll("dd > span > span");
+  expect([...(hosts ?? [])].map((e) => e.className)).toEqual(["mono", "sg-tag warn"]);
   expect(values[4]).toBe("bark");
   expect(args(root)).toEqual(['"--text"', '"<script>alert(1)</script>"']);
-  expect(values[6]).toContain("剩 10 分 0 秒");
-  expect(values[7]).toBe("e56800aa、01234567");
+  // As the prototype: the countdown in the head, the ids with their names.
+  expect(root.querySelector(".approval-countdown")?.textContent).toBe("剩餘 10:00");
+  expect(values[6]).toBe("核准 #e56800aa · sha256: 01234567");
   // The argv's markup stays text: no element was made from it.
   expect(root.querySelector("script")).toBeNull();
 });
@@ -289,7 +292,7 @@ test("acked and no result for 15 s: the card says to reload, buttons still off",
   expect(button(late.root, DENY).disabled).toBe(true);
 });
 
-test("decided: no countdown, only the result and the two ids; timed out says 已逾時", async () => {
+test("decided: no countdown, only the result and the two ids; timed out says 已過期", async () => {
   const at = (state: "approved" | "expired") =>
     render(
       <ApprovalCard
@@ -302,11 +305,11 @@ test("decided: no countdown, only the result and the two ids; timed out says 已
   expect(done.root.textContent).not.toContain("到期");
   expect(done.root.textContent).not.toContain("剩");
   expect(done.root.querySelector(".approval-ids")?.textContent).toBe(
-    `${approval.approvalId.slice(-8)}、${approval.hash.slice(0, 8)}`,
+    `核准 #${approval.approvalId.slice(-8)} · sha256: ${approval.hash.slice(0, 8)}`,
   );
   done.unmount();
   const late = await at("expired");
-  expect(late.root.querySelector(".approval-head .sg-tag")?.textContent).toContain("已逾時");
+  expect(late.root.querySelector(".approval-head .sg-tag")?.textContent).toContain("已過期");
   expect(late.root.textContent).not.toContain("剩");
   late.unmount();
 });
@@ -319,7 +322,33 @@ test("waiting: the countdown is shown", async () => {
       onDecide={() => undefined}
     />,
   );
-  expect(root.textContent).toContain("剩 9 分 36 秒");
+  expect(root.querySelector(".approval-countdown")?.textContent).toBe("剩餘 09:36");
+});
+
+test("without the page's clock: no countdown, the time it expires instead", async () => {
+  const { root } = await render(
+    <ApprovalCard card={card()} localNow={undefined} onDecide={() => undefined} />,
+  );
+  expect(root.querySelector(".approval-countdown")).toBeNull();
+  expect(root.querySelector(".approval-foot .compaction-meta")?.textContent).toMatch(/^到期 /);
+});
+
+test("read-only and local-write are plain tags, without （高風險）", async () => {
+  for (const [effects, text] of [
+    ["read-only", "只讀"],
+    ["local-write", "寫本機"],
+  ] as const) {
+    const { root, unmount } = await render(
+      <ApprovalCard
+        card={card({ approval: { ...approval, effects } })}
+        localNow={1_800_000_000_000}
+        onDecide={() => undefined}
+      />,
+    );
+    const tag = root.querySelector(".approval-field-val .sg-tag") as HTMLElement;
+    expect([tag.className, tag.textContent]).toEqual(["sg-tag", text]);
+    unmount();
+  }
 });
 
 test("a region named as the prototype's; waiting, it says how the keyboard works", async () => {

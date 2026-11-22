@@ -578,7 +578,7 @@ describe("the sidebar and the open conversation", () => {
     });
   const denyOf = (root: HTMLElement, script: string) =>
     [...root.querySelectorAll<HTMLElement>(".approval-card")]
-      .find((c) => c.textContent?.includes(`${script}（版本`))
+      .find((c) => c.textContent?.includes(`${script} @ `))
       ?.querySelector<HTMLButtonElement>(".sg-btn-danger");
 
   test("three waiting cards: only the oldest one's deny has the focus", async () => {
@@ -624,7 +624,7 @@ describe("the sidebar and the open conversation", () => {
     const shown = [...root.querySelectorAll(".thread-scroll .approval-card")].map(
       (c) => c.querySelector(".approval-field-val")?.textContent,
     );
-    expect(shown).toEqual(["s4（版本 v1）", "s5（版本 v1）", "s2（版本 v1）"]);
+    expect(shown).toEqual(["s4 @ v1", "s5 @ v1", "s2 @ v1"]);
     unmount();
   });
 
@@ -655,7 +655,7 @@ describe("the sidebar and the open conversation", () => {
     const shown = [...root.querySelectorAll(".composer-dock .approval-card")].map(
       (c) => c.querySelector(".approval-field-val")?.textContent,
     );
-    expect(shown).toEqual(["s4（版本 v1）", "s5（版本 v1）", "s2（版本 v1）"]);
+    expect(shown).toEqual(["s4 @ v1", "s5 @ v1", "s2 @ v1"]);
     unmount();
   });
 

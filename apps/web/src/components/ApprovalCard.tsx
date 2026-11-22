@@ -63,7 +63,7 @@ export function argText(arg: string): string {
 const STATUS: Record<string, [string, string]> = {
   approved: ["ok", "已核准"],
   denied: ["error", "已拒絕"],
-  expired: ["error", "已逾時"],
+  expired: ["error", "已過期"],
   cancelled: ["", "已取消"],
 };
 
@@ -177,12 +177,13 @@ export function ApprovalCard(props: {
       <div className="approval-section">
         <div className="approval-section-label">入庫時你核可過的腳本屬性</div>
         <dl className="approval-grid">
-          <Field k="對象" mono>
-            {`${a.script}（版本 ${a.version}）`}
+          <Field k="對象與版本" mono>
+            {`${a.script} @ ${a.version}`}
           </Field>
-          <Field k="影響">
+          <Field k="影響範圍">
             <span className={external ? "sg-tag warn" : "sg-tag"}>
               {EFFECTS[a.effects] ?? a.effects}
+              {external ? "（高風險）" : ""}
             </span>
           </Field>
           <Field k="腳本說明">{a.summary}</Field>
@@ -192,7 +193,11 @@ export function ApprovalCard(props: {
               : a.domains.map((d, i) => (
                   <span key={i}>
                     {i === 0 ? "" : "、"}
-                    {d === "*" ? <span className="sg-tag warn">任意主機</span> : d}
+                    {d === "*" ? (
+                      <span className="sg-tag warn">任意主機（*）</span>
+                    ) : (
+                      <span className="mono">{d}</span>
+                    )}
                   </span>
                 ))}
           </Field>
@@ -218,17 +223,17 @@ export function ApprovalCard(props: {
       </div>
       <div className="approval-foot">
         <dl className="approval-foot-meta">
-          {/* Decided, a countdown would read as still waiting: only the result and the ids. */}
-          {resolved === undefined ? (
+          {/* The countdown is in the head, as the prototype; without the page's clock there is
+              none, so the time it expires is said here instead. Decided, neither: a countdown
+              would read as still waiting. */}
+          {resolved === undefined && left === undefined ? (
             <>
               <dt className="sr-only">到期時間</dt>
-              <dd className="compaction-meta">
-                {`到期 ${timeText(a.expiresAt)}${left === undefined ? "" : `（${leftText(left)}）`}`}
-              </dd>
+              <dd className="compaction-meta">{`到期 ${timeText(a.expiresAt)}`}</dd>
             </>
           ) : null}
           <dt className="sr-only">核准編號、雜湊前 8 碼</dt>
-          <dd className="approval-ids">{`${shortId(a.approvalId)}、${a.hash.slice(0, 8)}`}</dd>
+          <dd className="approval-ids">{`核准 #${shortId(a.approvalId)} · sha256: ${a.hash.slice(0, 8)}`}</dd>
           {resolved === undefined ? (
             <>
               <dt className="sr-only">鍵盤</dt>

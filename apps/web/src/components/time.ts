@@ -1,11 +1,12 @@
 /** A time from the local end or the relay, in the phone's own time zone. */
 export const timeText = (ms: number) => new Date(ms).toLocaleString("zh-TW", { hour12: false });
 
+/** An approval's time left, as the prototype's countdown: 剩餘 09:08. */
 export function leftText(ms: number): string {
   if (ms <= 0) return "已到期";
   const s = Math.ceil(ms / 1000);
-  const m = Math.floor(s / 60);
-  return m > 0 ? `剩 ${m} 分 ${s % 60} 秒` : `剩 ${s} 秒`;
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `剩餘 ${two(Math.floor(s / 60))}:${two(s % 60)}`;
 }
 
 /** The last 8 characters, as tars serve status and the notification show an id. */
