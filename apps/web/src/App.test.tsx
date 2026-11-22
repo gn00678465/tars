@@ -63,6 +63,12 @@ test("the pill as scene 5: which reconnect in a warn pill; a version mismatch sa
     "協定不合，請重新載入頁面重新載入",
   ]);
   expect(root.querySelector(".composer .reason")?.textContent).toBe("協定不合，請重新載入頁面");
+  // The phone's status button does not say it a second time: a warn dot and 狀態.
+  const phone = root.querySelector(".topbar-right .mobile-only") as HTMLElement;
+  expect([phone.querySelector(".status-dot")?.className, phone.textContent]).toEqual([
+    "status-dot warn",
+    "狀態",
+  ]);
   unmount();
 });
 
@@ -881,6 +887,12 @@ describe("the / menu and the certificate, from status", () => {
     const sheet = root.querySelector(".sheet-panel") as HTMLElement;
     expect(sheet.textContent).toContain("本機端憑證30 天內到期");
     expect(sheet.textContent).toContain("（剩 10 天）");
+    // On a phone the button says it too, with a warn dot.
+    const phone = root.querySelector(".topbar-right .mobile-only") as HTMLElement;
+    expect([phone.querySelector(".status-dot")?.className, phone.textContent]).toEqual([
+      "status-dot warn",
+      "憑證剩 10 天",
+    ]);
     // The sidebar footer carries it too (1-05).
     const tag = root.querySelector(".sidebar-footer .sg-tag") as HTMLElement;
     expect([tag.className, tag.textContent]).toEqual(["sg-tag warn", "憑證剩 10 天"]);

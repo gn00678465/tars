@@ -159,7 +159,9 @@ export function TopBar(props: {
           onClick={props.onSheet}
         >
           <span className={`status-dot ${warn ? "warn" : "ok"}`} />
-          <span>{warn ? (spend.tone === undefined ? c.text : spend.text) : "狀態"}</span>
+          {/* The pill beside it already says the connection; a second copy pushed this one past
+              the edge at 375px. */}
+          <span>{spend.tone === undefined ? "狀態" : spend.text}</span>
         </button>
       </div>
     </header>
