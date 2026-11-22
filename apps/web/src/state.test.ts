@@ -136,7 +136,7 @@ describe("state: a conversation", () => {
       s,
     );
     expect(refused.conv).toBeUndefined();
-    expect(refused.error).toContain("budget_stopped");
+    expect(refused.error).toBe("沒有開始：本期花費已到停用門檻");
   });
 
   test("an ack that names the turn finishes the submit; a plain ack does not", () => {

@@ -2,6 +2,8 @@ import type { WireItem } from "@tars/protocol";
 import { Fragment, type ReactNode, useState } from "react";
 import type { State } from "../state.ts";
 import { Icon, Monolith } from "./Icon.tsx";
+import { reasonText } from "../reasons.ts";
+import { ErrorCard } from "./ErrorCard.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { shortId } from "./time.ts";
 
@@ -99,19 +101,39 @@ function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undef
 /** What is drawn right after an item: the approval cards that belong to it. */
 export type After = (seq: number) => ReactNode;
 
-function Rest({ items, after }: { items: readonly WireItem[]; after: After }) {
+function Rest({
+  items,
+  after,
+  provider,
+}: {
+  items: readonly WireItem[];
+  after: After;
+  provider: string | undefined;
+}) {
   const results = new Map(
     items.filter((i): i is ToolResult => i.kind === "tool_result").map((i) => [i.callId, i]),
   );
   return items.map((item) => (
     <Fragment key={item.seq}>
-      <One item={item} result={item.kind === "tool_call" ? results.get(item.callId) : undefined} />
+      <One
+        item={item}
+        result={item.kind === "tool_call" ? results.get(item.callId) : undefined}
+        provider={provider}
+      />
       {after(item.seq)}
     </Fragment>
   ));
 }
 
-function One({ item, result }: { item: WireItem; result: ToolResult | undefined }) {
+function One({
+  item,
+  result,
+  provider,
+}: {
+  item: WireItem;
+  result: ToolResult | undefined;
+  provider: string | undefined;
+}) {
   switch (item.kind) {
     case "user":
     case "tool_result":
@@ -145,11 +167,7 @@ function One({ item, result }: { item: WireItem; result: ToolResult | undefined 
         </div>
       );
     case "error":
-      return (
-        <div key={item.seq} className="composer-inline-err" role="status">
-          錯誤：{item.code}
-        </div>
-      );
+      return <ErrorCard key={item.seq} code={item.code} provider={provider} />;
     case "compaction":
       return (
         <div key={item.seq} className="compaction-divider">
@@ -192,6 +210,7 @@ export function Thread(props: { state: State; onOlder: () => void; after: After 
       </div>
     );
   const all = groups(items);
+  const provider = props.state.convs.find((c) => c.id === conv)?.provider;
   return (
     <>
       {more ? (
@@ -211,7 +230,7 @@ export function Thread(props: { state: State; onOlder: () => void; after: After 
           )}
           <div className="msg-assistant">
             {g.user === undefined ? null : props.after(g.user.seq)}
-            <Rest items={g.rest} after={props.after} />
+            <Rest items={g.rest} after={props.after} provider={provider} />
             {i === all.length - 1 && running !== undefined ? (
               <div className="msg-assistant-text streaming">
                 <Markdown text={running.text} />
@@ -236,7 +255,7 @@ export function Thread(props: { state: State; onOlder: () => void; after: After 
           ) : null}
           <span>
             {TURN_STATE[turn.state] ?? turn.state}
-            {turn.reason === undefined ? "" : `：${turn.reason}`}
+            {turn.reason === undefined ? "" : `：${reasonText(turn.reason)}`}
           </span>
         </div>
       )}

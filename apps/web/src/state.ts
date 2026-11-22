@@ -1,3 +1,4 @@
+import { reasonText } from "./reasons.ts";
 import type {
   NackReason,
   ServerMessage,
@@ -206,7 +207,9 @@ function message(s: State, m: ServerMessage, at: number): State {
         ...(follow ? { conv: m.conv as string } : {}),
         ...(missed ? { load: m.conv as string } : {}),
         turn,
-        ...(ours && m.p.state === "rejected" ? { error: `沒有開始：${m.p.reason ?? ""}` } : {}),
+        ...(ours && m.p.state === "rejected"
+          ? { error: `沒有開始：${reasonText(m.p.reason ?? "")}` }
+          : {}),
       };
       return m.p.state === "started" ? next : withoutKeys(next, "running");
     }
