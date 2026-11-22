@@ -158,6 +158,21 @@ test("a source mark opens its turn from agent.db; 前往原對話 goes there", a
   p.unmount();
 });
 
+test("by keyboard: a source pill opens the check, Esc closes it and the focus goes back to the pill", async () => {
+  const p = await opened();
+  const pill = button(p.root, `[[source:${REF}]]`);
+  pill.focus();
+  await act(async () => pill.click());
+  const dialog = p.root.querySelector("[role=dialog]") as HTMLElement;
+  expect(dialog.contains(document.activeElement)).toBe(true);
+  await act(async () =>
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+  );
+  expect(p.root.querySelector("[role=dialog]")).toBeNull();
+  expect(document.activeElement).toBe(pill);
+  p.unmount();
+});
+
 test("the local end goes offline: the knowledge base says so instead of showing what it had", async () => {
   const p = await opened();
   await act(async () => p.h.last().receive(server("relay.status", { online: false })));
