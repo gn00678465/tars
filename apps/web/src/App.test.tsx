@@ -332,6 +332,120 @@ describe("the sidebar and the open conversation", () => {
     });
   });
 
+  describe("a card of this conversation sits under its tool call", () => {
+    const T = "turn-00000001";
+    const user = { seq: 1, turn: T, kind: "user", text: "記帳", truncated: false };
+    const call = {
+      seq: 2,
+      turn: T,
+      kind: "tool_call",
+      callId: "call-00000001",
+      name: "run_script",
+      input: "{}",
+      truncated: false,
+    };
+    const result = {
+      seq: 3,
+      turn: T,
+      kind: "tool_result",
+      callId: "call-00000001",
+      status: "ok",
+      text: "done",
+      truncated: false,
+    };
+    const reply = {
+      seq: 4,
+      turn: T,
+      kind: "assistant",
+      text: "試跑成功",
+      truncated: false,
+      state: "complete",
+    };
+    const item = (i: object) => server("item", { item: i }, { conv: "conv-1" });
+    const order = (root: HTMLElement) =>
+      [
+        ...root.querySelectorAll(
+          ".thread-scroll .tool-step, .thread-scroll .approval-card, .thread-scroll .msg-assistant-text",
+        ),
+      ].map((e) =>
+        e.classList.contains("tool-step")
+          ? `tool:${e.querySelector(".sg-tag")?.textContent}`
+          : e.classList.contains("approval-card")
+            ? "card"
+            : e.textContent,
+      );
+    async function decidedThenReply(callId: string | undefined) {
+      const opened = await listed();
+      const { h, root } = opened;
+      await act(async () => entry(root, "對話 1").click());
+      await act(async () =>
+        h
+          .last()
+          .receive(
+            server(
+              "conv.snapshot",
+              { epoch: "epoch-1", more: false, items: [user, call] },
+              { conv: "conv-1" },
+            ),
+          ),
+      );
+      const req = request("conv-1") as { p: { approval: Record<string, unknown> } };
+      await act(async () =>
+        h.last().receive({
+          ...req,
+          p: { approval: { ...req.p.approval, ...(callId === undefined ? {} : { callId }) } },
+        } as typeof req),
+      );
+      await act(async () => h.last().receive(resolved("approved")));
+      await act(async () => h.last().receive(item(result)));
+      await act(async () => h.last().receive(item(reply)));
+      return opened;
+    }
+
+    test("by callId: tool row (with its result), the card, then the reply", async () => {
+      const { root, unmount } = await decidedThenReply("call-00000001");
+      expect(order(root)).toEqual(["tool:完成", "card", "試跑成功"]);
+      unmount();
+    });
+
+    test("without callId (an older local end): after the item last when it came", async () => {
+      const { root, unmount } = await decidedThenReply(undefined);
+      expect(order(root)).toEqual(["tool:完成", "card", "試跑成功"]);
+      unmount();
+    });
+
+    test("at the bottom, what comes is followed; scrolled up, it is left alone", async () => {
+      const { h, root, unmount } = await listed();
+      await act(async () => entry(root, "對話 1").click());
+      const el = scroll(root);
+      let height = 500;
+      Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => height });
+      Object.defineProperty(el, "clientHeight", { configurable: true, get: () => 200 });
+      await act(async () =>
+        h
+          .last()
+          .receive(
+            server(
+              "conv.snapshot",
+              { epoch: "epoch-1", more: false, items: [user, call] },
+              { conv: "conv-1" },
+            ),
+          ),
+      );
+      expect(el.scrollTop).toBe(500);
+      height = 800;
+      await act(async () => h.last().receive(item(result)));
+      expect(el.scrollTop).toBe(800);
+      // Scrolled up to read: nothing pulls it down.
+      el.scrollTop = 100;
+      await act(async () => el.dispatchEvent(new Event("scroll")));
+      height = 900;
+      await act(async () => h.last().receive(item(reply)));
+      expect(el.scrollTop).toBe(100);
+      unmount();
+    });
+  });
+
   test("offline: the card's buttons are off and say why", async () => {
     const { h, root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());

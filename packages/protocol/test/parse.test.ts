@@ -62,6 +62,19 @@ describe("limits", () => {
   });
 });
 
+describe("an approval's tool call", () => {
+  test("callId is optional: a card with it and one without both parse", () => {
+    const req = SERVER["approval.request"] as { p: { approval: Record<string, unknown> } };
+    const withCall = (approval: Record<string, unknown>) =>
+      JSON.stringify({ ...req, p: { approval } });
+    expect(reason(parseServer(withCall({ ...req.p.approval, callId: ID })))).toBe("ok");
+    expect(reason(parseServer(withCall(req.p.approval)))).toBe("ok");
+    expect(reason(parseServer(withCall({ ...req.p.approval, callId: "x".repeat(65) })))).toBe(
+      "bad_message",
+    );
+  });
+});
+
 describe("not a message", () => {
   test.each([
     ["not JSON", "{nope"],

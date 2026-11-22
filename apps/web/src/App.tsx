@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard } from "./components/ApprovalCard.tsx";
 import { Composer } from "./components/Composer.tsx";
 import { ConversationList } from "./components/ConversationList.tsx";
@@ -7,6 +7,9 @@ import { timeText } from "./components/time.ts";
 import { Thread } from "./components/Thread.tsx";
 import type { Socket } from "./socket.ts";
 import { composerBlocked, initial, localNow, reduce } from "./state.ts";
+
+/** Within this much of the end counts as at the bottom (rounding, a last line half shown). */
+const BOTTOM_PX = 24;
 
 export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [state, dispatch] = useReducer(reduce, initial);
@@ -57,6 +60,13 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
 
   // A conversation opened from the list: the page goes to its thread.
   const thread = useRef<HTMLElement>(null);
+  // Whether the owner was at the bottom before this render: then what came is followed. One who
+  // scrolled up to read is left there.
+  const atBottom = useRef(true);
+  useLayoutEffect(() => {
+    const el = thread.current;
+    if (el !== null && atBottom.current) el.scrollTop = el.scrollHeight;
+  }, [state.items, state.running, state.turn, state.cards]);
   const [opened, setOpened] = useState(0);
   useEffect(() => {
     if (opened > 0) thread.current?.focus();
@@ -93,6 +103,21 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
       .sort((a, b) => (a.decidedOrder ?? 0) - (b.decidedOrder ?? 0))
       .slice(-3);
   const settled = [...byDecision(here), ...here.filter((c) => c.resolved === undefined)];
+  // A card is drawn under its tool call; without a callId (an older local end), after the item
+  // that was last when it came. One whose item is not loaded goes at the end.
+  const anchorOf = (c: (typeof settled)[number]) => {
+    const { callId } = c.approval;
+    if (callId === undefined) return c.after;
+    return state.items.find((i) => i.kind === "tool_call" && i.callId === callId)?.seq;
+  };
+  const seqs = new Set(state.items.map((i) => i.seq));
+  const anchored = new Map<number, typeof settled>();
+  const loose: typeof settled = [];
+  for (const c of settled) {
+    const at = anchorOf(c);
+    if (at === undefined || !seqs.has(at)) loose.push(c);
+    else anchored.set(at, [...(anchored.get(at) ?? []), c]);
+  }
   // From other conversations: the waiting ones, and the last three decided, so a decision made
   // here or elsewhere stays visible until closed.
   const elsewhere = state.cards.filter(
@@ -108,6 +133,17 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const waiting = new Set(pending.map((c) => c.approval.conv));
   const titleOf = (id: string) => state.convs.find((c) => c.id === id)?.title || "另一個對話";
   const current = state.convs.find((c) => c.id === state.conv);
+  const card = (c: (typeof settled)[number]) => (
+    <ApprovalCard
+      key={c.approval.approvalId}
+      card={c}
+      localNow={localNow(state, tick)}
+      onDecide={(d) => decide(c, d)}
+      focus={c.approval.approvalId === first}
+      pageNow={tick}
+      {...(blocked === undefined ? {} : { blocked })}
+    />
+  );
 
   return (
     <div className="app-viewport">
@@ -162,26 +198,26 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               </button>
             </div>
           )}
-          <main className="thread-scroll" ref={thread} tabIndex={-1} aria-label="訊息">
+          <main
+            className="thread-scroll"
+            ref={thread}
+            tabIndex={-1}
+            aria-label="訊息"
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_PX;
+            }}
+          >
             <div className="thread-inner thread">
               <Thread
                 state={state}
+                after={(seq) => anchored.get(seq)?.map(card)}
                 onOlder={() => {
                   if (state.conv !== undefined && oldest !== undefined)
                     socket.send("conv.open", { before: oldest }, state.conv);
                 }}
               />
-              {settled.map((card) => (
-                <ApprovalCard
-                  key={card.approval.approvalId}
-                  card={card}
-                  localNow={localNow(state, tick)}
-                  onDecide={(d) => decide(card, d)}
-                  focus={card.approval.approvalId === first}
-                  pageNow={tick}
-                  {...(blocked === undefined ? {} : { blocked })}
-                />
-              ))}
+              {loose.map(card)}
             </div>
           </main>
           <footer className="composer-dock">

@@ -91,6 +91,12 @@ export const wireApproval = z.strictObject({
   secret: z.string().max(128).nullable(),
   argv: z.array(z.string().max(ARGV_CHARS)).max(ARGV_ITEMS),
   expiresAt: z.number(),
+  /**
+   * The tool_call item this approval is for, so the page draws the card under it. Optional: a
+   * local end older than the field sends none. A page older than the field refuses a card that
+   * has it (strictObject), so the page is deployed before the local end is updated.
+   */
+  callId: id.optional(),
 });
 
 /**

@@ -190,6 +190,11 @@ describe("RemoteFrontend: approvals", () => {
     const answer = fe.askApproval(approvalRecord(), ctl.signal);
     expect(fe.awaitingApproval).toBe(true);
     for (const conn of [CONN_A, CONN_B]) expect(hub.to(conn, "approval.request")).toHaveLength(1);
+    // The page draws the card under this tool call.
+    const [sent] = hub.to(CONN_A, "approval.request");
+    expect((sent?.p as { approval?: { callId?: string } } | undefined)?.approval?.callId).toBe(
+      "call-1",
+    );
     const replies: ServerMessage[] = [];
     await fe.decide(CONN_B, decide("approved"), (m) => void replies.push(m));
     await fe.decide(CONN_A, decide("denied"), (m) => void replies.push(m));

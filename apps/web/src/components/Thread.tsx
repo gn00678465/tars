@@ -1,5 +1,5 @@
 import type { WireItem } from "@tars/protocol";
-import { useState } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import type { State } from "../state.ts";
 import { Icon, Monolith } from "./Icon.tsx";
 import { shortId } from "./time.ts";
@@ -95,66 +95,76 @@ function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undef
   );
 }
 
-function Rest({ items }: { items: readonly WireItem[] }) {
+/** What is drawn right after an item: the approval cards that belong to it. */
+export type After = (seq: number) => ReactNode;
+
+function Rest({ items, after }: { items: readonly WireItem[]; after: After }) {
   const results = new Map(
     items.filter((i): i is ToolResult => i.kind === "tool_result").map((i) => [i.callId, i]),
   );
-  return items.map((item) => {
-    switch (item.kind) {
-      case "user":
-      case "tool_result":
-        return null;
-      case "carried":
-        return (
-          <div key={item.seq} className="compaction-meta">
-            接續自對話 {shortId(item.from)}
-          </div>
-        );
-      case "assistant":
-        return (
-          <div key={item.seq} className="msg-assistant-text">
-            <p>
-              {item.text}
-              {cut(item.truncated)}
-              {ASSISTANT_STATE[item.state] ?? ""}
-            </p>
-          </div>
-        );
-      case "tool_call":
-        return <ToolStep key={item.seq} call={item} result={results.get(item.callId)} />;
-      case "usage":
-        return (
-          <div key={item.seq} className="msg-usage-line mono">
-            <span>輸入 {item.inputTokens.toLocaleString("en-US")}</span>
-            <span>輸出 {item.outputTokens.toLocaleString("en-US")}</span>
-            <span>
-              {/* Only a cost the provider reported is exact; table and estimate are tars's own. */}
-              {item.costUsd.toFixed(4)} USD{item.costSource === "provider" ? "" : " 估"}
-            </span>
-          </div>
-        );
-      case "error":
-        return (
-          <div key={item.seq} className="composer-inline-err" role="status">
-            錯誤：{item.code}
-          </div>
-        );
-      case "compaction":
-        return (
-          <div key={item.seq} className="compaction-divider">
-            <details>
-              <summary className="compaction-trigger">這之前的內容已壓縮成摘要</summary>
-              <div className="compaction-body">
-                <p>
-                  {item.text}
-                  {cut(item.truncated)}
-                </p>
-              </div>
-            </details>
-          </div>
-        );
-    }
-  });
+  return items.map((item) => (
+    <Fragment key={item.seq}>
+      <One item={item} result={item.kind === "tool_call" ? results.get(item.callId) : undefined} />
+      {after(item.seq)}
+    </Fragment>
+  ));
+}
+
+function One({ item, result }: { item: WireItem; result: ToolResult | undefined }) {
+  switch (item.kind) {
+    case "user":
+    case "tool_result":
+      return null;
+    case "carried":
+      return (
+        <div key={item.seq} className="compaction-meta">
+          接續自對話 {shortId(item.from)}
+        </div>
+      );
+    case "assistant":
+      return (
+        <div key={item.seq} className="msg-assistant-text">
+          <p>
+            {item.text}
+            {cut(item.truncated)}
+            {ASSISTANT_STATE[item.state] ?? ""}
+          </p>
+        </div>
+      );
+    case "tool_call":
+      return <ToolStep key={item.seq} call={item} result={result} />;
+    case "usage":
+      return (
+        <div key={item.seq} className="msg-usage-line mono">
+          <span>輸入 {item.inputTokens.toLocaleString("en-US")}</span>
+          <span>輸出 {item.outputTokens.toLocaleString("en-US")}</span>
+          <span>
+            {/* Only a cost the provider reported is exact; table and estimate are tars's own. */}
+            {item.costUsd.toFixed(4)} USD{item.costSource === "provider" ? "" : " 估"}
+          </span>
+        </div>
+      );
+    case "error":
+      return (
+        <div key={item.seq} className="composer-inline-err" role="status">
+          錯誤：{item.code}
+        </div>
+      );
+    case "compaction":
+      return (
+        <div key={item.seq} className="compaction-divider">
+          <details>
+            <summary className="compaction-trigger">這之前的內容已壓縮成摘要</summary>
+            <div className="compaction-body">
+              <p>
+                {item.text}
+                {cut(item.truncated)}
+              </p>
+            </div>
+          </details>
+        </div>
+      );
+  }
 }
 
 /** Each message the owner sent starts a group; what the turn wrote follows it. */
@@ -168,7 +178,7 @@ function groups(items: readonly WireItem[]) {
   return out;
 }
 
-export function Thread(props: { state: State; onOlder: () => void }) {
+export function Thread(props: { state: State; onOlder: () => void; after: After }) {
   const { items, running, turn, more, notices, conv } = props.state;
   if (conv === undefined && items.length === 0)
     return (
@@ -200,7 +210,8 @@ export function Thread(props: { state: State; onOlder: () => void }) {
             </div>
           )}
           <div className="msg-assistant">
-            <Rest items={g.rest} />
+            {g.user === undefined ? null : props.after(g.user.seq)}
+            <Rest items={g.rest} after={props.after} />
             {i === all.length - 1 && running !== undefined ? (
               <div className="msg-assistant-text streaming">
                 <p>{running.text}</p>

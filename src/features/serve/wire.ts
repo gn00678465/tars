@@ -163,6 +163,7 @@ export const wireApproval = (a: ApprovalRecord): WireApproval => ({
   secret: a.fields.secret,
   argv: [...a.fields.argv],
   expiresAt: a.expiresAt,
+  callId: a.toolCallId,
 });
 
 /** The running text's last RUNNING_TEXT_BYTES as JSON writes them. */

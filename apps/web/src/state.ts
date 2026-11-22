@@ -32,6 +32,11 @@ export interface Card {
   readonly choice?: "approved" | "denied";
   /** A send's answer never came (the connection dropped); kept until the result. */
   readonly lost?: boolean;
+  /**
+   * The open conversation's last item when the card came: it is drawn after that one when the
+   * approval names no tool call (a local end older than callId).
+   */
+  readonly after?: number;
   /** The page's clock when the ack came: a result long in coming is said to be missing. */
   readonly ackedAt?: number;
 }
@@ -233,7 +238,14 @@ function message(s: State, m: ServerMessage, at: number): State {
       // What the page knows wins over a resend: a decided card stays decided, an acked one
       // keeps waiting; only one never answered goes back to being decidable.
       const old = s.cards.find((c) => c.approval.approvalId === m.p.approval.approvalId);
-      if (old === undefined) return { ...s, cards: [...s.cards, { approval: m.p.approval }] };
+      if (old === undefined) {
+        const last = s.conv === m.p.approval.conv ? s.items.at(-1)?.seq : undefined;
+        const card: Card = {
+          approval: m.p.approval,
+          ...(last === undefined ? {} : { after: last }),
+        };
+        return { ...s, cards: [...s.cards, card] };
+      }
       if (old.resolved !== undefined) return s;
       const card: Card =
         old.acked === true
