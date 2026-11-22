@@ -92,3 +92,75 @@ test("a reason with nothing to run shows only what happened; an unknown code sho
   expect(unknown.root.textContent).toBe("錯誤：something_new");
   expect(unknown.root.querySelector(".task-notice")?.className).toBe("task-notice error");
 });
+
+const texts = async (code: string, data: Record<string, string | number>, provider?: string) => {
+  document.body.innerHTML = "";
+  const { root } = await render(<ErrorCard code={code} provider={provider} data={data} />);
+  return {
+    tone: root.querySelector(".task-notice")?.className,
+    title: root.querySelector(".task-notice-title")?.textContent,
+    desc: root.querySelector(".task-notice-desc")?.textContent,
+    fix: root.querySelector(".cli-copy-cmd")?.textContent ?? null,
+  };
+};
+
+test("C1: the stop threshold names the provider, the share, the amounts and the command", async () => {
+  expect(
+    await texts("budget_stopped", {
+      provider: "gemini",
+      period: "cumulative",
+      spentUsd: 951.2,
+      stopUsd: 950,
+      quotaUsd: 1000,
+    }),
+  ).toEqual({
+    tone: "task-notice error",
+    title: "本機端達停用門檻（95%）",
+    desc: "Gemini 累計已用 951.20 / 1,000 USD（估）。若帳單頁實際較低，請在本機終端校正。",
+    fix: "tars cost adjust gemini --spent <金額>",
+  });
+});
+
+test("C1: the daily cap says when it resets, UTC 00:00 and the time here", async () => {
+  const resetAt = Date.UTC(2026, 10, 23);
+  const here = new Date(resetAt);
+  const hhmm = `${String(here.getHours()).padStart(2, "0")}:${String(here.getMinutes()).padStart(2, "0")}`;
+  const t = await texts("daily_cap", {
+    provider: "anthropic",
+    todayUsd: 10.02,
+    dailyCapUsd: 10,
+    resetAt,
+  });
+  expect(t.title).toBe("今日花費已到上限（10.00 USD）");
+  expect(t.desc).toBe(
+    `Anthropic 今日已用 10.02 USD，這個回合已自動結束。UTC 00:00（這台裝置的 ${hhmm}）重算，或在本機的設定檔調整上限。`,
+  );
+});
+
+test("C1: an older local end sends no data: the card keeps its words", async () => {
+  const t = await texts("budget_stopped", {}, "gemini");
+  expect(t.title).toBe("本期花費已到停用門檻");
+  expect(t.desc).toBe("Gemini 暫停使用。若帳單頁的實際花費較低，請在本機終端校正。");
+});
+
+test("C2: 429 says how many retries; the keyring card says how to unlock it", async () => {
+  const limited = await texts("rate_limited", { provider: "anthropic", attempts: 3 });
+  expect([limited.tone, limited.title, limited.desc]).toEqual([
+    "task-notice warn",
+    "流量限制（HTTP 429）",
+    "已退避重試 2 次仍被限流，被拒的請求沒有計費。請稍後再試。",
+  ]);
+  const keyring = await texts("keyring_unavailable", {});
+  expect([keyring.tone, keyring.title, keyring.desc]).toEqual([
+    "task-notice error",
+    "讀不到本機系統金鑰庫",
+    "本機需要登入桌面環境才能解鎖金鑰庫。解鎖後再送一次。",
+  ]);
+});
+
+test("C1: the request limit and the provider's spend limit, with the figures", async () => {
+  expect((await texts("request_limit", { max: 20 })).title).toBe("達到單回合請求次數上限（20 次）");
+  expect((await texts("provider_spend_limit", { provider: "anthropic" })).title).toBe(
+    "Anthropic 伺服端已達 Spend Limit",
+  );
+});

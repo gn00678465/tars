@@ -18,9 +18,21 @@ const level = (p: Provider) =>
   p.stopped || p.spentUsd >= p.stopUsd ? "error" : p.spentUsd >= p.warnUsd ? "warn" : "ok";
 
 /**
+ * How a provider counts its spending, as status says: per UTC month or since the start. A local
+ * end older than period says neither, and the page says 本期.
+ */
+export const periodName = (p: Pick<Provider, "period">) =>
+  p.period === "month" ? "本月" : p.period === "cumulative" ? "累計" : "本期";
+
+/** The figure with its period; 估 unless status says it is the bill's alone (tars cost adjust). */
+export const spendFigure = (p: Provider) =>
+  `${periodName(p)} ${p.spentUsd.toFixed(2)} / ${p.quotaUsd.toLocaleString("en-US")} USD${
+    p.estimated === false ? "" : " 估"
+  }`;
+
+/**
  * A provider's spending beside its models in the model menus: the figure, or, past its stop
  * threshold, that threshold as a share of the quota, since its models cannot be used then.
- * status carries neither the period nor where the figure came from: 本期, and 估, as the sheet.
  */
 export function providerSpend(
   status: WireStatus | undefined,
@@ -33,10 +45,7 @@ export function providerSpend(
       text: `已達停用門檻（${Math.round((p.stopUsd / p.quotaUsd) * 100)}%）`,
       stopped: true,
     };
-  return {
-    text: `本期 ${p.spentUsd.toFixed(2)} / ${p.quotaUsd.toLocaleString("en-US")} USD 估`,
-    stopped: false,
-  };
+  return { text: spendFigure(p), stopped: false };
 }
 
 /**
@@ -232,11 +241,7 @@ export function StatusSheet(props: { state: State; onClose: () => void }) {
                       {l === "error" ? <span className="sg-tag error">已達停用門檻</span> : null}
                       {l === "warn" ? <span className="sg-tag warn">已過提醒門檻</span> : null}
                     </span>
-                    {/* status carries neither the period nor where the figure came from:
-                        本期, and 估 on every one, until the protocol says. */}
-                    <span className="mono">
-                      本期 {p.spentUsd.toFixed(2)} / {p.quotaUsd.toLocaleString("en-US")} USD 估
-                    </span>
+                    <span className="mono">{spendFigure(p)}</span>
                   </div>
                 );
               })

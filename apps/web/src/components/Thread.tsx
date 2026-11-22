@@ -2,10 +2,10 @@ import type { WireItem } from "@tars/protocol";
 import { Fragment, type ReactNode, useState } from "react";
 import type { State } from "../state.ts";
 import { Icon, Monolith } from "./Icon.tsx";
-import { reasonText } from "../reasons.ts";
 import { ErrorCard } from "./ErrorCard.tsx";
 import { NoticeCard } from "./Notices.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { effortName } from "./RunSetup.tsx";
 import { shortId } from "./time.ts";
 
 const cut = (truncated: boolean) => (truncated ? "（已截斷）" : "");
@@ -16,19 +16,18 @@ const ASSISTANT_STATE: Record<string, string> = {
   incomplete: "（不完整）",
 };
 
-const TURN_STATE: Record<string, string> = {
-  started: "回覆中…",
-  completed: "回合完成",
-  failed: "回合失敗",
-  aborted: "回合已中止",
-  rejected: "回合沒有開始",
+/** A started turn's phase as the prototype's status line (D1); an older local end sends none. */
+const PHASE: Record<string, string> = {
+  thinking: "思考中…",
+  replying: "回覆中",
+  running_script: "執行腳本",
+  waiting_approval: "等待核准",
 };
 
 /**
  * ui_spec 5.3: a tool step's results, as the prototype's tags, keyed by the local end's
- * ToolCallEndState. refused covers more than the whitelist (a script changed after approval, a
- * budget reached), and the result says which only in its text, so its tag says what happened,
- * not why.
+ * ToolCallEndState. A refused one says why when the local end does (REFUSAL); an older local end
+ * says only that it did not run.
  */
 const RESULT: Record<string, [string, string]> = {
   done: ["ok", "完成"],
@@ -41,6 +40,15 @@ const RESULT: Record<string, [string, string]> = {
   interrupted: ["warn", "中斷（結果不明）"],
 };
 
+const REFUSAL: Record<string, string> = {
+  not_offered: "這個入口不提供",
+  changed: "腳本已變更，沒有執行",
+  budget: "預算已到上限，沒有執行",
+};
+
+/** A tool's time as the prototype writes it: seconds, two decimals. */
+const seconds = (ms: number) => `${(ms / 1000).toFixed(2)} s`;
+
 const OUTPUT_LINES = 20;
 
 type ToolCall = Extract<WireItem, { kind: "tool_call" }>;
@@ -49,8 +57,15 @@ type ToolResult = Extract<WireItem, { kind: "tool_result" }>;
 function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undefined }) {
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState(false);
-  const [tone, label] =
+  const [tone, plain] =
     result === undefined ? ["active", "執行中"] : (RESULT[result.status] ?? ["", result.status]);
+  const label =
+    result?.status === "refused" && result.refusal !== undefined
+      ? (REFUSAL[result.refusal] ?? plain)
+      : plain;
+  // With its time in the summary, the exit code moves into the output (A2); an older local end
+  // sends no time, and the code stays where it was.
+  const timed = result?.durationMs !== undefined;
   const lines = result === undefined ? [] : result.text.split("\n");
   const shown = full ? lines : lines.slice(0, OUTPUT_LINES);
   return (
@@ -67,7 +82,11 @@ function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undef
           <span className="tool-step-target">{call.input}</span>
         </div>
         <div className="tool-step-right">
-          {result?.exit === undefined ? null : <span className="mono">結束碼 {result.exit}</span>}
+          {result?.durationMs !== undefined ? (
+            <span className="mono">{seconds(result.durationMs)}</span>
+          ) : result?.exit === undefined ? null : (
+            <span className="mono">結束碼 {result.exit}</span>
+          )}
           <span className={`sg-tag ${tone}`}>{label}</span>
           <span className="tool-step-chevron">
             <Icon name="chevron" />
@@ -84,6 +103,7 @@ function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undef
             <div>
               <div className="tool-kv-label">
                 執行輸出（純文字，共 {lines.length} 行）{cut(result.truncated)}
+                {timed && result.exit !== undefined ? ` · 結束碼 ${result.exit}` : ""}
               </div>
               <pre className="tool-code-box">{shown.join("\n")}</pre>
               {lines.length > OUTPUT_LINES ? (
@@ -176,18 +196,16 @@ function One({
     case "tool_call":
       return <ToolStep key={item.seq} call={item} result={result} />;
     case "usage":
-      return (
-        <div key={item.seq} className="msg-usage-line mono">
-          <span>輸入 {item.inputTokens.toLocaleString("en-US")}</span>
-          <span>輸出 {item.outputTokens.toLocaleString("en-US")}</span>
-          <span>
-            {/* Only a cost the provider reported is exact; table and estimate are tars's own. */}
-            {item.costUsd.toFixed(4)} USD{item.costSource === "provider" ? "" : " 估"}
-          </span>
-        </div>
-      );
+      return <UsageLine key={item.seq} item={item} />;
     case "error":
-      return <ErrorCard key={item.seq} code={item.code} provider={provider} />;
+      return (
+        <ErrorCard
+          key={item.seq}
+          code={item.code}
+          provider={provider}
+          {...(item.data === undefined ? {} : { data: item.data })}
+        />
+      );
     case "compaction":
       return (
         <div key={item.seq} className="compaction-divider">
@@ -203,6 +221,73 @@ function One({
         </div>
       );
   }
+}
+
+const n = (v: number) => v.toLocaleString("en-US");
+
+/**
+ * The prototype's usage line (A1). inputTokens counts cache reads too: they are taken out of
+ * 輸入 and said apart, so the two add up to what was sent. Cache writes stay in 輸入. Fields an
+ * older local end does not send are left out, never shown as 0.
+ */
+function UsageLine({ item }: { item: Extract<WireItem, { kind: "usage" }> }) {
+  const read = item.cacheReadTokens;
+  return (
+    <div className="msg-usage-line mono">
+      <span>輸入 {n(item.inputTokens - (read ?? 0))}</span>
+      {read === undefined ? null : <span>快取讀 {n(read)}</span>}
+      <span>
+        輸出 {n(item.outputTokens)}
+        {item.thinkingTokens === undefined ? "" : `（含思考 ${n(item.thinkingTokens)}）`}
+      </span>
+      {item.effort === undefined ? null : <span>推理：{effortName(item.effort)}</span>}
+      <span>
+        {/* Only a cost the provider reported is exact; table and estimate are tars's own. */}
+        {item.costUsd.toFixed(3)} USD{item.costSource === "provider" ? "" : " 估"}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Under the thread: a running turn's status line, gone once the turn ends (D1). A turn that did
+ * not start, or ended without the error item the local end writes for a failure, gets the card
+ * here; one with its item has the card in the thread already.
+ */
+function TurnEnd({
+  turn,
+  items,
+  provider,
+}: {
+  turn: State["turn"];
+  items: readonly WireItem[];
+  provider: string | undefined;
+}) {
+  if (turn === undefined) return null;
+  if (turn.state === "started")
+    return (
+      <div className="turn-status" role="status">
+        <span className="status-glyph" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+        <span>{(turn.phase === undefined ? undefined : PHASE[turn.phase]) ?? "回覆中…"}</span>
+      </div>
+    );
+  const failed = turn.state === "failed" || turn.state === "interrupted";
+  if (turn.state !== "rejected" && !failed) return null;
+  if (failed && items.some((i) => i.kind === "error" && i.turn === turn.turn)) return null;
+  const code =
+    turn.reason ??
+    (turn.state === "interrupted" ? "interrupted" : turn.state === "failed" ? "turn_failed" : "");
+  return (
+    <ErrorCard
+      code={code}
+      provider={provider}
+      {...(turn.data === undefined ? {} : { data: turn.data })}
+    />
+  );
 }
 
 /** Each message the owner sent starts a group; what the turn wrote follows it. */
@@ -292,21 +377,7 @@ export function Thread(props: {
           <Markdown text={running.text} />
         </div>
       ) : null}
-      {turn === undefined ? null : (
-        <div className="turn-status" role="status">
-          {turn.state === "started" ? (
-            <span className="status-glyph" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </span>
-          ) : null}
-          <span>
-            {TURN_STATE[turn.state] ?? turn.state}
-            {turn.reason === undefined ? "" : `：${reasonText(turn.reason)}`}
-          </span>
-        </div>
-      )}
+      <TurnEnd turn={turn} items={items} provider={provider} />
       {notices.map((n, i) => (
         <NoticeCard
           key={i}

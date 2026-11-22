@@ -8,6 +8,7 @@ import {
 } from "./wiki/state.ts";
 import type {
   NackReason,
+  Phase,
   ServerMessage,
   WireApproval,
   WireConv,
@@ -37,6 +38,10 @@ export interface Card {
   readonly resolved?: {
     readonly state: "approved" | "denied" | "expired" | "cancelled";
     readonly here: boolean;
+    /** When the local end settled it, by its clock; absent from an older one and from a nack. */
+    readonly at?: number;
+    /** Which connection decided, when the local end knows; absent for an expiry or a cancel. */
+    readonly source?: "this" | "other_device";
   };
   readonly error?: string;
   /** Which decision this was among those this page saw, 1 first: the newest ones are kept. */
@@ -97,7 +102,15 @@ export interface State {
    * once, not each delta, and nothing from a snapshot.
    */
   readonly spoken?: string;
-  readonly turn?: { readonly state: TurnState; readonly turn?: string; readonly reason?: string };
+  readonly turn?: {
+    readonly state: TurnState;
+    readonly turn?: string;
+    readonly reason?: string;
+    /** The local end's figures for reason. */
+    readonly data?: Readonly<Record<string, string | number>>;
+    /** What a started turn is doing, from turn.phase or a snapshot. */
+    readonly phase?: Phase;
+  };
   /** Sent, not yet started or refused. */
   readonly submitting?: string;
   /** A conversation followed without its items: the page asks for its snapshot. */
@@ -234,8 +247,14 @@ function message(s: State, m: ServerMessage, at: number): State {
       return s.ping !== undefined && m.re === s.ping.id
         ? { ...withoutKeys(s, "ping"), status: m.p, statusAt: at, rtt: at - s.ping.at }
         : { ...s, status: m.p, statusAt: at };
-    // Shown from the batch 4 web commits on; until then the page ignores them.
     case "turn.phase":
+      // Only for the started turn shown here; one that ended keeps no phase (no stale line).
+      return here &&
+        s.turn?.state === "started" &&
+        (s.turn.turn === undefined || s.turn.turn === m.p.turn)
+        ? { ...s, turn: { ...s.turn, turn: m.p.turn, phase: m.p.phase } }
+        : s;
+    // Shown from the batch 4 web commits on; until then the page ignores them.
     case "compact":
     case "conv.context":
       return s;
@@ -266,9 +285,18 @@ function message(s: State, m: ServerMessage, at: number): State {
         first !== undefined && m.p.items.length > 0 && m.p.items.every((i) => i.seq < first);
       if (older) return { ...s, items: [...m.p.items, ...s.items], more: m.p.more };
       const base = withoutKeys({ ...s, items: m.p.items, more: m.p.more }, "running", "load");
-      return m.p.running === undefined
-        ? base
-        : { ...base, running: { turn: m.p.running.turn, text: m.p.running.text } };
+      const r = m.p.running;
+      if (r === undefined) return base;
+      // A page opened mid-turn: the turn is under way, in the phase the snapshot says.
+      const turn =
+        s.turn?.state === "started" && (s.turn.turn === undefined || s.turn.turn === r.turn)
+          ? s.turn
+          : { state: "started" as const, turn: r.turn };
+      return {
+        ...base,
+        running: { turn: r.turn, text: r.text },
+        turn: r.phase === undefined ? turn : { ...turn, phase: r.phase },
+      };
     }
     case "turn": {
       const ours = m.p.requestId !== undefined && m.p.requestId === s.submitting;
@@ -279,6 +307,7 @@ function message(s: State, m: ServerMessage, at: number): State {
         state: m.p.state,
         ...(m.p.turn === undefined ? {} : { turn: m.p.turn }),
         ...(m.p.reason === undefined ? {} : { reason: m.p.reason }),
+        ...(m.p.data === undefined ? {} : { data: m.p.data }),
       };
       // Still ours at its end: its start, and so its items, were missed. Only a turn the
       // database has (named) is worth loading, and only in the conversation the page is on.
@@ -340,7 +369,17 @@ function message(s: State, m: ServerMessage, at: number): State {
             ? withoutKeys(
                 {
                   ...c,
-                  resolved: { state: m.p.state, here: c.acked === true && m.p.via === "remote" },
+                  resolved: {
+                    state: m.p.state,
+                    // The local end says which connection decided; an older one does not, and
+                    // a decision this page saw acked is taken as this page's.
+                    here:
+                      m.p.source === undefined
+                        ? c.acked === true && m.p.via === "remote"
+                        : m.p.source === "this",
+                    ...(m.p.at === undefined ? {} : { at: m.p.at }),
+                    ...(m.p.source === undefined ? {} : { source: m.p.source }),
+                  },
                   decidedOrder: order,
                 },
                 "deciding",
@@ -357,20 +396,35 @@ function message(s: State, m: ServerMessage, at: number): State {
           return { ...s, connection: "auth_expired" };
         return s;
       }
+      // Decided elsewhere, and the local end says what: the card shows that result (B2).
+      const elsewhere =
+        m.kind === "nack" && m.p.reason === "already_decided" && m.p.state !== undefined
+          ? m.p.state
+          : undefined;
       const updated: Card =
         m.kind === "ack"
           ? { ...withoutKeys(card, "deciding", "error"), acked: true, ackedAt: at }
-          : {
-              ...withoutKeys(
-                card,
-                "deciding",
-                ...(NOT_TAKEN.has(m.p.reason) ? (["choice"] as const) : []),
-              ),
-              error:
-                m.p.reason === "already_decided"
-                  ? "本機端已收到先前的決定，結果以本機為準；請重新整理確認"
-                  : nackText(m.p.reason),
-            };
+          : elsewhere !== undefined
+            ? {
+                ...withoutKeys(card, "deciding", "error", "choice", "lost"),
+                resolved: {
+                  state: elsewhere,
+                  here: m.kind === "nack" && m.p.source === "this",
+                  ...(m.kind === "nack" && m.p.source !== undefined ? { source: m.p.source } : {}),
+                },
+                decidedOrder: Math.max(0, ...s.cards.map((c) => c.decidedOrder ?? 0)) + 1,
+              }
+            : {
+                ...withoutKeys(
+                  card,
+                  "deciding",
+                  ...(NOT_TAKEN.has(m.p.reason) ? (["choice"] as const) : []),
+                ),
+                error:
+                  m.p.reason === "already_decided"
+                    ? "本機端已收到先前的決定，結果以本機為準；請重新整理確認"
+                    : nackText(m.p.reason),
+              };
       return {
         ...s,
         ...(m.kind === "nack" && m.p.reason === "auth_expired"

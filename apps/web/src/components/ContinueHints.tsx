@@ -1,7 +1,7 @@
 import type { WireModel, WireStatus } from "@tars/protocol";
 import { reasonText } from "../reasons.ts";
 import { Icon } from "./Icon.tsx";
-import { providerName, providerSpend } from "./StatusBar.tsx";
+import { periodName, providerName, providerSpend } from "./StatusBar.tsx";
 
 interface Hint {
   readonly tone: "warn" | "error";
@@ -41,13 +41,13 @@ function hints(
     const others = (status?.providers ?? [])
       .filter((x) => x.name !== conv.provider && providerSpend(status, x.name)?.stopped === false)
       .map((x) => providerName(x.name));
-    // status carries no period yet: 本期, as the spending sheet.
+    const period = periodName(p);
     out.push({
       tone: "error",
-      title: `${providerName(conv.provider)} 已達本期上限，可以改用其他 provider 接續`,
-      desc: `本期已用 ${p.spentUsd.toFixed(2)} / ${p.quotaUsd.toLocaleString("en-US")} USD（估）${
-        others.length === 0 ? "。" : `，${others.join(" 與 ")} 仍可正常使用。`
-      }`,
+      title: `${providerName(conv.provider)} 已達${period}上限，可以改用其他 provider 接續`,
+      desc: `${period}已用 ${p.spentUsd.toFixed(2)} / ${p.quotaUsd.toLocaleString("en-US")} USD${
+        p.estimated === false ? "" : "（估）"
+      }${others.length === 0 ? "。" : `，${others.join(" 與 ")} 仍可正常使用。`}`,
       action: "改用其他模型",
     });
   }

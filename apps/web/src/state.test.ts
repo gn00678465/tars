@@ -47,6 +47,58 @@ const open: (Event | ServerMessage)[] = [
 ];
 
 describe("state: a conversation", () => {
+  test("D1: turn.phase sets the running turn's phase; a snapshot mid-turn starts it in its phase", () => {
+    const s = run([
+      ...open,
+      server("turn", { turn: TURN, state: "started" }, { conv: CONV }),
+      server("turn.phase", { turn: TURN, phase: "running_script" }, { conv: CONV }),
+    ]);
+    expect(s.turn).toEqual({ state: "started", turn: TURN, phase: "running_script" });
+    // Another turn's, another conversation's, and one after the end change nothing.
+    expect(
+      run([server("turn.phase", { turn: "turn-2", phase: "thinking" }, { conv: CONV })], s).turn
+        ?.phase,
+    ).toBe("running_script");
+    expect(
+      run([server("turn.phase", { turn: TURN, phase: "thinking" }, { conv: "conv-2" })], s).turn
+        ?.phase,
+    ).toBe("running_script");
+    const ended = run(
+      [
+        server("turn", { turn: TURN, state: "completed" }, { conv: CONV }),
+        server("turn.phase", { turn: TURN, phase: "replying" }, { conv: CONV }),
+      ],
+      s,
+    );
+    expect(ended.turn).toEqual({ state: "completed", turn: TURN });
+    const opened = run([
+      ...open,
+      server(
+        "conv.snapshot",
+        {
+          epoch: "e1",
+          items: [item(1)],
+          more: false,
+          running: { turn: TURN, text: "半", phase: "waiting_approval" },
+        },
+        { conv: CONV },
+      ),
+    ]);
+    expect(opened.turn).toEqual({ state: "started", turn: TURN, phase: "waiting_approval" });
+  });
+
+  test("C1: a failed turn keeps the local end's figures", () => {
+    const s = run([
+      ...open,
+      server(
+        "turn",
+        { turn: TURN, state: "failed", reason: "daily_cap", data: { dailyCapUsd: 10 } },
+        { conv: CONV },
+      ),
+    ]);
+    expect(s.turn?.data).toEqual({ dailyCapUsd: 10 });
+  });
+
   test("snapshot, then items and deltas for it; another conversation's are ignored", () => {
     const s = run([
       ...open,
@@ -371,6 +423,60 @@ describe("state: approvals", () => {
     ]);
     expect(late.cards[0]?.error).toBe("本機端已收到先前的決定，結果以本機為準；請重新整理確認");
     expect(late.cards[0]?.deciding).toBeUndefined();
+  });
+
+  test("B1, B2: the local end says when and which device; a late decision shows what won", () => {
+    const mine = run([
+      ...open,
+      server("approval.request", { approval }),
+      { type: "deciding", approvalId: approval.approvalId, id: "d1", choice: "approved" },
+      server("ack", {}, { re: "d1" }),
+      server("approval.resolved", {
+        approvalId: approval.approvalId,
+        state: "approved",
+        via: "remote",
+        at: 5_000,
+        source: "this",
+      }),
+    ]);
+    expect(mine.cards[0]?.resolved).toEqual({
+      state: "approved",
+      here: true,
+      at: 5_000,
+      source: "this",
+    });
+    // Our ack came, but the local end says another device decided: it is believed.
+    const other = run([
+      ...open,
+      server("approval.request", { approval }),
+      { type: "deciding", approvalId: approval.approvalId, id: "d1" },
+      server("ack", {}, { re: "d1" }),
+      server("approval.resolved", {
+        approvalId: approval.approvalId,
+        state: "denied",
+        via: "remote",
+        at: 5_000,
+        source: "other_device",
+      }),
+    ]);
+    expect(other.cards[0]?.resolved?.here).toBe(false);
+    const late = run([
+      ...open,
+      server("approval.request", { approval }),
+      { type: "deciding", approvalId: approval.approvalId, id: "d1", choice: "approved" },
+      server(
+        "nack",
+        { reason: "already_decided", state: "denied", source: "other_device" },
+        { re: "d1" },
+      ),
+    ]);
+    expect(late.cards[0]?.resolved).toEqual({
+      state: "denied",
+      here: false,
+      source: "other_device",
+    });
+    expect(late.cards[0]?.error).toBeUndefined();
+    expect(late.cards[0]?.choice).toBeUndefined();
   });
 
   test("a request that arrives after connecting makes a card all the same", () => {

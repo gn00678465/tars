@@ -300,3 +300,38 @@ test("a local end that sends no skill list: a slash line is a plain message", as
   await c.key("Enter");
   expect(c.sent).toEqual(["/whatever x"]);
 });
+
+test("C4: a message over TEXT_BYTES (UTF-8) is not sent; the error gives the limit and its size", async () => {
+  const sent: string[] = [];
+  const { root } = await render(
+    <Composer
+      blocked={composerBlocked(ready)}
+      busy={undefined}
+      canAbort={false}
+      error={undefined}
+      skills={undefined}
+      onSend={(t) => sent.push(t)}
+      onAbort={() => undefined}
+      onCommand={() => undefined}
+    />,
+  );
+  const area = root.querySelector("textarea") as HTMLTextAreaElement;
+  const type = async (v: string) =>
+    act(async () => {
+      // oxlint-disable-next-line typescript/unbound-method
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      set?.call(area, v);
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  // 33,334 characters of three bytes each: under the limit in characters, over it in bytes.
+  await type("字".repeat(33_334));
+  await act(async () => button(root, "送出").click());
+  expect(sent).toEqual([]);
+  expect(root.querySelector(".composer-inline-err")?.textContent).toBe(
+    "訊息超過上限（100,000 位元組），目前 100,002 位元組。請縮短內容，或改放進允許的本機檔案再請 TARS 讀取。",
+  );
+  expect(area.value).toHaveLength(33_334);
+  await type("字".repeat(33_333));
+  await act(async () => button(root, "送出").click());
+  expect(sent).toHaveLength(1);
+});

@@ -383,3 +383,27 @@ test("the announcement: script, effect and where it connects, and where the focu
     "需要核准：執行腳本 push，影響寫外部，連線任意主機。預設焦點在拒絕按鈕。",
   );
 });
+
+test("B1, B2: a decided card says when and on which device", async () => {
+  const at = new Date(2026, 10, 22, 13, 14).getTime();
+  const tag = async (resolved: NonNullable<Card["resolved"]>) => {
+    document.body.innerHTML = "";
+    const { root } = await render(
+      <ApprovalCard card={card({ resolved })} localNow={undefined} onDecide={() => undefined} />,
+    );
+    return root.querySelector(".approval-head .sg-tag")?.textContent ?? root.textContent;
+  };
+  expect(await tag({ state: "approved", here: true, at, source: "this" })).toBe(
+    "已核准 · 13:14 這台裝置",
+  );
+  expect(await tag({ state: "denied", here: true, at, source: "this" })).toBe(
+    "已拒絕 · 13:14 這台裝置",
+  );
+  expect(await tag({ state: "approved", here: false, at, source: "other_device" })).toBe(
+    "已在別處決定 · 13:14 另一台裝置已核准",
+  );
+  // From a nack: what was decided, not when.
+  expect(await tag({ state: "denied", here: false, source: "other_device" })).toBe(
+    "已在別處決定 · 另一台裝置已拒絕",
+  );
+});

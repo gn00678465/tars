@@ -1,5 +1,10 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { TEXT_BYTES } from "@tars/protocol";
 import { type Builtin, menuFor, type Option, type Skill, slashOf } from "./slash.ts";
+
+const n = (v: number) => v.toLocaleString("en-US");
+export const tooLong = (bytes: number) =>
+  `訊息超過上限（${n(TEXT_BYTES)} 位元組），目前 ${n(bytes)} 位元組。請縮短內容，或改放進允許的本機檔案再請 TARS 讀取。`;
 
 export function Composer(props: {
   /** Each change gives the text box the focus: a new conversation was started. */
@@ -77,7 +82,12 @@ export function Composer(props: {
     // Kept as typed until the turn is over.
     if (props.busy !== undefined) return;
     // A plain message goes as typed; a skill goes as the terminal words it.
-    props.onSend(s.text === text.trim() ? text : s.text);
+    const out = s.text === text.trim() ? text : s.text;
+    // The local end takes TEXT_BYTES of text, counted as UTF-8 (C4): said here, with both
+    // numbers, before the message goes and comes back refused.
+    const bytes = new TextEncoder().encode(out).length;
+    if (bytes > TEXT_BYTES) return setRefused(tooLong(bytes));
+    props.onSend(out);
     change("");
   };
   const move = (by: number) => {

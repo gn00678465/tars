@@ -67,6 +67,23 @@ const STATUS: Record<string, [string, string]> = {
   cancelled: ["", "已取消"],
 };
 
+const hhmm = (ms: number) => {
+  const t = new Date(ms);
+  return `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+};
+
+/**
+ * A decided card's tag (B1, B2): the result, when, and which device, as the local end says.
+ * Another device's decision leads with that it was made elsewhere. An older local end says
+ * neither when nor who: a decision this page did not see acked is said to be elsewhere.
+ */
+function resolvedText(r: NonNullable<Card["resolved"]>, label: string): string {
+  const time = r.at === undefined ? "" : `${hhmm(r.at)} `;
+  if (r.source === "this") return `${label} · ${time}這台裝置`;
+  if (r.source === "other_device") return `已在別處決定 · ${time}另一台裝置${label}`;
+  return r.here ? label : `${label}（在別處決定）`;
+}
+
 /** How long after the ack a missing result is said to be missing (the protocol cannot ask). */
 const RESULT_MS = 15_000;
 
@@ -140,7 +157,7 @@ export function ApprovalCard(props: {
           ? ["wait", "等待核准"]
           : ["active", "送出決定中…"]
       : (STATUS[resolved.state] ?? ["", resolved.state]);
-  const status = resolved !== undefined && !resolved.here ? `${label}（在別處決定）` : label;
+  const status = resolved === undefined ? label : resolvedText(resolved, label);
   const cls = ["approval-card"];
   if (resolved !== undefined) cls.push("state-resolved");
   return (
