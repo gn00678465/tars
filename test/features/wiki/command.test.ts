@@ -51,6 +51,11 @@ describe("tars wiki sync", () => {
     const d = deps();
     expect(await run(["wiki", "sync"], d)).toBe(0);
     expect(d.io.stdout).toEqual([
+      "開始同步：掃描新的回合…",
+      "掃描完成：新的回合 1",
+      "抽取：第 1 / 1 批…",
+      expect.stringMatching(/^抽取：第 1 \/ 1 批完成（\d+\.\d 秒，累計花費 \d+\.\d+ USD）$/),
+      "整併：開始，1 個頁面有候選…",
       "寫入 people/wang-xiaoming（新增 1、更新 0）",
       "掃描：新的回合 1，進索引的訊息 1，變動的頁面 0",
       "抽取：送出 1 批，候選 1，退回 0",
@@ -60,6 +65,31 @@ describe("tars wiki sync", () => {
       ),
       "還沒做：來源回合 0，候選 0",
     ]);
+  });
+
+  test("every extraction batch says when it starts and when it is done, in order", async () => {
+    const { h, deps } = await setup();
+    // One more turn than a batch holds: two batches.
+    for (let i = 0; i < 21; i++)
+      chatTurn(h.db, { owner: `第 ${i} 則對話：今天天氣很好`, now: h.clock.now() });
+    h.fake.reply(json({ candidates: [] }), json({ candidates: [] }));
+    const d = deps();
+    expect(await run(["wiki", "sync"], d)).toBe(0);
+    const lines = d.io.stdout;
+    const at = (re: RegExp) => lines.findIndex((l) => re.test(l));
+    const order = [
+      /^開始同步：掃描新的回合…$/,
+      /^掃描完成：新的回合 21$/,
+      /^抽取：第 1 \/ 2 批…$/,
+      /^抽取：第 1 \/ 2 批完成（/,
+      /^抽取：第 2 \/ 2 批…$/,
+      /^抽取：第 2 \/ 2 批完成（/,
+      /^掃描：新的回合 21/,
+    ].map(at);
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect(order).toEqual(order.toSorted((a, b) => a - b));
+    // No candidate, no page to consolidate: no 整併 start line.
+    expect(lines.some((l) => l.startsWith("整併：開始"))).toBe(false);
   });
 });
 

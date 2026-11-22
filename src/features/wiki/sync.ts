@@ -899,8 +899,11 @@ async function runModel(
     const rebuilt = await reindex(wiki, agent, paths, today(), warn);
     io.out(`接著重建上次中斷的索引：頁面 ${rebuilt.pages}，原始紀錄的訊息 ${rebuilt.docs}`);
   }
+  // The model requests below take minutes and print nothing else: these lines say it is working.
+  io.out("開始同步：掃描新的回合…");
   const pagesChanged = await scanPages(wiki, paths, today(), warn);
   const scan = scanTurns(wiki, agent, deps.now());
+  io.out(`掃描完成：新的回合 ${scan.turns}`);
 
   const ref = await syncModel(paths, config);
   const s = await prepareModel(
@@ -1148,6 +1151,14 @@ async function runModel(
     return [];
   }
 
+  /** What this run has spent so far, as the closing 花費 line counts it. */
+  const spentSoFar = () =>
+    (
+      wiki
+        .query("SELECT COALESCE(SUM(cost_usd), 0) AS s FROM usage WHERE conv_id = ?")
+        .get(runId) as { s: number }
+    ).s;
+
   async function extract(): Promise<Halt | undefined> {
     const pending = wiki
       .query(
@@ -1180,9 +1191,22 @@ async function runModel(
       bytes += b;
     }
     if (batch.length > 0) queue.push(batch);
+    // A batch the model refuses as too long is split in two, so the total grows as it goes.
+    let total = queue.length;
+    let started = 0;
     while (queue.length > 0) {
+      const n = ++started;
+      io.out(`抽取：第 ${n} / ${total} 批…`);
+      const t0 = deps.now().getTime();
       const out = await extractBatch(queue.shift() as Rendered[]);
       if (!Array.isArray(out)) return out;
+      if (out.length > 0) {
+        total += out.length - 1;
+        io.out(`抽取：第 ${n} 批太長，拆成 ${out.length} 批重試`);
+      } else
+        io.out(
+          `抽取：第 ${n} / ${total} 批完成（${((deps.now().getTime() - t0) / 1000).toFixed(1)} 秒，累計花費 ${usd(spentSoFar())} USD）`,
+        );
       queue.unshift(...out);
     }
     return undefined;
@@ -1358,6 +1382,7 @@ async function runModel(
         )
         .all(MAX_ATTEMPTS) as { page: string }[]
     ).map((r) => r.page);
+    if (pagesWithWork.length > 0) io.out(`整併：開始，${pagesWithWork.length} 個頁面有候選…`);
     for (const path of pagesWithWork) {
       const h = await consolidatePage(path);
       if (h !== undefined) return h;
@@ -1377,13 +1402,7 @@ async function runModel(
   endRun(wiki, runId, state, halt?.reason, deps.now());
 
   const rejected = [...count.rejected.values()].reduce((a, b) => a + b, 0);
-  const spentRun = (
-    wiki
-      .query("SELECT COALESCE(SUM(cost_usd), 0) AS s FROM usage WHERE conv_id = ?")
-      .get(runId) as {
-      s: number;
-    }
-  ).s;
+  const spentRun = spentSoFar();
   const raw = rawSpend(wiki, deps.now());
   const left = (sql: string) => (wiki.query(sql).get(MAX_ATTEMPTS) as { n: number }).n;
   io.out(`掃描：新的回合 ${scan.turns}，進索引的訊息 ${scan.docs}，變動的頁面 ${pagesChanged}`);
