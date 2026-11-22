@@ -1182,7 +1182,7 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
     await act(async () => button(root, "以另一個模型接續").click());
     const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
-    expect(sheet.textContent).toContain("來源對話：甲（原模型 model-a）");
+    expect(sheet.textContent).toContain("來源對話：甲（原模型 Model A）");
     const a = [...sheet.querySelectorAll<HTMLButtonElement>(".model-option")][0];
     expect([a?.disabled, a?.textContent?.includes("目前")]).toEqual([true, true]);
     // Model B, the first one usable, is chosen: 40% of its 100K window.

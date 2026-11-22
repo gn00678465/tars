@@ -106,14 +106,19 @@ function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undef
 /** What is drawn right after an item: the approval cards that belong to it. */
 export type After = (seq: number) => ReactNode;
 
+/** A conversation a new one continues: its title and its model's label, when it is listed. */
+export type Origin = (conv: string) => { title: string; model: string } | undefined;
+
 function Rest({
   items,
   after,
   provider,
+  origin,
 }: {
   items: readonly WireItem[];
   after: After;
   provider: string | undefined;
+  origin: Origin | undefined;
 }) {
   const results = new Map(
     items.filter((i): i is ToolResult => i.kind === "tool_result").map((i) => [i.callId, i]),
@@ -124,6 +129,7 @@ function Rest({
         item={item}
         result={item.kind === "tool_call" ? results.get(item.callId) : undefined}
         provider={provider}
+        origin={origin}
       />
       {after(item.seq)}
     </Fragment>
@@ -134,21 +140,30 @@ function One({
   item,
   result,
   provider,
+  origin,
 }: {
   item: WireItem;
   result: ToolResult | undefined;
   provider: string | undefined;
+  origin: Origin | undefined;
 }) {
   switch (item.kind) {
     case "user":
     case "tool_result":
       return null;
-    case "carried":
+    case "carried": {
+      // As the prototype (9-01); one past the list's 500 is named by its id.
+      const from = origin?.(item.from);
       return (
-        <div key={item.seq} className="compaction-meta">
-          接續自對話 {shortId(item.from)}
+        <div key={item.seq} className="fork-banner">
+          <span>
+            接續自{from === undefined ? `對話 ${shortId(item.from)}` : `「${from.title}」`}
+            （只帶入渲染後文字，不含工具執行紀錄）
+          </span>
+          {from === undefined ? null : <span className="sg-tag">原模型 {from.model}</span>}
         </div>
       );
+    }
     case "assistant":
       return (
         <div key={item.seq} className="msg-assistant-text">
@@ -214,6 +229,7 @@ export function Thread(props: {
   welcome?: boolean;
   /** Opens the effort control; absent when the page offers none. */
   onEffort?: () => void;
+  origin?: Origin;
 }) {
   const { items, running, turn, more, notices, conv } = props.state;
   if (conv === undefined && items.length === 0)
@@ -262,7 +278,7 @@ export function Thread(props: {
           )}
           <div className="msg-assistant">
             {g.user === undefined ? null : props.after(g.user.seq)}
-            <Rest items={g.rest} after={props.after} provider={provider} />
+            <Rest items={g.rest} after={props.after} provider={provider} origin={props.origin} />
             {i === all.length - 1 && running !== undefined ? (
               <div className="msg-assistant-text streaming">
                 <Markdown text={running.text} />

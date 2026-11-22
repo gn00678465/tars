@@ -93,7 +93,11 @@ export function ModelSheet(props: {
           {props.from === undefined ? null : (
             <div className="fork-banner">
               <span>
-                來源對話：{props.from.title}（原模型 {props.from.model.id}）
+                來源對話：{props.from.title}（原模型{" "}
+                {props.models.find(
+                  (m) => m.provider === props.from?.model.provider && m.id === props.from.model.id,
+                )?.label ?? props.from.model.id}
+                ）
               </span>
             </div>
           )}

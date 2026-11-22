@@ -224,7 +224,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
       ? { title: "另一個對話", detail: `核准 ${a.hash.slice(0, 8)}` }
       : {
           title: c.title === "" ? "（沒有標題）" : c.title,
-          detail: `${shortTime(c.updatedAt)} · ${c.model}`,
+          detail: `${shortTime(c.updatedAt)} · ${modelName(c.provider, c.model)}`,
         };
   };
   const { models } = state;
@@ -263,6 +263,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     chosen?.model ??
     (target === undefined ? undefined : { provider: target.provider, id: target.id });
   const spend = (provider: string) => providerSpend(state.status, provider);
+  /** A model by its label, else its id: one the local end no longer lists has only the id. */
+  const modelName = (provider: string, id: string) => modelOf({ provider, id })?.label ?? id;
   const cert = certTag(state.status);
   // With messages, another model is a continuation (D17).
   const pickModel = () => setPicking(source === undefined ? "new" : "continue");
@@ -343,7 +345,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           onCollapse={() => (compact ? setDrawer(false) : setCollapsed(true))}
           now={tick}
           modelName={(provider, id) =>
-            modelOf({ provider, id })?.label.replace(/^(Claude|OpenAI|Gemini) /, "") ?? id
+            modelName(provider, id).replace(/^(Claude|OpenAI|Gemini) /, "")
           }
           {...(cert === undefined ? {} : { cert })}
         />
@@ -423,6 +425,12 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               )}
               <Thread
                 state={state}
+                origin={(id) => {
+                  const c = state.convs.find((x) => x.id === id);
+                  return c === undefined
+                    ? undefined
+                    : { title: titleOf(id), model: modelName(c.provider, c.model) };
+                }}
                 {...(models === undefined ? {} : { model: models.length === 0 ? "" : nextLabel })}
                 welcome={
                   started === 0 &&

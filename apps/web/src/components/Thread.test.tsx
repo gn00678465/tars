@@ -80,3 +80,41 @@ test("a status this page does not know is shown as sent, not dropped", async () 
   );
   expect(root.querySelector(".tool-step .sg-tag")?.textContent).toBe("later_status");
 });
+
+test("a carried conversation opens with where it came from and that model's label", async () => {
+  const carried = (from: string): State => ({
+    ...initial,
+    connection: "open",
+    conv: "conv-2",
+    items: [{ seq: 1, turn: T, kind: "carried", from }],
+  });
+  const origin = (id: string) =>
+    id === "conv-00000001" ? { title: "整理巡檢", model: "Claude Sonnet 4.6" } : undefined;
+  const known = await render(
+    <Thread
+      state={carried("conv-00000001")}
+      origin={origin}
+      onOlder={() => undefined}
+      after={() => null}
+    />,
+  );
+  const banner = known.root.querySelector(".fork-banner") as HTMLElement;
+  expect([...banner.children].map((e) => e.textContent)).toEqual([
+    "接續自「整理巡檢」（只帶入渲染後文字，不含工具執行紀錄）",
+    "原模型 Claude Sonnet 4.6",
+  ]);
+  known.unmount();
+  // One past the list: named by its id, no model.
+  const far = await render(
+    <Thread
+      state={carried("conv-0000abcdef99")}
+      origin={origin}
+      onOlder={() => undefined}
+      after={() => null}
+    />,
+  );
+  expect(far.root.querySelector(".fork-banner")?.textContent).toBe(
+    "接續自對話 abcdef99（只帶入渲染後文字，不含工具執行紀錄）",
+  );
+  far.unmount();
+});
