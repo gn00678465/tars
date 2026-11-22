@@ -1,5 +1,5 @@
 import type { WireConv } from "@tars/protocol";
-import { useRef } from "react";
+import { type ReactNode, useRef } from "react";
 import { Icon, Monolith } from "./Icon.tsx";
 import { useModal } from "./modal.ts";
 import { listTime } from "./time.ts";
@@ -30,6 +30,10 @@ export function ConversationList(props: {
   modelName: (provider: string, id: string) => string;
   /** The local end's certificate, as the prototype's footer tag; absent until it is known. */
   cert?: { readonly tone: string; readonly text: string };
+  /** 對話／知識庫 under 新對話; absent while the local end offers no knowledge base. */
+  tabs?: ReactNode;
+  /** The knowledge base's pages, in place of the conversations while its tab is on. */
+  wiki?: ReactNode;
 }) {
   const aside = useRef<HTMLElement>(null);
   // The parent may be past the list's 500: then it is named only as another conversation.
@@ -73,6 +77,7 @@ export function ConversationList(props: {
           <Icon name="plus" size={15} />
           <span>新對話</span>
         </button>
+        {props.tabs}
       </div>
       <div className="conv-list" role="list" aria-label="歷史對話">
         {props.offline ? (
@@ -80,6 +85,8 @@ export function ConversationList(props: {
             <strong>本機端離線，無法載入歷史</strong>
             <span>對話與記憶只存於你的電腦。本機端重新連線後會自動同步。</span>
           </div>
+        ) : props.wiki !== undefined ? (
+          props.wiki
         ) : !props.listed ? (
           <div className="conv-skeleton" aria-label="載入對話列表中">
             <div className="skeleton-line" />

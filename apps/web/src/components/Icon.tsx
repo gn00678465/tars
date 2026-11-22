@@ -56,6 +56,13 @@ const PATHS = {
       <line x1="9" y1="4" x2="9" y2="20" />
     </>
   ),
+  layers: (
+    <>
+      <polygon points="12 2 2 7 12 12 22 7 12 2" />
+      <polyline points="2 17 12 22 22 17" />
+      <polyline points="2 12 12 17 22 12" />
+    </>
+  ),
 } as const;
 
 export function Icon({ name, size = 14 }: { name: keyof typeof PATHS; size?: number }) {

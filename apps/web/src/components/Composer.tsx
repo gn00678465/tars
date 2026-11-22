@@ -15,8 +15,9 @@ export function Composer(props: {
   skills: readonly Skill[] | undefined;
   onSend: (text: string) => void;
   onAbort: () => void;
-  onCommand: (name: Exclude<Builtin, "help">) => void;
-  /** The built-ins this page can run now; all of them when absent. */
+  /** A built-in to run; `arg` is what follows its name (/wiki's keywords). */
+  onCommand: (name: Exclude<Builtin, "help">, arg: string) => void;
+  /** The built-ins this page can run now; all but /wiki when absent. */
   builtins?: readonly Builtin[];
   /** Beside the send button: the model and effort control; absent from an older local end. */
   setup?: ReactNode;
@@ -58,20 +59,20 @@ export function Composer(props: {
     setIndex(0);
     setRefused(undefined);
   };
-  const run = (name: Builtin) => {
+  const run = (name: Builtin, arg = "") => {
     if (name === "help") return change("/");
     change("");
-    props.onCommand(name);
+    props.onCommand(name, arg);
   };
   const apply = (o: Option) => {
     if (!o.enabled) return;
-    if (o.builtin) run(o.name as Builtin);
+    if (o.builtin && o.name !== "wiki") run(o.name as Builtin);
     else change(`/${o.name} `);
   };
   const send = () => {
     if (off || text.trim() === "") return;
     const s = slashOf(text.trim(), props.skills, props.builtins);
-    if (s.kind === "builtin") return run(s.name);
+    if (s.kind === "builtin") return run(s.name, s.arg);
     if (s.kind === "refused") return setRefused(s.text);
     // Kept as typed until the turn is over.
     if (props.busy !== undefined) return;

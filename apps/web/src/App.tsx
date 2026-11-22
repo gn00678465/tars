@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard, announceText } from "./components/ApprovalCard.tsx";
 import { Composer } from "./components/Composer.tsx";
 import { ContinueHints } from "./components/ContinueHints.tsx";
@@ -22,8 +22,14 @@ import {
   RunSetup,
 } from "./components/RunSetup.tsx";
 import { Thread } from "./components/Thread.tsx";
+import { SourceOverlay } from "./components/wiki/SourceOverlay.tsx";
+import { WikiSideList, WikiTabs } from "./components/wiki/WikiSidebar.tsx";
+import { WikiWorkspace } from "./components/wiki/WikiWorkspace.tsx";
+import type { Builtin } from "./components/slash.ts";
 import type { Socket } from "./socket.ts";
 import { composerBlocked, initial, localNow, reduce, sendBusy } from "./state.ts";
+import { useWikiRequests } from "./wiki/requests.ts";
+import type { WikiEvent } from "./wiki/state.ts";
 
 /** Within this much of the end counts as at the bottom (rounding, a last line half shown). */
 const BOTTOM_PX = 24;
@@ -96,6 +102,14 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   useEffect(() => {
     if (live) socket.send("models.get");
   }, [live, socket]);
+  // The knowledge base, read only; shown once the local end answers for it (scene 15).
+  const toWiki = useCallback((e: WikiEvent) => dispatch({ type: "wiki", e }), []);
+  const reachable = live && state.relay.online;
+  useWikiRequests(socket, state.wiki, toWiki, reachable);
+  const { wiki } = state;
+  const wikiOn = wiki.available && wiki.view === "wiki";
+  // 今天 and 昨天 for the list and the knowledge base: a wall clock, not `now`, which is monotonic.
+  const today = localNow(state, tick) ?? Date.now();
   /**
    * The next message's model, and the conversation it continues: for the new conversation the
    * page is on. Opening any conversation forgets it.
@@ -206,7 +220,10 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const elsewhere = state.cards.filter(
     (c) => c.approval.conv !== state.conv && !dismissed.has(c.approval.approvalId),
   );
-  const pinned = [...byDecision(elsewhere), ...elsewhere.filter((c) => c.resolved === undefined)];
+  // The knowledge base takes the thread's place: what waits in this conversation is pinned too,
+  // so no approval goes out of sight.
+  const away = wikiOn ? [...elsewhere, ...here.filter((c) => c.resolved === undefined)] : elsewhere;
+  const pinned = [...byDecision(elsewhere), ...away.filter((c) => c.resolved === undefined)];
   // One card on the page takes the focus: the oldest one still to be decided, so it moves on
   // when that one is sent.
   const first = pending.find((c) => c.deciding === undefined && c.acked !== true)?.approval
@@ -345,9 +362,22 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           drawerOpen={drawer && compact}
           onOpen={open}
           onCollapse={() => (compact ? setDrawer(false) : setCollapsed(true))}
-          now={localNow(state, tick) ?? Date.now()}
+          now={today}
           modelName={(provider, id) => shortName(modelName(provider, id))}
           {...(cert === undefined ? {} : { cert })}
+          {...(wiki.available ? { tabs: <WikiTabs wiki={wiki} dispatch={toWiki} /> } : {})}
+          {...(wikiOn
+            ? {
+                wiki: (
+                  <WikiSideList
+                    wiki={wiki}
+                    now={today}
+                    dispatch={toWiki}
+                    onPicked={() => setDrawer(false)}
+                  />
+                ),
+              }
+            : {})}
         />
         <div className="workspace">
           <TopBar
@@ -367,23 +397,35 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                   </span>
                 )}
               </div>
-              {models === undefined ? null : (
-                <button
-                  className="sg-btn sg-btn-ghost"
-                  type="button"
-                  aria-haspopup="dialog"
-                  // As the prototype (9-06): there is nothing to carry yet; the composer's model
-                  // control switches in place.
-                  disabled={state.conv === undefined}
-                  {...(state.conv === undefined
-                    ? { title: "對話還沒有訊息，直接在輸入框換模型" }
-                    : {})}
-                  onClick={() => setPicking("continue")}
-                >
-                  <Icon name="fork" />
-                  <span>以另一個模型接續</span>
-                </button>
-              )}
+              <div className="topbar-right">
+                {wiki.available ? (
+                  <button
+                    className="sg-btn sg-btn-ghost"
+                    type="button"
+                    onClick={() => toWiki({ type: "view", view: wikiOn ? "chat" : "wiki" })}
+                  >
+                    <Icon name="layers" />
+                    <span>{wikiOn ? "返回對話" : "個人知識庫"}</span>
+                  </button>
+                ) : null}
+                {models === undefined ? null : (
+                  <button
+                    className="sg-btn sg-btn-ghost"
+                    type="button"
+                    aria-haspopup="dialog"
+                    // As the prototype (9-06): there is nothing to carry yet; the composer's model
+                    // control switches in place.
+                    disabled={state.conv === undefined}
+                    {...(state.conv === undefined
+                      ? { title: "對話還沒有訊息，直接在輸入框換模型" }
+                      : {})}
+                    onClick={() => setPicking("continue")}
+                  >
+                    <Icon name="fork" />
+                    <span>以另一個模型接續</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
           {/* Outside the scrolling thread: it may mean another machine took the certificate. */}
@@ -408,46 +450,60 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             className="thread-scroll"
             ref={thread}
             tabIndex={-1}
-            aria-label="訊息"
+            aria-label={wikiOn ? "個人知識庫" : "訊息"}
             onScroll={(e) => {
               const el = e.currentTarget;
               atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_PX;
             }}
           >
             <div className="thread-inner thread">
-              {current === undefined || models === undefined ? null : (
-                <ContinueHints
-                  conv={current}
-                  models={models}
-                  status={state.status}
-                  onContinue={() => setPicking("continue")}
+              {wikiOn ? (
+                <WikiWorkspace
+                  wiki={wiki}
+                  offline={!reachable}
+                  now={today}
+                  dispatch={toWiki}
+                  onJump={open}
                 />
+              ) : (
+                <>
+                  {current === undefined || models === undefined ? null : (
+                    <ContinueHints
+                      conv={current}
+                      models={models}
+                      status={state.status}
+                      onContinue={() => setPicking("continue")}
+                    />
+                  )}
+                  <Thread
+                    state={state}
+                    origin={(id) => {
+                      const c = state.convs.find((x) => x.id === id);
+                      return c === undefined
+                        ? undefined
+                        : { title: titleOf(id), model: modelName(c.provider, c.model) };
+                    }}
+                    {...(models === undefined
+                      ? {}
+                      : { model: models.length === 0 ? "" : nextLabel })}
+                    welcome={
+                      started === 0 &&
+                      next === undefined &&
+                      state.connection === "open" &&
+                      state.relay.online
+                    }
+                    {...(effort === undefined || levels.length === 0
+                      ? {}
+                      : { onEffort: () => setEffortOpen(true) })}
+                    after={(seq) => anchored.get(seq)?.map(card)}
+                    onOlder={() => {
+                      if (state.conv !== undefined && oldest !== undefined)
+                        socket.send("conv.open", { before: oldest }, state.conv);
+                    }}
+                  />
+                  {loose.map(card)}
+                </>
               )}
-              <Thread
-                state={state}
-                origin={(id) => {
-                  const c = state.convs.find((x) => x.id === id);
-                  return c === undefined
-                    ? undefined
-                    : { title: titleOf(id), model: modelName(c.provider, c.model) };
-                }}
-                {...(models === undefined ? {} : { model: models.length === 0 ? "" : nextLabel })}
-                welcome={
-                  started === 0 &&
-                  next === undefined &&
-                  state.connection === "open" &&
-                  state.relay.online
-                }
-                {...(effort === undefined || levels.length === 0
-                  ? {}
-                  : { onEffort: () => setEffortOpen(true) })}
-                after={(seq) => anchored.get(seq)?.map(card)}
-                onOlder={() => {
-                  if (state.conv !== undefined && oldest !== undefined)
-                    socket.send("conv.open", { before: oldest }, state.conv);
-                }}
-              />
-              {loose.map(card)}
             </div>
           </main>
           <footer className="composer-dock">
@@ -501,6 +557,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                 error={state.error}
                 skills={state.status?.skills}
                 onSend={(text) => {
+                  // The reply comes in the thread: the page goes back to it.
+                  toWiki({ type: "view", view: "chat" });
                   const options = {
                     ...chosen,
                     ...(sendEffort === undefined ? {} : { effort: sendEffort }),
@@ -511,9 +569,17 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                     Object.keys(options).length === 0 ? undefined : options,
                   );
                 }}
-                // /model needs the local end's model list (14-04).
-                {...(models === undefined ? { builtins: ["new", "cost", "help"] as const } : {})}
-                onCommand={(name) => {
+                // /model needs the local end's model list (14-04); /wiki, a local end that
+                // answered for its knowledge base.
+                builtins={
+                  [
+                    ...(wiki.available ? (["wiki"] as const) : []),
+                    ...(models === undefined ? [] : (["model"] as const)),
+                    ...(["new", "cost", "help"] as const),
+                  ] satisfies Builtin[]
+                }
+                onCommand={(name, arg) => {
+                  if (name === "wiki") return toWiki({ type: "slash", query: arg });
                   if (name === "new") return open(undefined);
                   if (name === "cost") return setSheet(true);
                   // As the model control: not while a turn runs or the local end is away.
@@ -566,6 +632,17 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           </footer>
         </div>
         {sheet ? <StatusSheet state={state} onClose={() => setSheet(false)} /> : null}
+        {wikiOn && wiki.source !== undefined ? (
+          <SourceOverlay
+            source={wiki.source}
+            now={today}
+            onClose={() => toWiki({ type: "source", ref: undefined })}
+            onJump={(c) => {
+              toWiki({ type: "source", ref: undefined });
+              open(c);
+            }}
+          />
+        ) : null}
         {phone && effort !== undefined && effortOpen && levels.length > 0 ? (
           <EffortSheet effort={effort} modelLabel={target?.label ?? nextLabel} />
         ) : null}

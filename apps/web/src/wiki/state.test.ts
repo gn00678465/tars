@@ -1,4 +1,5 @@
 import { expect, test } from "vite-plus/test";
+import { initial, reduce } from "../state.ts";
 import { server } from "../testing.ts";
 import { LIST, PAGE, REF, REF2, SEARCH, STATUS } from "./fixtures.ts";
 import { type WikiEvent, type WikiState, wikiInitial, wikiMessage, wikiReduce } from "./state.ts";
@@ -21,17 +22,14 @@ test("the knowledge base is offered only once the local end answered wiki.status
 
 test("an older local end answers bad_message: nothing is offered, and no error is shown", () => {
   const s = run([asked("a", "status"), { type: "view", view: "wiki" }]);
-  const nacked = wikiMessage(
-    s,
-    server("nack", { code: "bad_message", message: "unknown kind" }, { re: "a" }),
-  );
+  const nacked = wikiMessage(s, server("nack", { reason: "bad_message" }, { re: "a" }));
   expect(nacked).toMatchObject({ available: false, view: "chat", pending: {} });
 });
 
 test("a nack for another request only lets that request go", () => {
   const s = wikiMessage(
     { ...run([asked("a", "status"), asked("b", "page")]), available: true, status: STATUS },
-    server("nack", { code: "auth_expired", message: "" }, { re: "b" }),
+    server("nack", { reason: "auth_expired" }, { re: "b" }),
   );
   expect(s).toMatchObject({ available: true, pending: { a: "status" } });
 });
@@ -107,4 +105,39 @@ test("/wiki opens the knowledge base searching for its words; forget lets reques
   const two = run([asked("a", "status"), asked("b", "list")]);
   expect(wikiReduce(two, { type: "forget", id: "a" }).pending).toEqual({ b: "list" });
   expect(wikiReduce(two, { type: "forget" }).pending).toEqual({});
+});
+
+test("in the page's state: opening a conversation leaves the knowledge base for it", () => {
+  const s = reduce(
+    { ...initial, wiki: { ...wikiInitial, available: true, view: "wiki" } },
+    {
+      type: "open_conv",
+      conv: "c",
+    },
+  );
+  expect(s.wiki.view).toBe("chat");
+  expect(s.wiki.available).toBe(true);
+});
+
+test("in the page's state: another epoch keeps the knowledge base, asked once per connection", () => {
+  const wiki = { ...wikiInitial, available: true, status: STATUS };
+  const s = reduce(
+    { ...initial, connection: "open", epoch: "e1", wiki },
+    { type: "message", m: server("hello", { epoch: "e2", tars: "0.0.1" }), at: 0 },
+  );
+  expect(s.epoch).toBe("e2");
+  expect(s.wiki).toEqual(wiki);
+});
+
+test("in the page's state: a login that expired answering the knowledge base says so", () => {
+  const s = reduce(
+    { ...initial, connection: "open", wiki: run([asked("p", "page")]) },
+    {
+      type: "message",
+      m: server("nack", { reason: "auth_expired" }, { re: "p" }),
+      at: 0,
+    },
+  );
+  expect(s.connection).toBe("auth_expired");
+  expect(s.wiki.pending).toEqual({});
 });

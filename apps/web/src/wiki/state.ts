@@ -1,11 +1,12 @@
-import type {
-  ServerMessage,
-  WikiCategory,
-  WikiList,
-  WikiPage,
-  WikiSearch,
-  WikiSource,
-  WikiStatus,
+import {
+  type ServerMessage,
+  type WikiCategory,
+  type WikiList,
+  type WikiPage,
+  type WikiSearch,
+  type WikiSource,
+  type WikiStatus,
+  WIKI_QUERY,
 } from "@tars/protocol";
 
 /**
@@ -100,7 +101,13 @@ export function wikiReduce(s: WikiState, e: WikiEvent): WikiState {
       return e.ref === undefined ? rest : { ...rest, source: { ref: e.ref } };
     }
     case "slash":
-      return { ...s, view: "wiki", query: e.query, track: "wiki" };
+      return {
+        ...s,
+        view: "wiki",
+        // wiki.search counts its limit in code points, as this does.
+        query: Array.from(e.query).slice(0, WIKI_QUERY).join(""),
+        track: "wiki",
+      };
   }
 }
 

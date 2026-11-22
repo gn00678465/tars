@@ -1,4 +1,11 @@
 import { reasonText } from "./reasons.ts";
+import {
+  type WikiEvent,
+  type WikiState,
+  wikiInitial,
+  wikiMessage,
+  wikiReduce,
+} from "./wiki/state.ts";
 import type {
   NackReason,
   ServerMessage,
@@ -98,6 +105,7 @@ export interface State {
   readonly cards: readonly Card[];
   readonly notices: readonly Notice[];
   readonly error?: string;
+  readonly wiki: WikiState;
 }
 
 export type Event =
@@ -130,7 +138,8 @@ export type Event =
   /** approval.decide could not be sent at all: the card says so instead of waiting. */
   | { readonly type: "decide_failed"; readonly approvalId: string }
   /** The owner acted on what these notices asked for. */
-  | { readonly type: "notices_done"; readonly code: string };
+  | { readonly type: "notices_done"; readonly code: string }
+  | { readonly type: "wiki"; readonly e: WikiEvent };
 
 export const initial: State = {
   connection: "connecting",
@@ -140,6 +149,7 @@ export const initial: State = {
   more: false,
   cards: [],
   notices: [],
+  wiki: wikiInitial,
 };
 
 const NOTICES = 5;
@@ -182,6 +192,8 @@ const fresh = (s: State, epoch: string): State => ({
   relay: s.relay,
   ...(s.localSince === undefined ? {} : { localSince: s.localSince }),
   ...(s.reconnectedAt === undefined ? {} : { reconnectedAt: s.reconnectedAt }),
+  // The knowledge base is not the store that was replaced, and is asked for once per connection.
+  wiki: s.wiki,
   epoch,
 });
 
@@ -194,6 +206,15 @@ const withoutKeys = <T extends object>(o: T, ...keys: (keyof T)[]): T => {
 const bySeq = (items: readonly WireItem[]) => [...items].sort((a, b) => a.seq - b.seq);
 
 function message(s: State, m: ServerMessage, at: number): State {
+  const wiki = wikiMessage(s.wiki, m);
+  if (wiki !== undefined)
+    return {
+      ...s,
+      wiki,
+      ...(m.kind === "nack" && m.p.reason === "auth_expired"
+        ? { connection: "auth_expired" as const }
+        : {}),
+    };
   const here = m.conv !== undefined && m.conv === s.conv;
   switch (m.kind) {
     case "hello":
@@ -202,7 +223,7 @@ function message(s: State, m: ServerMessage, at: number): State {
         : { ...s, epoch: m.p.epoch };
     case "models.result":
       return { ...s, models: m.p.models };
-    // This page never asks for the knowledge base yet.
+    // An answer no request waits on any more: it waited too long, or the connection dropped.
     case "wiki.status.result":
     case "wiki.list.result":
     case "wiki.page.result":
@@ -389,6 +410,8 @@ export function reduce(s: State, e: Event): State {
       return message(s, e.m, e.at);
     case "notices_done":
       return { ...s, notices: s.notices.filter((n) => n.code !== e.code) };
+    case "wiki":
+      return { ...s, wiki: wikiReduce(s.wiki, e.e) };
     case "pinged":
       return { ...s, ping: { id: e.id, at: e.at } };
     case "open_conv": {
@@ -400,7 +423,8 @@ export function reduce(s: State, e: Event): State {
         "conv",
         "spoken",
       );
-      return e.conv === undefined ? base : { ...base, conv: e.conv };
+      const chat = { ...base, wiki: wikiReduce(s.wiki, { type: "view", view: "chat" }) };
+      return e.conv === undefined ? chat : { ...chat, conv: e.conv };
     }
     case "submitted":
       return { ...withoutKeys(s, "error"), submitting: e.requestId };

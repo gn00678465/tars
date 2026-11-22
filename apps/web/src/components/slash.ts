@@ -3,10 +3,12 @@ import { skillInvocationText, type WireStatus } from "@tars/protocol";
 export type Skill = NonNullable<WireStatus["skills"]>[number];
 
 /**
- * The terminal's built-ins that have a page here, in the prototype's order and words. /effort,
- * /compact and /wiki have no message to the local end yet, so they are not offered at all.
+ * The terminal's built-ins that have a page here, in the prototype's order and words. /effort and
+ * /compact have no message to the local end yet, so they are not offered at all. /wiki takes its
+ * keywords after a space, so picking it from the menu leaves it in the box to type them.
  */
 export const BUILTINS = [
+  { name: "wiki", description: "唯讀瀏覽個人知識庫與雙軌搜尋原始對話" },
   { name: "model", description: "以另一個模型接續目前對話（開新對話）" },
   { name: "new", description: "開啟新對話（模型與推理強度在輸入框選）" },
   { name: "cost", description: "檢視三家 Provider 花費與模型清單狀態" },
@@ -15,7 +17,8 @@ export const BUILTINS = [
 
 export type Builtin = (typeof BUILTINS)[number]["name"];
 
-const ALL: readonly Builtin[] = BUILTINS.map((b) => b.name);
+/** /wiki only once the local end answered wiki.status: an older one cannot. */
+const ALL: readonly Builtin[] = BUILTINS.map((b) => b.name).filter((n) => n !== "wiki");
 
 export interface Option {
   readonly group: "內建指令" | "Skills" | "僅限本機（tars claude）";
@@ -68,7 +71,7 @@ export function menuFor(
 
 export type Slash =
   | { readonly kind: "message"; readonly text: string }
-  | { readonly kind: "builtin"; readonly name: Builtin }
+  | { readonly kind: "builtin"; readonly name: Builtin; readonly arg: string }
   | { readonly kind: "refused"; readonly text: string };
 
 /**
@@ -88,7 +91,7 @@ export function slashOf(
   const name = m[1] as string;
   const content = (m[2] ?? "").trim();
   const builtin = BUILTINS.find((b) => b.name === name && offered.includes(b.name));
-  if (builtin !== undefined) return { kind: "builtin", name: builtin.name };
+  if (builtin !== undefined) return { kind: "builtin", name: builtin.name, arg: content };
   if (skills === undefined) return { kind: "message", text: line };
   const skill = skills.find((s) => s.name === name);
   if (skill === undefined)

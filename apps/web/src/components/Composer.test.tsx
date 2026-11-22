@@ -5,7 +5,7 @@ import { button, render } from "../render.ts";
 import { composerBlocked, initial, sendBusy, type State } from "../state.ts";
 import { Composer } from "./Composer.tsx";
 import { skillInvocationText } from "@tars/protocol";
-import type { Skill } from "./slash.ts";
+import type { Builtin, Skill } from "./slash.ts";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -138,7 +138,7 @@ const SKILLS: Skill[] = [
   { name: "memory", description: "寫入記憶", localOnly: true },
 ];
 
-async function composer(skills: readonly Skill[] | undefined) {
+async function composer(skills: readonly Skill[] | undefined, builtins?: readonly Builtin[]) {
   const sent: string[] = [];
   const commands: string[] = [];
   const r = await render(
@@ -150,7 +150,8 @@ async function composer(skills: readonly Skill[] | undefined) {
       skills={skills}
       onSend={(t) => sent.push(t)}
       onAbort={() => undefined}
-      onCommand={(c) => commands.push(c)}
+      onCommand={(c, arg) => commands.push(arg === "" ? c : `${c} ${arg}`)}
+      {...(builtins === undefined ? {} : { builtins })}
     />,
   );
   const area = r.root.querySelector("textarea") as HTMLTextAreaElement;
@@ -197,7 +198,8 @@ test("/ opens the menu: built-ins, the skills, local-only ones marked and not ch
   expect(c.root.querySelector(".slash-menu-foot")?.textContent).toContain(
     "共 7 項（往下捲動檢視 Skills 與本機限定）",
   );
-  // No fake items: the terminal's /effort, /compact, /wiki have nothing to run here yet.
+  // No fake items: the terminal's /effort, /compact have nothing to run here yet; /wiki only
+  // once the local end answered for its knowledge base.
   expect(c.root.textContent).not.toMatch(/\/(effort|compact|wiki)/);
 });
 
@@ -242,6 +244,23 @@ test("typing filters; Esc closes; Tab on a built-in runs it", async () => {
   await c.key("Enter");
   expect(c.area.value).toBe("/");
   expect(c.options()).toHaveLength(7);
+});
+
+test("/wiki, once offered: picking it leaves it to type the keywords; Enter runs it with them", async () => {
+  const c = await composer(SKILLS, ["wiki", "new", "cost", "help"]);
+  await c.type("/wi");
+  expect(c.options().map((o) => o.name)).toEqual(["/wiki"]);
+  await c.key("Enter");
+  expect(c.area.value).toBe("/wiki ");
+  expect(c.commands).toEqual([]);
+  await c.type("/wiki 備份腳本");
+  await c.key("Enter");
+  expect(c.commands).toEqual(["wiki 備份腳本"]);
+  await c.type("/wiki");
+  await c.key("Tab");
+  await c.type("/wiki");
+  await act(async () => c.root.querySelector("form")?.requestSubmit());
+  expect(c.commands).toEqual(["wiki 備份腳本", "wiki"]);
 });
 
 test("a press outside the menu closes it; one on the text box or the menu does not", async () => {
