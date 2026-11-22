@@ -41,6 +41,12 @@ export const clientMessage = z.discriminatedUnion("kind", [
   ),
   inConv("turn.abort", empty),
   /**
+   * Archives the conversation, or with archived false takes back the one this connection archived
+   * last: the local end refuses any other (not_allowed). A local end older than it answers
+   * bad_message, so the page offers it only when status says archive.
+   */
+  inConv("conv.archive", z.strictObject({ archived: z.boolean() })),
+  /**
    * Compacts the conversation now, as the terminal's /compact: a model request that is billed
    * and goes through the same budget and the same one-at-a-time as a turn; turn.abort stops it.
    */

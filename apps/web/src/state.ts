@@ -229,6 +229,8 @@ export const NACK_TEXT: Record<NackReason, string> = {
   too_large: "訊息太長",
   version: "網頁與本機端的版本不合",
   offline: "本機端離線",
+  conv_archived: "這個對話已封存，不能繼續；要取回請在終端執行 tars chat --unarchive",
+  conv_active: "這個對話還有進行中的回合或待核准項目，不能封存",
 };
 
 const nackText = (reason: NackReason | undefined) =>

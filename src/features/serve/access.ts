@@ -96,6 +96,8 @@ export interface Registration {
   readonly exp: number;
   hello: boolean;
   subscribed?: string;
+  /** The conversation this connection archived last: the only one it may take back, for a minute. */
+  lastArchived?: { readonly conv: string; readonly at: number };
   readonly country?: string;
   readonly ua?: string;
 }

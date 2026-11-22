@@ -119,6 +119,7 @@ export const CLIENT: Record<string, object> = {
   "wiki.search": msg("wiki.search", { query: "王小明", limit: 20 }),
   "wiki.source": msg("wiki.source", { ref: REF, page: "people/wang-xiaoming" }),
   "conv.compact": msg("conv.compact", { focus: "保留腳本輸出路徑" }, { conv: ID }),
+  "conv.archive": msg("conv.archive", { archived: true }, { conv: ID }),
 };
 
 export const context = {

@@ -379,4 +379,22 @@ describe("batch 4: every new field optional, each bounded", () => {
     expect(compact({ focus: "" })).toBe("bad_message");
     expect(compact({}, {})).toBe("bad_message");
   });
+
+  test("conv.archive: needs conv and a boolean, nothing else", () => {
+    const archive = (p: object, extra: object = { conv: ID }) =>
+      reason(parseClient(JSON.stringify(msg("conv.archive", p, extra))));
+    expect(archive({ archived: true })).toBe("ok");
+    expect(archive({ archived: false })).toBe("ok");
+    expect(archive({})).toBe("bad_message");
+    expect(archive({ archived: "yes" })).toBe("bad_message");
+    expect(archive({ archived: true, extra: 1 })).toBe("bad_message");
+    expect(archive({ archived: true }, {})).toBe("bad_message");
+  });
+
+  test("the new nacks and status.archive parse; status.archive is only true", () => {
+    expect(server("nack", { reason: "conv_archived" })).toBe("ok");
+    expect(server("nack", { reason: "conv_active" })).toBe("ok");
+    expect(server("status", { ...status, archive: true })).toBe("ok");
+    expect(server("status", { ...status, archive: false })).toBe("bad_message");
+  });
 });

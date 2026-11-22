@@ -20,6 +20,7 @@ import { Dispatch, DROP } from "../../../src/features/serve/dispatch.ts";
 import { wireLookup } from "../../../src/features/serve/wire.ts";
 import type { Verdict } from "../../../src/features/serve/access.ts";
 import { tarsCall, text } from "../../fakes/anthropic.ts";
+import { seedTurn } from "../agent/db-fixture.ts";
 import { tempHome } from "../../helpers.ts";
 import {
   configWith,
@@ -64,6 +65,7 @@ async function until(check: () => boolean, ms = 5000) {
 interface Setup {
   h: EngineHarness;
   hub: TestHub;
+  timers: ManualTimers;
   d: Dispatch;
   frames: FrameToRelay[];
   /** Finishes the checks waiting on jwt "held". */
@@ -136,6 +138,7 @@ async function setup(extra: Omit<HarnessOptions, "selfCommand"> = {}): Promise<S
   const s: Setup = {
     h,
     hub,
+    timers,
     d,
     frames,
     release: () => {
@@ -1342,5 +1345,151 @@ describe("status and models.result: period, estimate, prices, the table", () => 
     expect(s.h.fake.messages()).toHaveLength(requests);
     expect(readFileSync(s.h.paths.modelsFile, "utf8")).toBe(before);
     allValid(s);
+  });
+});
+
+describe("conv.archive: putting a conversation away from a page", () => {
+  async function archivable() {
+    const s = await setup();
+    await s.ready(CONN_A);
+    await s.ready(CONN_B);
+    s.h.fake.reply(text("好"), text("好"));
+    const turn = async (convId?: string) => {
+      const out = await s.h.engine.runTurn(
+        {
+          provider: "anthropic",
+          model: "model-a",
+          effort: "medium",
+          text: "q",
+          ...(convId === undefined ? {} : { convId }),
+        },
+        s.h.frontend,
+        new AbortController().signal,
+      );
+      if (out.kind !== "ended") throw new Error("turn did not end");
+      return out.convId;
+    };
+    const conv = await turn();
+    const other = await turn();
+    return { s, conv, other };
+  }
+  const listed = (s: Setup, conn: string) =>
+    (s.hub.to(conn, "conv.list.result").at(-1) as { p: { convs: { id: string }[] } }).p.convs.map(
+      (c) => c.id,
+    );
+
+  test("status says the local end takes it", async () => {
+    const { s } = await archivable();
+    const id = await s.msg(CONN_A, "status.get", {});
+    expect((reply(s, CONN_A, id) as { p: WireStatus }).p.archive).toBe(true);
+  });
+
+  test("archived: acked, every device gets the new list, the one with it open is told, the data stays", async () => {
+    const { s, conv, other } = await archivable();
+    await s.msg(CONN_B, "conv.open", {}, { conv });
+    const id = await s.msg(CONN_A, "conv.archive", { archived: true }, { conv });
+    expect(reply(s, CONN_A, id)?.kind).toBe("ack");
+    expect(listed(s, CONN_A)).toEqual([other]);
+    expect(listed(s, CONN_B)).toEqual([other]);
+    const notice = s.hub.to(CONN_B, "notice").at(-1);
+    expect(notice?.p).toEqual({ code: "conv_archived", data: { conv } });
+    expect(notice?.conv).toBe(conv);
+    expect(store.getConversation(s.db, conv).archivedAt).toBeNumber();
+    expect(store.readItems(s.db, conv).length).toBeGreaterThan(0);
+    const list = await s.msg(CONN_A, "conv.list", {});
+    expect(
+      (reply(s, CONN_A, list)!.p as { convs: { id: string }[] }).convs.map((c) => c.id),
+    ).toEqual([other]);
+    allValid(s);
+  });
+
+  test("an archived conversation is not opened, continued, compacted or continued from", async () => {
+    const { s, conv } = await archivable();
+    await s.msg(CONN_A, "conv.archive", { archived: true }, { conv });
+    for (const [kind, p, extra] of [
+      ["conv.open", {}, { conv }],
+      ["turn.submit", { requestId: "r-1", text: "再說" }, { conv }],
+      ["conv.compact", {}, { conv }],
+      [
+        "turn.submit",
+        {
+          requestId: "r-2",
+          text: "接續",
+          model: { provider: "anthropic", id: "model-a" },
+          from: conv,
+        },
+        {},
+      ],
+    ] as const) {
+      const id = await s.msg(CONN_B, kind, p, extra);
+      expect(reason(reply(s, CONN_B, id))).toBe("conv_archived");
+    }
+    expect(s.d.current).toBeUndefined();
+    allValid(s);
+  });
+
+  test("a turn or an approval of the conversation, or a turn the local end has accepted, refuses it", async () => {
+    const { s, conv, other } = await archivable();
+    seedTurn(s.db, { convId: conv });
+    const id = await s.msg(CONN_A, "conv.archive", { archived: true }, { conv });
+    expect(reason(reply(s, CONN_A, id))).toBe("conv_active");
+    expect(store.getConversation(s.db, conv).archivedAt).toBeUndefined();
+
+    // A turn accepted a moment ago has no row yet: the one the local end holds counts.
+    s.h.fake.reply(text("慢"));
+    const gate = Promise.withResolvers<void>();
+    const hold = spyOn(s.hub.notifier, "idle").mockImplementation(() => gate.promise);
+    await s.msg(CONN_A, "turn.submit", { requestId: "r-slow", text: "x" }, { conv: other });
+    const again = await s.msg(CONN_B, "conv.archive", { archived: true }, { conv: other });
+    expect(reason(reply(s, CONN_B, again))).toBe("conv_active");
+    gate.resolve();
+    hold.mockRestore();
+    await s.d.running;
+  });
+
+  test("taking it back: only what this connection archived last, within a minute", async () => {
+    const { s, conv, other } = await archivable();
+    await s.msg(CONN_A, "conv.archive", { archived: true }, { conv });
+    // Another connection, another conversation, nothing archived by this one yet.
+    const b = await s.msg(CONN_B, "conv.archive", { archived: false }, { conv });
+    expect(reason(reply(s, CONN_B, b))).toBe("not_allowed");
+    const o = await s.msg(CONN_A, "conv.archive", { archived: false }, { conv: other });
+    expect(reason(reply(s, CONN_A, o))).toBe("not_allowed");
+    expect(store.getConversation(s.db, conv).archivedAt).toBeNumber();
+
+    const ok = await s.msg(CONN_A, "conv.archive", { archived: false }, { conv });
+    expect(reply(s, CONN_A, ok)?.kind).toBe("ack");
+    expect(store.getConversation(s.db, conv).archivedAt).toBeUndefined();
+    expect(listed(s, CONN_B).toSorted()).toEqual([conv, other].toSorted());
+    // Once taken back it cannot be taken back again.
+    const twice = await s.msg(CONN_A, "conv.archive", { archived: false }, { conv });
+    expect(reason(reply(s, CONN_A, twice))).toBe("not_allowed");
+    allValid(s);
+  });
+
+  test("after a minute, or on another connection, it can only be taken back in the terminal", async () => {
+    const { s, conv } = await archivable();
+    await s.msg(CONN_A, "conv.archive", { archived: true }, { conv });
+    s.timers.advance(61_000);
+    const id = await s.msg(CONN_A, "conv.archive", { archived: false }, { conv });
+    expect(reason(reply(s, CONN_A, id))).toBe("not_allowed");
+    expect(store.getConversation(s.db, conv).archivedAt).toBeNumber();
+    // A reconnect is a new connection: it never archived this one.
+    s.hub.registry.remove(CONN_A);
+    await s.ready(CONN_A);
+    const again = await s.msg(CONN_A, "conv.archive", { archived: false }, { conv });
+    expect(reason(reply(s, CONN_A, again))).toBe("not_allowed");
+  });
+
+  test("an unknown conversation is not_found; an expired login is auth_expired; archiving twice keeps one time", async () => {
+    const { s, conv } = await archivable();
+    const nf = await s.msg(CONN_A, "conv.archive", { archived: true }, { conv: "nope" });
+    expect(reason(reply(s, CONN_A, nf))).toBe("not_found");
+    await s.msg(CONN_A, "conv.archive", { archived: true }, { conv });
+    const at = store.getConversation(s.db, conv).archivedAt;
+    s.timers.advance(5);
+    const dup = await s.msg(CONN_B, "conv.archive", { archived: true }, { conv });
+    expect(reply(s, CONN_B, dup)?.kind).toBe("ack");
+    expect(store.getConversation(s.db, conv).archivedAt).toBe(at);
   });
 });

@@ -6,8 +6,8 @@ import {
   readEpoch,
 } from "../../../src/features/agent/store.ts";
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { TarsError } from "../../../src/core/exit.ts";
 import {
@@ -19,6 +19,7 @@ import {
   readLockInfo,
 } from "../../../src/features/agent/db.ts";
 import { spent } from "../../../src/features/agent/ledger.ts";
+import { appendItems } from "../../../src/features/agent/store.ts";
 import { agentDb, isolatedPaths, NOW, PROVIDER, seedTurn } from "./db-fixture.ts";
 
 async function refusal(promise: Promise<unknown>): Promise<TarsError> {
@@ -121,11 +122,11 @@ describe("openSqlite", () => {
 });
 
 describe("openDb", () => {
-  test("an empty database migrates to version 5 with every table", async () => {
+  test("an empty database migrates to version 6 with every table", async () => {
     const { db } = await agentDb();
-    expect(MIGRATIONS.length).toBe(5);
+    expect(MIGRATIONS.length).toBe(6);
     expect(db.query("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
-      value: "5",
+      value: "6",
     });
     const tables = (
       db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as {
@@ -213,7 +214,7 @@ describe("openDb", () => {
     },
   );
 
-  test("version 2 to 5 adds parent_id, request_id and its index, and the epoch", async () => {
+  test("version 2 to 6 adds parent_id, request_id and its index, and the epoch", async () => {
     const paths = isolatedPaths();
     mkdirSync(paths.agent, { recursive: true });
     const v2 = new Database(paths.agentDb, { create: true });
@@ -231,15 +232,20 @@ describe("openDb", () => {
     v2.close();
     const db = await openDb(paths);
     const after = master(db);
-    expect(after.filter((m) => !changed(m) && m.name !== "turns_request_id")).toEqual(
-      before.master.filter((m) => !changed(m)),
-    );
+    expect(
+      after.filter(
+        (m) => !changed(m) && m.name !== "turns_request_id" && m.name !== "conversations_active",
+      ),
+    ).toEqual(before.master.filter((m) => !changed(m)));
     const sqlOf = (ms: Master[], name: string) =>
       ms.find((m) => m.type === "table" && m.name === name)?.sql as string;
     const plus = (sql: string, column: string) =>
       `${sql.slice(0, sql.lastIndexOf(")"))}, ${column})`;
     expect(sqlOf(after, "conversations")).toBe(
-      plus(sqlOf(before.master, "conversations"), "parent_id TEXT REFERENCES conversations(id)"),
+      plus(
+        plus(sqlOf(before.master, "conversations"), "parent_id TEXT REFERENCES conversations(id)"),
+        "archived_at INTEGER",
+      ),
     );
     expect(sqlOf(after, "turns")).toBe(plus(sqlOf(before.master, "turns"), "request_id TEXT"));
     expect(after.find((m) => m.name === "turns_request_id")?.type).toBe("index");
@@ -247,12 +253,12 @@ describe("openDb", () => {
       before.rows.map((rows, i) =>
         rows.map((r) => ({
           ...(r as object),
-          ...(i === 0 ? { parent_id: null } : { request_id: null }),
+          ...(i === 0 ? { parent_id: null, archived_at: null } : { request_id: null }),
         })),
       ),
     );
     expect(db.query("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
-      value: "5",
+      value: "6",
     });
     expect(readEpoch(db)).toMatch(/^[0-9a-f]{32}$/);
     db.close();
@@ -272,6 +278,77 @@ describe("openDb", () => {
     expect(conv.parentId).toBeUndefined();
     expect("parentId" in conv).toBe(false);
     db.close();
+  });
+
+  /** A version 5 file with conversations, turns, items and usage, for the upgrade to 6. */
+  async function v5WithData() {
+    const paths = isolatedPaths();
+    mkdirSync(paths.agent, { recursive: true });
+    const v5 = new Database(paths.agentDb, { create: true });
+    v5.exec("PRAGMA journal_mode=WAL");
+    // Migration 3 is a comment only, which exec refuses.
+    for (const sql of MIGRATIONS.slice(0, 5)) if (!sql.startsWith("--")) v5.exec(sql);
+    v5.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '5')");
+    for (const text of ["一", "二", "三"]) {
+      const t = seedTurn(v5, { text });
+      appendItems(v5, t.convId, t.turnId, [{ kind: "user", step: 0, body: { text } }], 1);
+    }
+    return { paths, v5 };
+  }
+
+  test("version 5 to 6 backs the file up first, owner-only, and keeps every count", async () => {
+    const { paths, v5 } = await v5WithData();
+    const counts = (d: Database) =>
+      ["conversations", "turns", "items"].map(
+        (t) => (d.query(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n,
+      );
+    const before = counts(v5);
+    v5.close();
+    const db = await openDb(paths);
+    expect(counts(db)).toEqual(before);
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM conversations WHERE archived_at IS NULL").get(),
+    ).toEqual({ n: 3 });
+    const backups = readdirSync(paths.agent).filter((f) => f.startsWith("agent.db.bak-v5-"));
+    expect(backups).toHaveLength(1);
+    const file = join(paths.agent, backups[0] as string);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    // The copy is a database of the old version with the same rows.
+    const copy = new Database(file, { readonly: true });
+    expect(copy.query("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
+      value: "5",
+    });
+    expect(counts(copy)).toEqual(before);
+    copy.close();
+    db.close();
+    // Already current: opening again makes no second copy.
+    (await openDb(paths)).close();
+    expect(readdirSync(paths.agent).filter((f) => f.includes(".bak-"))).toHaveLength(1);
+  });
+
+  test("a backup that cannot be written stops the upgrade and leaves the file at version 5", async () => {
+    const { paths, v5 } = await v5WithData();
+    v5.close();
+    // The copy cannot be made, whatever the reason.
+    const real = Database.prototype.run;
+    const spy = spyOn(Database.prototype, "run").mockImplementation(function (
+      this: Database,
+      sql: string,
+      ...rest: unknown[]
+    ) {
+      if (sql.startsWith("VACUUM INTO")) throw new Error("disk full");
+      return real.call(this, sql, ...(rest as []));
+    } as typeof real);
+    try {
+      await expect(openDb(paths)).rejects.toThrow("升級前備份資料庫失敗");
+    } finally {
+      spy.mockRestore();
+    }
+    const raw = new Database(paths.agentDb, { readonly: true });
+    expect(raw.query("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({
+      value: "5",
+    });
+    raw.close();
   });
 
   test("each new database gets its own epoch, kept across reopening", async () => {

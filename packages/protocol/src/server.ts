@@ -30,6 +30,10 @@ export const NACK = [
   "not_allowed",
   "bad_message",
   "not_found",
+  /** The conversation is archived: it is not opened, continued or compacted. */
+  "conv_archived",
+  /** conv.archive: a turn or an approval of the conversation is still waiting. */
+  "conv_active",
 ] as const;
 export type NackReason = (typeof NACK)[number];
 

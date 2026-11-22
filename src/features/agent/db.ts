@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { chmod, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 import { writeFileAtomic } from "../../core/fs.ts";
@@ -134,6 +134,12 @@ ALTER TABLE turns ADD COLUMN request_id TEXT;
 CREATE UNIQUE INDEX turns_request_id ON turns (request_id) WHERE request_id IS NOT NULL;
 INSERT INTO meta (key, value) VALUES ('epoch', lower(hex(randomblob(16))));
 `,
+  // A soft archive: the time the owner put a conversation away, NULL while it is in use. No row is
+  // rewritten, so every conversation stays active until it is archived.
+  `
+ALTER TABLE conversations ADD COLUMN archived_at INTEGER;
+CREATE INDEX conversations_active ON conversations (updated_at DESC) WHERE archived_at IS NULL;
+`,
 ];
 
 export interface LockInfo {
@@ -229,7 +235,7 @@ export function openDb(
   paths: TarsPaths,
   opts: { readonly?: boolean } = {},
 ): Database | undefined | Promise<Database> {
-  if (!opts.readonly) return openSqlite(paths.agentDb, MIGRATIONS);
+  if (!opts.readonly) return openSqlite(paths.agentDb, MIGRATIONS, { backup: true });
   const db = openSqlite(paths.agentDb, MIGRATIONS, { readonly: true });
   if (db === "newer") throw new TarsError(NEWER);
   return db;
@@ -250,14 +256,14 @@ export function openSqlite(
 export function openSqlite(
   file: string,
   migrations: readonly string[],
-  opts?: { readonly?: false },
+  opts?: { readonly?: false; backup?: boolean },
 ): Promise<Database>;
 export function openSqlite(
   file: string,
   migrations: readonly string[],
-  opts: { readonly?: boolean } = {},
+  opts: { readonly?: boolean; backup?: boolean } = {},
 ): Database | undefined | "newer" | Promise<Database> {
-  if (!opts.readonly) return openWritable(file, migrations);
+  if (!opts.readonly) return openWritable(file, migrations, opts.backup === true);
   if (!existsSync(file)) return undefined;
   const db = new Database(file, { readonly: true });
   db.exec("PRAGMA busy_timeout=5000");
@@ -270,7 +276,41 @@ export function openSqlite(
   return db;
 }
 
-async function openWritable(file: string, migrations: readonly string[]): Promise<Database> {
+/** Tables whose rows an upgrade must not lose or change; all exist since version 1. */
+const COUNTED = ["conversations", "turns", "items", "usage", "approvals"] as const;
+
+const countRows = (db: Database) => ({
+  ...Object.fromEntries(
+    COUNTED.map((t) => [t, (db.query(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n]),
+  ),
+  cost: (db.query("SELECT COALESCE(SUM(cost_usd), 0) AS n FROM usage").get() as { n: number }).n,
+});
+
+/**
+ * A consistent copy of a database about to be upgraded, beside it: VACUUM INTO reads a WAL
+ * database as one snapshot. Owner-only like the database, since it holds the same conversations.
+ */
+async function backupBeforeUpgrade(db: Database, file: string, from: number): Promise<string> {
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d+Z$/, "Z");
+  const backup = `${file}.bak-v${from}-${stamp}`;
+  try {
+    db.run("VACUUM INTO ?", [backup]);
+    await chmod(backup, 0o600);
+  } catch (err) {
+    db.close();
+    throw new TarsError(`升級前備份資料庫失敗，資料庫沒有動：${(err as Error).message}`);
+  }
+  return backup;
+}
+
+async function openWritable(
+  file: string,
+  migrations: readonly string[],
+  backup: boolean,
+): Promise<Database> {
   await mkdir(dirname(file), { recursive: true });
   const db = new Database(file, { create: true });
   db.exec("PRAGMA journal_mode=WAL");
@@ -281,11 +321,17 @@ async function openWritable(file: string, migrations: readonly string[]): Promis
     db.close();
     throw new TarsError(NEWER);
   }
+  const from = schemaVersion(db);
+  if (backup && from > 0 && from < migrations.length) await backupBeforeUpgrade(db, file, from);
   db.transaction(() => {
     const version = schemaVersion(db);
+    const before = backup && version > 0 ? countRows(db) : undefined;
     // bun:sqlite refuses a script with no statement; a version bump alone is such a script.
     for (const sql of migrations.slice(version))
       if (sql.replace(/--.*$/gm, "").trim() !== "") db.exec(sql);
+    // An upgrade only adds; counts that moved mean it did something else, so it is rolled back.
+    if (before !== undefined && JSON.stringify(countRows(db)) !== JSON.stringify(before))
+      throw new TarsError("資料庫升級前後的筆數不同，升級已取消");
     db.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", [
       String(migrations.length),
     ]);

@@ -448,6 +448,32 @@ async function inner(): Promise<number> {
       `${againReply.kind}; turns ${turns3}`,
     );
 
+    // --- Archive: put away from a page, not opened or continued, taken back at once.
+    const archived = await reply(A, send(A, "conv.archive", { archived: true }, { conv }));
+    const archivedAt = query<{ at: number | null }>(
+      `SELECT archived_at AS at FROM conversations WHERE id = '${conv}'`,
+    )[0]?.at;
+    const listAfter = await reply(A, send(A, "conv.list", {}));
+    const openArchived = await reply(A, send(A, "conv.open", {}, { conv }));
+    const submitArchived = await reply(
+      A,
+      send(A, "turn.submit", { requestId: "req-arch", text: "還能說嗎" }, { conv }),
+    );
+    const restored = await reply(A, send(A, "conv.archive", { archived: false }, { conv }));
+    const openRestored = await reply(A, send(A, "conv.open", {}, { conv }));
+    check(
+      "archive",
+      "conv.archive: acked and archived_at set; the list lacks it; conv.open and turn.submit get conv_archived; taking it back reopens it",
+      archived.kind === "ack" &&
+        typeof archivedAt === "number" &&
+        !((listAfter.p.convs ?? []) as { id: string }[]).some((c) => c.id === conv) &&
+        openArchived.p.reason === "conv_archived" &&
+        submitArchived.p.reason === "conv_archived" &&
+        restored.kind === "ack" &&
+        openRestored.kind === "conv.snapshot",
+      `${archived.kind}; at ${archivedAt}; ${openArchived.p.reason}; ${submitArchived.p.reason}; ${restored.kind}; ${openRestored.kind}`,
+    );
+
     // --- 9. Another protocol version.
     const v2 = `e2e-${++ids}`;
     relay.send({ t: "msg", conn: A, m: { v: PROTOCOL_VERSION + 1, id: v2, kind: "hello", p: {} } });

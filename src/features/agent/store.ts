@@ -28,6 +28,8 @@ export interface Conversation {
   readonly lastPrefixKey: string | null;
   /** The conversation this one continues; absent for one started fresh. */
   readonly parentId?: string;
+  /** When the owner archived it; absent while it is in use. */
+  readonly archivedAt?: number;
 }
 
 export interface ToolCallRow {
@@ -62,6 +64,8 @@ interface ConversationRow {
   last_request_at: number | null;
   last_prefix_key: string | null;
   parent_id: string | null;
+  /** Absent from a database not yet migrated to version 6 (a read-only reader of an older one). */
+  archived_at?: number | null;
 }
 
 const toConversation = (r: ConversationRow): Conversation => ({
@@ -76,6 +80,7 @@ const toConversation = (r: ConversationRow): Conversation => ({
   lastRequestAt: r.last_request_at,
   lastPrefixKey: r.last_prefix_key,
   ...(r.parent_id === null ? {} : { parentId: r.parent_id }),
+  ...(r.archived_at == null ? {} : { archivedAt: r.archived_at }),
 });
 
 export function getConversation(db: Database, id: string): Conversation {
@@ -86,11 +91,70 @@ export function getConversation(db: Database, id: string): Conversation {
   return toConversation(row);
 }
 
-export function listConversations(db: Database): Conversation[] {
+const hasArchivedAt = (db: Database) =>
+  db.query("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'archived_at'").get() !==
+  null;
+
+/**
+ * The conversations in use, newest first; `archived` lists the archived ones instead, most
+ * recently archived first. A database not yet migrated has none archived.
+ */
+export function listConversations(db: Database, opts: { archived?: boolean } = {}): Conversation[] {
+  const archived = opts.archived === true;
+  if (!hasArchivedAt(db))
+    return archived
+      ? []
+      : (
+          db
+            .query("SELECT * FROM conversations ORDER BY updated_at DESC")
+            .all() as ConversationRow[]
+        ).map(toConversation);
   return (
-    db.query("SELECT * FROM conversations ORDER BY updated_at DESC").all() as ConversationRow[]
+    db
+      .query(
+        archived
+          ? "SELECT * FROM conversations WHERE archived_at IS NOT NULL ORDER BY archived_at DESC"
+          : "SELECT * FROM conversations WHERE archived_at IS NULL ORDER BY updated_at DESC",
+      )
+      .all() as ConversationRow[]
   ).map(toConversation);
 }
+
+/** Why a conversation cannot be archived now: a turn (a compaction is one) or an approval waits. */
+export type ArchiveBlock = "running" | "approval";
+
+export const archiveBlocker = (db: Database, id: string): ArchiveBlock | undefined =>
+  db.query("SELECT 1 FROM turns WHERE conv_id = ? AND state = 'running'").get(id) !== null
+    ? "running"
+    : db.query("SELECT 1 FROM approvals WHERE conv_id = ? AND state = 'pending'").get(id) !== null
+      ? "approval"
+      : undefined;
+
+/**
+ * Archives one conversation; the check and the write are one transaction. updated_at is left as
+ * it is, so unarchiving puts it back where it was. Archiving an archived one keeps its time.
+ */
+export function archiveConversation(
+  db: Database,
+  id: string,
+  now: number,
+): "archived" | "already" | ArchiveBlock {
+  return db
+    .transaction((): "archived" | "already" | ArchiveBlock => {
+      if (getConversation(db, id).archivedAt !== undefined) return "already";
+      const blocked = archiveBlocker(db, id);
+      if (blocked !== undefined) return blocked;
+      db.run("UPDATE conversations SET archived_at = ? WHERE id = ?", [now, id]);
+      return "archived";
+    })
+    .immediate();
+}
+
+/** Whether it was archived. */
+export const unarchiveConversation = (db: Database, id: string): boolean =>
+  db.run("UPDATE conversations SET archived_at = NULL WHERE id = ? AND archived_at IS NOT NULL", [
+    id,
+  ]).changes > 0;
 
 /** A full id, or a tail of at least 4 characters that names exactly one conversation. */
 export function findConversation(db: Database, idOrSuffix: string): Conversation {

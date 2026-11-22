@@ -47,6 +47,8 @@ export const DROP = { auth: 4003, keys: 4004, flood: 4005 } as const;
 const QUEUE_FRAMES = 32;
 const RECONCILE_WAIT_MS = 5_000;
 const CONV_LIST = 500;
+/** How long after archiving a conversation the same connection may take it back (the page's toast is shorter). */
+const UNARCHIVE_MS = 60_000;
 /** How long status keeps the skill list it read (see skills()). */
 const SKILLS_TTL_MS = 60_000;
 
@@ -293,6 +295,8 @@ export class Dispatch {
         return this.submit(conn, m);
       case "conv.compact":
         return this.compact(conn, m);
+      case "conv.archive":
+        return this.archive(conn, m);
       case "turn.abort":
         if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
         // A new conversation's id is known once the turn started.
@@ -386,6 +390,7 @@ export class Dispatch {
     } catch {
       return this.reply(conn, "nack", "not_found", m.id);
     }
+    if (conv.archivedAt !== undefined) return this.reply(conn, "nack", "conv_archived", m.id);
     const reg = this.registry.get(conn);
     if (reg !== undefined) reg.subscribed = conv.id;
     const c = this.current;
@@ -473,7 +478,8 @@ export class Dispatch {
     if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
     if (this.current !== undefined) return this.reply(conn, "nack", "busy", m.id);
     try {
-      store.getConversation(this.d.db, m.conv);
+      if (store.getConversation(this.d.db, m.conv).archivedAt !== undefined)
+        return this.reply(conn, "nack", "conv_archived", m.id);
     } catch {
       return this.reply(conn, "nack", "not_found", m.id);
     }
@@ -533,6 +539,51 @@ export class Dispatch {
     })();
   }
 
+  /**
+   * conv.archive. Archiving asks the database (a running turn, a compaction, a pending approval)
+   * and this.current, which knows a turn accepted before its row exists. Taking it back only
+   * works for what this connection archived last and a minute ago at most.
+   */
+  private archive(conn: string, m: Of<"conv.archive">): void {
+    if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
+    const reg = this.registry.get(conn);
+    let conv: store.Conversation;
+    try {
+      conv = store.getConversation(this.d.db, m.conv);
+    } catch {
+      return this.reply(conn, "nack", "not_found", m.id);
+    }
+    const now = this.d.now();
+    if (m.p.archived) {
+      if (conv.archivedAt !== undefined) return this.ack(conn, m.id);
+      const c = this.current;
+      if (c !== undefined && (c.frontend.convId ?? c.convId) === m.conv)
+        return this.reply(conn, "nack", "conv_active", m.id);
+      if (store.archiveConversation(this.d.db, m.conv, now) !== "archived")
+        return this.reply(conn, "nack", "conv_active", m.id);
+      if (reg !== undefined) reg.lastArchived = { conv: m.conv, at: now };
+      for (const c of this.subscribers(m.conv))
+        this.d.hub.send(
+          c,
+          message(
+            this.d.hub,
+            "notice",
+            { code: "conv_archived", data: { conv: m.conv } },
+            { conv: m.conv },
+          ),
+        );
+    } else {
+      const last = reg?.lastArchived;
+      if (reg === undefined || last?.conv !== m.conv || now - last.at > UNARCHIVE_MS)
+        return this.reply(conn, "nack", "not_allowed", m.id);
+      store.unarchiveConversation(this.d.db, m.conv);
+      reg.lastArchived = undefined;
+    }
+    this.ack(conn, m.id);
+    const convs = store.listConversations(this.d.db).slice(0, CONV_LIST).map(wireConv);
+    broadcast(this.d.hub, () => message(this.d.hub, "conv.list.result", { convs }));
+  }
+
   /** With the turn and its conversation once it exists: enough for a page that missed its start. */
   private ack(conn: string, re: string, turn?: { id: string; convId: string }): void {
     this.d.hub.send(
@@ -555,6 +606,7 @@ export class Dispatch {
       } catch {
         return this.reply(conn, "nack", "not_found", m.id);
       }
+    if (conv?.archivedAt !== undefined) return this.reply(conn, "nack", "conv_archived", m.id);
     const { requestId, text } = m.p;
     // A conversation's model is its own (D17): another model is a new conversation, continued
     // from it if the page says so.
@@ -567,6 +619,7 @@ export class Dispatch {
       } catch {
         return this.reply(conn, "nack", "not_found", m.id);
       }
+    if (parent?.archivedAt !== undefined) return this.reply(conn, "nack", "conv_archived", m.id);
     // What a resend must match: the text, the model and the conversation it continues, the level.
     const hash = sha256(
       JSON.stringify([
@@ -789,6 +842,7 @@ export class Dispatch {
       turnRunning: this.current !== undefined,
       notify: this.d.hub.notifier.configured ? "ok" : "not_configured",
       skills: await this.skills(),
+      archive: true,
       ...(this.d.certExpiresAt?.() === undefined
         ? {}
         : { certExpiresAt: this.d.certExpiresAt() as number }),

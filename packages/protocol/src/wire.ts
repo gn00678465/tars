@@ -311,6 +311,8 @@ export const wireStatus = z.strictObject({
     .optional(),
   /** When the local end's link certificate expires (epoch ms). */
   certExpiresAt: z.number().optional(),
+  /** The local end takes conv.archive: a page offers archiving only when this is here. */
+  archive: z.literal(true).optional(),
 });
 
 export type WireItem = z.infer<typeof wireItem>;
