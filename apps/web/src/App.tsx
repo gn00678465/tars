@@ -265,6 +265,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const spend = (provider: string) => providerSpend(state.status, provider);
   /** A model by its label, else its id: one the local end no longer lists has only the id. */
   const modelName = (provider: string, id: string) => modelOf({ provider, id })?.label ?? id;
+  // The prototype's shortModelLabel, where room is short: the list and the composer's button.
+  const shortName = (label: string) => label.replace(/^(Claude|OpenAI|Gemini) /, "");
   const cert = certTag(state.status);
   // With messages, another model is a continuation (D17).
   const pickModel = () => setPicking(source === undefined ? "new" : "continue");
@@ -344,9 +346,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           onOpen={open}
           onCollapse={() => (compact ? setDrawer(false) : setCollapsed(true))}
           now={tick}
-          modelName={(provider, id) =>
-            modelName(provider, id).replace(/^(Claude|OpenAI|Gemini) /, "")
-          }
+          modelName={(provider, id) => shortName(modelName(provider, id))}
           {...(cert === undefined ? {} : { cert })}
         />
         <div className="workspace">
@@ -529,7 +529,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                         <RunSetup
                           compact={phone}
                           model={{
-                            label: nextLabel,
+                            label: shortName(nextLabel),
                             models,
                             current: targetRef,
                             spend,

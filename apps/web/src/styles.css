@@ -1410,6 +1410,22 @@ button:disabled {
   gap: 6px;
 }
 
+/* At phone width a long model name gives way, not the send button. */
+.composer-toolbar-left,
+.composer-toolbar-right > .sg-btn {
+  flex-shrink: 0;
+}
+.composer-toolbar-right,
+.run-setup,
+.model-anchor,
+.model-anchor .run-seg {
+  min-width: 0;
+}
+.model-anchor .run-seg > span:not(.run-seg-label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .composer-hint {
   font-size: 12px;
   color: var(--subtle-foreground);
@@ -2482,6 +2498,8 @@ button:disabled {
 
   .run-seg {
     min-height: 42px;
+    /* 2px each side: "/ 指令", the model, the effort and 送出 fit 375px. */
+    padding: 0 8px;
   }
   .model-anchor .run-seg-label {
     display: none;

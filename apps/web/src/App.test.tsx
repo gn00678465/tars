@@ -1135,6 +1135,13 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     );
     expect(gone.root.querySelector(".run-seg")?.textContent).toBe("模型Model A");
     gone.unmount();
+    // Where room is short the maker goes: the composer's button and the list, not the header.
+    const named = await start(
+      MODELS.map((m) => (m.id === "model-b" ? { ...m, label: "Claude Model B" } : m)),
+    );
+    expect(named.root.querySelector(".run-seg")?.textContent).toBe("模型Model B");
+    expect(named.root.querySelector(".conv-header-model")?.textContent).toBe("Claude Model B");
+    named.unmount();
     // No models listed: the page says so instead of naming one.
     const none = await start([]);
     await act(async () => (none.root.querySelector(".new-chat-btn") as HTMLElement).click());
