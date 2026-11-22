@@ -17,16 +17,111 @@
   outline-offset: -2px;
 }
 
-/* Cards pinned above the composer scroll inside a bounded area: the composer always shows. */
+/* The prototype has no spacing token; the dock's spacing is this one. */
+:root {
+  --dock-gap: 12px;
+}
+
+/*
+ * Cards from other conversations, above the composer: a ruled-off block of its own colour with a
+ * bar at its left, so none is read as the thread's. They scroll inside a bounded area, so the
+ * composer always shows, and say so when cut off.
+ */
+.composer-dock:has(.pinned-approvals) {
+  border-top: 1px solid var(--glass-edge);
+  padding-top: var(--dock-gap);
+}
+
 .pinned-approvals {
+  position: relative;
+  border: 1px solid var(--status-active-border);
+  border-left: 3px solid var(--status-active);
+  border-radius: var(--radius-card);
+  background: var(--surface-inset);
+  padding: var(--dock-gap);
+  display: flex;
+  flex-direction: column;
+  gap: var(--dock-gap);
+}
+
+.pinned-head {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--status-active);
+}
+
+.pinned-scroll {
   max-height: 40vh;
   max-height: 40dvh;
   overflow-y: auto;
   overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: var(--dock-gap);
 }
 
-.pinned-approvals:empty {
-  display: none;
+/* A flex column would shrink the cards to the bound instead of scrolling them. */
+.pinned-scroll > * {
+  flex-shrink: 0;
+}
+
+/*
+ * The focus goes to a waiting card's buttons, scrolling its top out of the bound: its header
+ * stays at the top while any of it shows, so which conversation it is from is never scrolled
+ * away. clip, not the card's hidden, which would make the card the one the header sticks in.
+ */
+.pinned-scroll .approval-card {
+  overflow: clip;
+}
+
+.pinned-scroll .approval-origin-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: linear-gradient(var(--status-wait-bg), var(--status-wait-bg)), var(--card-solid);
+}
+
+.pinned-more {
+  position: absolute;
+  left: 3px;
+  right: 0;
+  bottom: 0;
+  padding: calc(var(--dock-gap) * 2) var(--dock-gap) calc(var(--dock-gap) / 2);
+  border-radius: 0 0 var(--radius-card) 0;
+  background: linear-gradient(transparent, var(--surface-inset) 60%);
+  font-size: 12px;
+  text-align: center;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+/* Which conversation: a label, the title cut to one line, then its time and model. */
+.approval-origin-bar {
+  flex-wrap: wrap;
+}
+
+.approval-origin-text {
+  flex: 1 1 12em;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.approval-origin-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-origin-detail {
+  font-size: 11.5px;
+}
+
+.approval-origin-actions {
+  display: flex;
+  gap: 6px;
 }
 
 /* Each argument numbered and ruled off, so a wrapped one is not read as the next. */

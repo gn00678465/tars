@@ -4,7 +4,8 @@ import { Composer } from "./components/Composer.tsx";
 import { ContinueBanner, ModelSheet, type ModelRef } from "./components/ModelSheet.tsx";
 import { ConversationList } from "./components/ConversationList.tsx";
 import { StatusSheet, TopBar } from "./components/StatusBar.tsx";
-import { timeText } from "./components/time.ts";
+import { shortTime, timeText } from "./components/time.ts";
+import { PinnedDock } from "./components/PinnedDock.tsx";
 import { Thread } from "./components/Thread.tsx";
 import type { Socket } from "./socket.ts";
 import { composerBlocked, initial, localNow, reduce } from "./state.ts";
@@ -162,6 +163,17 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const waiting = new Set(pending.map((c) => c.approval.conv));
   const titleOf = (id: string) => state.convs.find((c) => c.id === id)?.title || "另一個對話";
   const current = state.convs.find((c) => c.id === state.conv);
+  // Titles come from first messages, so two conversations can share one: the time and model tell
+  // them apart. One past the list's 500 has only what the card itself carries.
+  const originOf = (a: (typeof state.cards)[number]["approval"]) => {
+    const c = state.convs.find((x) => x.id === a.conv);
+    return c === undefined
+      ? { title: "另一個對話", detail: `核准 ${a.hash.slice(0, 8)}` }
+      : {
+          title: c.title === "" ? "（沒有標題）" : c.title,
+          detail: `${shortTime(c.updatedAt)} · ${c.model}`,
+        };
+  };
   const { models } = state;
   const chosen = state.conv === undefined ? next : undefined;
   const modelOf = (r: ModelRef | undefined) =>
@@ -275,29 +287,31 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           </main>
           <footer className="composer-dock">
             <div className="composer-wrap">
-              <div className="pinned-approvals">
-                {pinned.map((card) => (
-                  <ApprovalCard
-                    key={card.approval.approvalId}
-                    card={card}
-                    localNow={localNow(state, tick)}
-                    onDecide={(d) => decide(card, d)}
-                    focus={card.approval.approvalId === first}
-                    pageNow={tick}
-                    {...(blocked === undefined ? {} : { blocked })}
-                    origin={{
-                      title: titleOf(card.approval.conv),
-                      onJump: () => open(card.approval.conv),
-                      ...(card.resolved === undefined
-                        ? {}
-                        : {
-                            onDismiss: () =>
-                              setDismissed((d) => new Set(d).add(card.approval.approvalId)),
-                          }),
-                    }}
-                  />
-                ))}
-              </div>
+              {pinned.length === 0 ? null : (
+                <PinnedDock count={pinned.length}>
+                  {pinned.map((card) => (
+                    <ApprovalCard
+                      key={card.approval.approvalId}
+                      card={card}
+                      localNow={localNow(state, tick)}
+                      onDecide={(d) => decide(card, d)}
+                      focus={card.approval.approvalId === first}
+                      pageNow={tick}
+                      {...(blocked === undefined ? {} : { blocked })}
+                      origin={{
+                        ...originOf(card.approval),
+                        onJump: () => open(card.approval.conv),
+                        ...(card.resolved === undefined
+                          ? {}
+                          : {
+                              onDismiss: () =>
+                                setDismissed((d) => new Set(d).add(card.approval.approvalId)),
+                            }),
+                      }}
+                    />
+                  ))}
+                </PinnedDock>
+              )}
               {chosen?.from === undefined ? null : (
                 <ContinueBanner
                   title={titleOf(chosen.from)}

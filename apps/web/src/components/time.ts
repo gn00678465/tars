@@ -10,3 +10,13 @@ export function leftText(ms: number): string {
 
 /** The last 8 characters, as tars serve status and the notification show an id. */
 export const shortId = (id: string) => id.slice(-8);
+
+/** Month, day and minute: enough to tell two conversations apart in a card's header. */
+export const shortTime = (ms: number) =>
+  new Date(ms).toLocaleString("zh-TW", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });

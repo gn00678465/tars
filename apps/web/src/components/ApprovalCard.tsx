@@ -84,7 +84,11 @@ export function ApprovalCard(props: {
   localNow: number | undefined;
   onDecide: (decision: "approved" | "denied") => void;
   /** Pinned above the composer while the page is on another conversation: says which. */
-  origin?: { title: string; onJump: () => void; onDismiss?: () => void };
+  /**
+   * A card from another conversation: its title, and what tells two of the same title apart
+   * (their time and model, or the card's own hash when the list does not have it).
+   */
+  origin?: { title: string; detail: string; onJump: () => void; onDismiss?: () => void };
   /** Why a decision cannot be sent now (offline); the buttons are off while it is set. */
   blocked?: string;
   /** Takes the focus when this becomes true; false for all but the oldest card to decide. */
@@ -129,17 +133,21 @@ export function ApprovalCard(props: {
     <article className={cls.join(" ")} aria-label="核准">
       {props.origin === undefined ? null : (
         <div className="approval-origin-bar">
-          <span>
-            {resolved === undefined ? "待核准" : "已決定"}（來自其他對話）：{props.origin.title}
-          </span>
-          <button className="sg-btn sg-btn-sm" type="button" onClick={props.origin.onJump}>
-            跳至該對話
-          </button>
-          {props.origin.onDismiss === undefined ? null : (
-            <button className="sg-btn sg-btn-sm" type="button" onClick={props.origin.onDismiss}>
-              關閉
+          <div className="approval-origin-text">
+            <span>{resolved === undefined ? "待核准" : "已決定"}（來自其他對話）</span>
+            <span className="approval-origin-title">{props.origin.title}</span>
+            <span className="approval-origin-detail mono">{props.origin.detail}</span>
+          </div>
+          <div className="approval-origin-actions">
+            <button className="sg-btn sg-btn-sm" type="button" onClick={props.origin.onJump}>
+              跳至該對話
             </button>
-          )}
+            {props.origin.onDismiss === undefined ? null : (
+              <button className="sg-btn sg-btn-sm" type="button" onClick={props.origin.onDismiss}>
+                關閉
+              </button>
+            )}
+          </div>
         </div>
       )}
       <div className="approval-head">

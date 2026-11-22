@@ -4,6 +4,7 @@ import { act } from "react";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
 import { button, buttons, render } from "./render.ts";
+import { shortTime } from "./components/time.ts";
 import { server, socketHarness } from "./testing.ts";
 
 afterEach(() => {
@@ -1013,6 +1014,133 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     const rows = [...root.querySelectorAll(".conv-item")].map((e) => e.textContent ?? "");
     expect(rows[1]).toContain("接續自「甲」");
     expect(rows[0]).not.toContain("接續自");
+    unmount();
+  });
+});
+
+describe("cards from other conversations: set off, and told apart", () => {
+  // Titles come from the first message: two conversations can have the same one.
+  const SAME = "11/20 19:45 晚餐 錢包";
+  const CONVS = [
+    {
+      id: "conv-1",
+      title: SAME,
+      provider: "anthropic",
+      model: "claude-sonnet-5-5",
+      updatedAt: Date.UTC(2026, 10, 20, 7, 11),
+    },
+    {
+      id: "conv-2",
+      title: SAME,
+      provider: "gemini",
+      model: "gemini-2.5-pro",
+      updatedAt: Date.UTC(2026, 10, 21, 2, 30),
+    },
+    {
+      id: "conv-3",
+      title: "其他",
+      provider: "anthropic",
+      model: "claude-sonnet-5-5",
+      updatedAt: 1,
+    },
+  ];
+  const request = (id: string, conv: string, hash: string) =>
+    server("approval.request", {
+      approval: {
+        approvalId: id,
+        conv,
+        hash,
+        action: "run_script",
+        script: "fava-ledger",
+        version: "v1",
+        summary: "記一筆",
+        effects: "external-write",
+        domains: [],
+        secret: null,
+        argv: [],
+        expiresAt: 600_000,
+      },
+    });
+  async function onConv3() {
+    const h = socketHarness();
+    const r = await render(<App socket={h.socket} now={h.now} />);
+    await act(async () => h.last().ready());
+    await act(async () => {
+      h.last().receive(server("relay.status", { online: true }));
+      h.last().receive(server("conv.list.result", { convs: CONVS }));
+    });
+    await act(async () =>
+      (
+        [...r.root.querySelectorAll<HTMLButtonElement>(".conv-item")].find((b) =>
+          b.textContent?.startsWith("其他"),
+        ) as HTMLButtonElement
+      ).click(),
+    );
+    const heads = () =>
+      [...r.root.querySelectorAll(".pinned-approvals .approval-origin-bar")].map((e) => ({
+        kind: e.querySelector(".approval-origin-text span")?.textContent,
+        title: e.querySelector(".approval-origin-title")?.textContent,
+        detail: e.querySelector(".approval-origin-detail")?.textContent,
+      }));
+    return { h, ...r, heads };
+  }
+
+  test("two of the same title: each card says its time and model, waiting or decided", async () => {
+    const { h, root, heads, unmount } = await onConv3();
+    expect(root.querySelector(".pinned-approvals")).toBeNull();
+    await act(async () => {
+      h.last().receive(request("approval-00000001", "conv-1", "a".repeat(64)));
+      h.last().receive(request("approval-00000002", "conv-2", "b".repeat(64)));
+      h.last().receive(
+        server("approval.resolved", {
+          approvalId: "approval-00000001",
+          state: "approved",
+          via: "remote",
+        }),
+      );
+    });
+    const dock = root.querySelector(".pinned-approvals") as HTMLElement;
+    expect(dock.querySelector(".pinned-head")?.textContent).toBe("其他對話的核准（2）");
+    const time = (ms: number) => shortTime(ms);
+    expect(heads()).toEqual([
+      {
+        kind: "已決定（來自其他對話）",
+        title: SAME,
+        detail: `${time(CONVS[0]?.updatedAt ?? 0)} · claude-sonnet-5-5`,
+      },
+      {
+        kind: "待核准（來自其他對話）",
+        title: SAME,
+        detail: `${time(CONVS[1]?.updatedAt ?? 0)} · gemini-2.5-pro`,
+      },
+    ]);
+    expect(heads()[0]?.detail).not.toBe(heads()[1]?.detail);
+    unmount();
+  });
+
+  test("a conversation the list does not have: another conversation, and the card's hash", async () => {
+    const { h, heads, unmount } = await onConv3();
+    await act(async () =>
+      h.last().receive(request("approval-00000003", "conv-old", "c0ffee12" + "0".repeat(56))),
+    );
+    expect(heads()).toEqual([
+      { kind: "待核准（來自其他對話）", title: "另一個對話", detail: "核准 c0ffee12" },
+    ]);
+    unmount();
+  });
+
+  test("cut off by its bound, the dock says there is more; scrolled to the end, it does not", async () => {
+    const { h, root, unmount } = await onConv3();
+    await act(async () => h.last().receive(request("approval-00000001", "conv-1", "a".repeat(64))));
+    const scroll = root.querySelector(".pinned-scroll") as HTMLElement;
+    // jsdom lays nothing out: the sizes a phone would have.
+    Object.defineProperty(scroll, "scrollHeight", { value: 900, configurable: true });
+    Object.defineProperty(scroll, "clientHeight", { value: 320, configurable: true });
+    await act(async () => void scroll.dispatchEvent(new Event("scroll")));
+    expect(root.querySelector(".pinned-more")?.textContent).toBe("還有內容，向下捲動");
+    scroll.scrollTop = 580;
+    await act(async () => void scroll.dispatchEvent(new Event("scroll")));
+    expect(root.querySelector(".pinned-more")).toBeNull();
     unmount();
   });
 });
