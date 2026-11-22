@@ -267,6 +267,71 @@ describe("the sidebar and the open conversation", () => {
     unmount();
   });
 
+  describe("approved, then the connection dropped before the ack", () => {
+    const APPROVE = "確認核准寫外部";
+    const pick = (root: HTMLElement, text: string) =>
+      buttons(pinnedCard(root) as HTMLElement).find((b) => b.textContent?.startsWith(text));
+    const sendApprove = async (h: ReturnType<typeof socketHarness>, root: HTMLElement) => {
+      await act(async () => pick(root, APPROVE)?.click());
+      return h
+        .last()
+        .messages()
+        .filter((m) => m.kind === "approval.decide")
+        .at(-1);
+    };
+    async function lostApprove() {
+      const opened = await listed();
+      const { h, root } = opened;
+      await act(async () => entry(root, "對話 1").click());
+      await act(async () => h.last().receive(request("conv-2")));
+      await sendApprove(h, root);
+      await act(async () => {
+        h.last().end(4000);
+        await h.advance(0);
+      });
+      await act(async () => h.last().ready());
+      return opened;
+    }
+
+    test("resent, then already_decided: deny stays off, approve can go again", async () => {
+      const { h, root, unmount } = await lostApprove();
+      expect(pick(root, "拒絕")?.disabled).toBe(true);
+      const again = await sendApprove(h, root);
+      expect(again?.p).toMatchObject({ decision: "approved" });
+      await act(async () =>
+        h.last().receive(server("nack", { reason: "already_decided" }, { re: again?.id })),
+      );
+      expect(pick(root, "拒絕")?.disabled).toBe(true);
+      expect(pick(root, APPROVE)?.disabled).toBe(false);
+      expect(pinnedCard(root)?.textContent).toContain(
+        "本機端已收到先前的決定，結果以本機為準；請重新整理確認",
+      );
+      unmount();
+    });
+
+    test("resent, then the same request again before the ack: deny stays off", async () => {
+      const { h, root, unmount } = await lostApprove();
+      await sendApprove(h, root);
+      await act(async () => h.last().receive(request("conv-2")));
+      expect(pick(root, "拒絕")?.disabled).toBe(true);
+      expect(pick(root, APPROVE)?.disabled).toBe(false);
+      expect(pinnedCard(root)?.textContent).toContain("你剛才選的是「核准」");
+      unmount();
+    });
+
+    test("a nack saying it was not taken (hash_mismatch) frees both choices", async () => {
+      const { h, root, unmount } = await lostApprove();
+      const again = await sendApprove(h, root);
+      await act(async () =>
+        h.last().receive(server("nack", { reason: "hash_mismatch" }, { re: again?.id })),
+      );
+      expect(pick(root, "拒絕")?.disabled).toBe(false);
+      expect(pick(root, APPROVE)?.disabled).toBe(false);
+      expect(pinnedCard(root)?.textContent).not.toContain("你剛才選的是");
+      unmount();
+    });
+  });
+
   test("offline: the card's buttons are off and say why", async () => {
     const { h, root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());

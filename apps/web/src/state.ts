@@ -25,9 +25,12 @@ export interface Card {
   readonly error?: string;
   /** Which decision this was among those this page saw, 1 first: the newest ones are kept. */
   readonly decidedOrder?: number;
-  /** What this page sent, so a resend after a drop can only be the same decision. */
+  /**
+   * What this page sent first. Kept until the result, since a send whose answer never came may
+   * have been taken: only this one may go again. Only a nack saying it was not taken clears it.
+   */
   readonly choice?: "approved" | "denied";
-  /** Sent, then the connection dropped before an ack: only `choice` may go again. */
+  /** A send's answer never came (the connection dropped); kept until the result. */
   readonly lost?: boolean;
   /** The page's clock when the ack came: a result long in coming is said to be missing. */
   readonly ackedAt?: number;
@@ -98,6 +101,13 @@ export const initial: State = {
 const NOTICES = 5;
 
 const LOST = "連線曾中斷，決定可能沒有送達；可以再按一次";
+
+/**
+ * The nacks that say no send of this card was taken. hash_mismatch: the card's hash never
+ * changes, so an earlier send was refused too. Every other one speaks of this send only, and an
+ * earlier one whose answer was lost may have been taken.
+ */
+const NOT_TAKEN: ReadonlySet<NackReason> = new Set(["hash_mismatch"]);
 
 export const NACK_TEXT: Record<NackReason, string> = {
   busy: "本機端正在跑另一個回合",
@@ -259,9 +269,13 @@ function message(s: State, m: ServerMessage, at: number): State {
       }
       const updated: Card =
         m.kind === "ack"
-          ? { ...withoutKeys(card, "deciding", "error", "lost"), acked: true, ackedAt: at }
+          ? { ...withoutKeys(card, "deciding", "error"), acked: true, ackedAt: at }
           : {
-              ...withoutKeys(card, "deciding"),
+              ...withoutKeys(
+                card,
+                "deciding",
+                ...(NOT_TAKEN.has(m.p.reason) ? (["choice"] as const) : []),
+              ),
               error:
                 m.p.reason === "already_decided"
                   ? "本機端已收到先前的決定，結果以本機為準；請重新整理確認"
@@ -344,9 +358,9 @@ export function reduce(s: State, e: Event): State {
         cards: s.cards.map((c) =>
           c.approval.approvalId === e.approvalId
             ? {
-                ...withoutKeys(c, "error", "lost"),
+                ...withoutKeys(c, "error"),
                 deciding: e.id,
-                ...(e.choice === undefined ? {} : { choice: e.choice }),
+                ...(c.choice === undefined && e.choice !== undefined ? { choice: e.choice } : {}),
               }
             : c,
         ),

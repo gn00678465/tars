@@ -97,8 +97,9 @@ export function ApprovalCard(props: {
   const waiting = resolved === undefined && props.card.acked === true;
   const off =
     resolved !== undefined || deciding !== undefined || waiting || props.blocked !== undefined;
-  // After a drop the first decision may have arrived: only that one may be sent again.
-  const only = props.card.lost === true ? props.card.choice : undefined;
+  // A decision once sent may have been taken until the result says otherwise: only it may go
+  // again, never the other one.
+  const only = resolved === undefined ? props.card.choice : undefined;
   const missing =
     waiting &&
     props.card.ackedAt !== undefined &&
@@ -238,10 +239,11 @@ export function ApprovalCard(props: {
           {props.blocked}
         </p>
       )}
-      {only === undefined ? null : (
+      {only === undefined || off ? null : (
         <p className="composer-disabled-reason" role="status">
-          你剛才選的是「{only === "approved" ? "核准" : "拒絕"}
-          」，連線中斷後沒有收到結果；只能重送同一個決定，或重新整理頁面確認
+          你剛才選的是「{only === "approved" ? "核准" : "拒絕"}」，
+          {props.card.lost === true ? "連線中斷後沒有收到結果" : "還沒有收到結果"}
+          ；只能重送同一個決定，或重新整理頁面確認
         </p>
       )}
       {missing ? (
