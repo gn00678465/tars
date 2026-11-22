@@ -4,8 +4,20 @@
 }
 
 .approval-card dl,
-.approval-card dd {
+.approval-card dd,
+.sheet-panel dl,
+.sheet-panel dd {
   margin: 0;
+}
+
+/* The summary's sections are Markdown: its paragraphs and numbered lists sit as its lists do. */
+.compaction-body p,
+.compaction-body ol {
+  margin: 0;
+}
+
+.compaction-body ol {
+  padding-left: 18px;
 }
 
 .thread-scroll:focus {

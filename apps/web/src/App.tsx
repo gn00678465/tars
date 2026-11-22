@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard, announceText } from "./components/ApprovalCard.tsx";
 import { Composer } from "./components/Composer.tsx";
-import { ContinueHints } from "./components/ContinueHints.tsx";
+import { ContextHint, ContinueHints } from "./components/ContinueHints.tsx";
+import { ContextSheet } from "./components/ContextSheet.tsx";
+import { COMPACT_FOCUS_CHARS } from "@tars/protocol";
 import { ContinueBanner, ModelSheet, type ModelRef } from "./components/ModelSheet.tsx";
 import { ConversationList } from "./components/ConversationList.tsx";
 import { Icon } from "./components/Icon.tsx";
@@ -27,7 +29,7 @@ import { WikiSideList, WikiTabs } from "./components/wiki/WikiSidebar.tsx";
 import { WikiWorkspace } from "./components/wiki/WikiWorkspace.tsx";
 import type { Builtin } from "./components/slash.ts";
 import type { Socket } from "./socket.ts";
-import { composerBlocked, initial, localNow, reduce, sendBusy } from "./state.ts";
+import { composerBlocked, initial, localNow, reduce, runBusy, sendBusy } from "./state.ts";
 import { useWikiRequests } from "./wiki/requests.ts";
 import type { WikiEvent } from "./wiki/state.ts";
 
@@ -86,6 +88,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState(false);
+  /** The context sheet, with what to keep already typed after /compact when it was too long. */
+  const [contextSheet, setContextSheet] = useState<{ focus: string } | undefined>(undefined);
   const live = state.connection === "open";
   useEffect(() => {
     if (!live) return;
@@ -176,6 +180,14 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     socket.send("conv.open", {}, c);
     setOpened((n) => n + 1);
   };
+  // Only a local end that sent conv.context takes conv.compact.
+  const canCompact = state.context !== undefined && state.conv !== undefined;
+  const compactBlocked = composerBlocked(state) ?? runBusy(state);
+  const compactNow = (focus: string | undefined) => {
+    setContextSheet(undefined);
+    const id = socket.send("conv.compact", focus === undefined ? {} : { focus }, state.conv);
+    dispatch({ type: "compact_sent", ...(id === undefined ? {} : { id }) });
+  };
   const decide = (card: (typeof state.cards)[number], decision: "approved" | "denied") => {
     const id = socket.send("approval.decide", {
       approvalId: card.approval.approvalId,
@@ -189,7 +201,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     );
   };
   const oldest = state.items[0]?.seq;
-  const running = state.turn?.state === "started" && state.conv !== undefined;
+  // A compaction is stopped as a turn is, by turn.abort.
+  const running =
+    (state.turn?.state === "started" || state.compacting === true) && state.conv !== undefined;
   const pending = state.cards.filter((c) => c.resolved === undefined);
   // In its own conversation a card is part of the thread, waiting or decided (ui_spec 5.4);
   // one waiting from another conversation is pinned above the composer, saying where it is from.
@@ -301,7 +315,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // As the prototype: model and effort are not changed while a turn runs (it would apply to
   // nothing) or while the local end cannot be reached.
   const locked =
-    running || sendBusy(state) !== undefined ? "回合結束後才能改" : composerBlocked(state);
+    running || runBusy(state) !== undefined ? "回合結束後才能改" : composerBlocked(state);
   // Only a local end that lists levels takes turn.submit's effort.
   const effort: EffortControl | undefined =
     models?.some((m) => m.effortLevels !== undefined) === true
@@ -385,6 +399,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             menuHidden={!collapsed && !compact}
             onMenu={() => (compact ? setDrawer(true) : setCollapsed(false))}
             onSheet={() => setSheet(true)}
+            onContext={() => setContextSheet({ focus: "" })}
           />
           {targetRef === undefined ? null : (
             <div className="conv-header-bar">
@@ -473,6 +488,12 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                       models={models}
                       status={state.status}
                       onContinue={() => setPicking("continue")}
+                    />
+                  )}
+                  {state.context === undefined || state.conv === undefined ? null : (
+                    <ContextHint
+                      context={state.context}
+                      onCompact={() => setContextSheet({ focus: "" })}
                     />
                   )}
                   <Thread
@@ -573,6 +594,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                 // answered for its knowledge base.
                 builtins={
                   [
+                    ...(canCompact ? (["compact"] as const) : []),
                     ...(wiki.available ? (["wiki"] as const) : []),
                     ...(models === undefined ? [] : (["model"] as const)),
                     ...(["new", "cost", "help"] as const),
@@ -580,6 +602,12 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                 }
                 onCommand={(name, arg) => {
                   if (name === "wiki") return toWiki({ type: "slash", query: arg });
+                  // Straight away, as the terminal's; the sheet says why when it cannot go, or
+                  // holds what to keep when it is too long to send.
+                  if (name === "compact")
+                    return arg.length > COMPACT_FOCUS_CHARS || compactBlocked !== undefined
+                      ? setContextSheet({ focus: arg })
+                      : compactNow(arg === "" ? undefined : arg);
                   if (name === "new") return open(undefined);
                   if (name === "cost") return setSheet(true);
                   // As the model control: not while a turn runs or the local end is away.
@@ -631,7 +659,32 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             </div>
           </footer>
         </div>
-        {sheet ? <StatusSheet state={state} onClose={() => setSheet(false)} /> : null}
+        {sheet ? (
+          <StatusSheet
+            state={state}
+            onClose={() => setSheet(false)}
+            {...(canCompact
+              ? {
+                  onCompact: () => {
+                    setSheet(false);
+                    setContextSheet({ focus: "" });
+                  },
+                }
+              : {})}
+          />
+        ) : null}
+        {contextSheet === undefined ||
+        state.context === undefined ||
+        state.conv === undefined ? null : (
+          <ContextSheet
+            context={state.context}
+            conv={state.conv}
+            focus={contextSheet.focus}
+            blocked={compactBlocked}
+            onCompact={compactNow}
+            onClose={() => setContextSheet(undefined)}
+          />
+        )}
         {wikiOn && wiki.source !== undefined ? (
           <SourceOverlay
             source={wiki.source}

@@ -302,3 +302,167 @@ test("C1: a failed turn's figures come from turn.data when no error item carries
   );
   expect(root.querySelector(".task-notice-desc")?.textContent).toContain("這個回合累計 1.02 USD");
 });
+
+const SUMMARY = [
+  "## Goal",
+  "- 整理巡檢",
+  "## Progress",
+  "### Done",
+  "- [x] SMART 檢查",
+  "### Blocked",
+  "- (none)",
+  "## Scripts, Outputs & Facts",
+  "- 已執行 `disk-health-report`",
+].join("\n");
+
+const compacted = (): State => {
+  const u = (seq: number, turn: string) =>
+    ({ seq, turn, kind: "user", text: `u${seq}`, truncated: false }) as WireItem;
+  const a = (seq: number, turn: string) =>
+    ({
+      seq,
+      turn,
+      kind: "assistant",
+      text: `a${seq}`,
+      truncated: false,
+      state: "complete",
+    }) as WireItem;
+  const c = (seq: number, extra: Record<string, unknown>) =>
+    ({
+      seq,
+      turn: "tc",
+      kind: "compaction",
+      text: SUMMARY,
+      truncated: false,
+      ...extra,
+    }) as WireItem;
+  return {
+    ...initial,
+    connection: "open",
+    conv: "conv-1",
+    items: [
+      u(1, "t1"),
+      a(2, "t1"),
+      u(3, "t2"),
+      a(4, "t2"),
+      c(5, { at: 0, trigger: "auto", count: 8, firstKeptSeq: 3 }),
+      u(6, "t3"),
+      a(7, "t3"),
+      c(8, {
+        trigger: "manual",
+        count: 14,
+        beforeTokens: 152_400,
+        keptTokens: 20_000,
+        costUsd: 0.014,
+        firstKeptSeq: 6,
+      }),
+    ],
+  };
+};
+
+test("E4: the dividers sit where the latest summary ends; what it summarized is faded", async () => {
+  const { root } = await render(
+    <Thread state={compacted()} onOlder={() => undefined} after={() => null} />,
+  );
+  const order = [
+    ...root.querySelectorAll(".compacted-notice-line, .msg-group, .compaction-divider"),
+  ].map((e) =>
+    e.classList.contains("compaction-divider")
+      ? `divider:${e.querySelector(".compaction-trigger-left")?.textContent}`
+      : e.classList.contains("msg-group")
+        ? `${e.className}:${e.querySelector(".msg-user")?.textContent}`
+        : "line",
+  );
+  expect(order).toEqual([
+    "line",
+    "msg-group compacted-old:u1",
+    "msg-group compacted-old:u3",
+    `divider:${new Date(0).getHours().toString().padStart(2, "0")}:00 自動壓縮（早期 8 則）`,
+    "divider:已壓縮早期 14 則訊息（原 152,400 tokens · 保留近期 20,000 tokens）手動",
+    "msg-group:u6",
+  ]);
+  expect(root.querySelectorAll(".compaction-divider .sg-tag")[0]?.textContent).toBe(
+    "已併入後面的摘要",
+  );
+});
+
+test("E4: the summary opens to its sections, headings in Chinese, figures and cost above", async () => {
+  const { root } = await render(
+    <Thread state={compacted()} onOlder={() => undefined} after={() => null} />,
+  );
+  const open = root.querySelector("button.compaction-trigger") as HTMLButtonElement;
+  expect(open.textContent).toContain("展開摘要");
+  open.click();
+  await new Promise((r) => setTimeout(r, 0));
+  const body = root.querySelector(".compaction-body") as HTMLElement;
+  expect(body.querySelector(".compaction-meta")?.textContent).toBe(
+    "本次摘要花費 0.014 USD（估）· 原始 14 則紀錄仍完整保存於本機資料庫。",
+  );
+  expect([...body.querySelectorAll("h2")].map((h) => h.textContent)).toEqual([
+    "目標",
+    "進度",
+    "腳本、輸出與事實",
+  ]);
+  expect(body.textContent).toContain("已完成");
+  expect(body.textContent).not.toContain("[x]");
+  expect(body.textContent).toContain("（無）");
+  expect(body.querySelector("code")?.textContent).toBe("disk-health-report");
+});
+
+test("E4: an older local end's compaction, without its place, is drawn where it came", async () => {
+  const s = compacted();
+  const items = s.items.map((i) =>
+    i.kind === "compaction"
+      ? ({ seq: i.seq, turn: i.turn, kind: i.kind, text: "摘要", truncated: false } as WireItem)
+      : i,
+  );
+  const { root } = await render(
+    <Thread state={{ ...s, items }} onOlder={() => undefined} after={() => null} />,
+  );
+  expect(root.querySelector(".compacted-old")).toBeNull();
+  expect(root.querySelectorAll(".compaction-divider")).toHaveLength(2);
+  expect(root.querySelector(".compaction-trigger-left")?.textContent).toBe(
+    "這之前的內容已壓縮成摘要",
+  );
+});
+
+test("E3: 壓縮中 while it runs; its end, when not a summary, is a card saying nothing changed", async () => {
+  const line = await render(
+    <Thread
+      state={{ ...compacted(), compacting: true }}
+      onOlder={() => undefined}
+      after={() => null}
+    />,
+  );
+  expect(line.root.querySelector(".turn-status")?.textContent).toBe("壓縮中…");
+  const ends: [NonNullable<State["compactEnd"]>, string, string][] = [
+    [
+      { state: "skipped" },
+      "沒有可以壓縮的部分",
+      "較早的內容不夠多，只有近期原文。對話內容沒有改變。",
+    ],
+    [{ state: "aborted" }, "壓縮已取消", "對話內容沒有改變。可以再壓縮一次。"],
+    [
+      { state: "failed", reason: "compact_bad_summary" },
+      "壓縮失敗：摘要的格式不對",
+      "對話內容沒有改變。可以再壓縮一次。",
+    ],
+    [
+      { state: "failed", nack: "busy" },
+      "壓縮失敗：本機端正在跑另一個回合",
+      "對話內容沒有改變。可以再壓縮一次。",
+    ],
+  ];
+  for (const [end, title, desc] of ends) {
+    document.body.innerHTML = "";
+    const { root } = await render(
+      <Thread
+        state={{ ...compacted(), compactEnd: end }}
+        onOlder={() => undefined}
+        after={() => null}
+      />,
+    );
+    expect(root.querySelector(".task-notice-title")?.textContent).toBe(title);
+    expect(root.querySelector(".task-notice-desc")?.textContent).toBe(desc);
+  }
+});

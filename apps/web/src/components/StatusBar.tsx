@@ -1,6 +1,7 @@
 import type { WireStatus } from "@tars/protocol";
-import { type State, versionText } from "../state.ts";
+import { contextPct, type State, versionText } from "../state.ts";
 import { useRef } from "react";
+import { ContextRing } from "./ContextSheet.tsx";
 import { Icon } from "./Icon.tsx";
 import { useModal } from "./modal.ts";
 import { timeText } from "./time.ts";
@@ -120,6 +121,8 @@ export function TopBar(props: {
   onMenu: () => void;
   menuHidden: boolean;
   onSheet: () => void;
+  /** Opens the context sheet; absent when the page has no context to show. */
+  onContext?: () => void;
 }) {
   const c = connection(props.state);
   const spend = spendButton(props.state.status);
@@ -161,6 +164,9 @@ export function TopBar(props: {
           {spend.tone === undefined ? null : <span className={`status-dot ${spend.tone}`} />}
           <span>{spend.text}</span>
         </button>
+        {props.state.context === undefined || props.onContext === undefined ? null : (
+          <ContextRing context={props.state.context} onOpen={props.onContext} />
+        )}
         <button
           className="sg-btn mobile-only"
           type="button"
@@ -178,10 +184,15 @@ export function TopBar(props: {
 }
 
 /** The status sheet: a dialog on desktop, a bottom sheet on a phone (the CSS decides). */
-export function StatusSheet(props: { state: State; onClose: () => void }) {
+export function StatusSheet(props: {
+  state: State;
+  onClose: () => void;
+  /** Opens the context sheet (13-12); absent when the page has no context to show. */
+  onCompact?: () => void;
+}) {
   const panel = useRef<HTMLElement>(null);
   useModal(panel, true, props.onClose);
-  const { status } = props.state;
+  const { status, context } = props.state;
   const c = connection(props.state);
   return (
     <div
@@ -247,6 +258,20 @@ export function StatusSheet(props: { state: State; onClose: () => void }) {
               })
             )}
           </div>
+          {context === undefined ? null : (
+            <div className="provider-group">
+              <div className="provider-group-head">
+                <span>目前對話</span>
+              </div>
+              <div className="model-option">
+                <span>上下文用量</span>
+                <span className="mono">
+                  {contextPct(context)}%
+                  {context.cacheHitPct === undefined ? "" : `（快取 ${context.cacheHitPct}%）`}
+                </span>
+              </div>
+            </div>
+          )}
           {status === undefined ? null : (
             <div className="provider-group">
               <div className="provider-group-head">
@@ -284,6 +309,13 @@ export function StatusSheet(props: { state: State; onClose: () => void }) {
             </div>
           )}
         </div>
+        {context === undefined || props.onCompact === undefined ? null : (
+          <div className="sheet-foot">
+            <button className="sg-btn" type="button" onClick={props.onCompact}>
+              開啟壓縮
+            </button>
+          </div>
+        )}
       </section>
     </div>
   );

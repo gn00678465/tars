@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { TEXT_BYTES } from "@tars/protocol";
-import { type Builtin, menuFor, type Option, type Skill, slashOf } from "./slash.ts";
+import { type Builtin, menuFor, type Option, type Skill, slashOf, TAKES_ARG } from "./slash.ts";
 
 const n = (v: number) => v.toLocaleString("en-US");
 export const tooLong = (bytes: number) =>
@@ -22,7 +22,7 @@ export function Composer(props: {
   onAbort: () => void;
   /** A built-in to run; `arg` is what follows its name (/wiki's keywords). */
   onCommand: (name: Exclude<Builtin, "help">, arg: string) => void;
-  /** The built-ins this page can run now; all but /wiki when absent. */
+  /** The built-ins this page can run now; all but /wiki and /compact when absent. */
   builtins?: readonly Builtin[];
   /** Beside the send button: the model and effort control; absent from an older local end. */
   setup?: ReactNode;
@@ -71,7 +71,7 @@ export function Composer(props: {
   };
   const apply = (o: Option) => {
     if (!o.enabled) return;
-    if (o.builtin && o.name !== "wiki") run(o.name as Builtin);
+    if (o.builtin && !TAKES_ARG.has(o.name as Builtin)) run(o.name as Builtin);
     else change(`/${o.name} `);
   };
   const send = () => {

@@ -6,6 +6,7 @@ import {
   initial,
   localNow,
   reduce,
+  runBusy,
   sendBusy,
   type Event,
   type State,
@@ -605,4 +606,103 @@ test("the model list belongs to the local end that sent it: a drop forgets it", 
   expect(listed.models).toHaveLength(1);
   // The page may come back to an older local end, which refuses a turn.submit naming a model.
   expect(run([{ type: "connection", connection: "offline" }], listed).models).toBeUndefined();
+});
+
+describe("state: compaction (E)", () => {
+  const ctx = {
+    contextUsed: 1_000,
+    contextLimit: 10_000,
+    warnRatio: 0.6,
+    compactRatio: 0.75,
+    stopRatio: 0.85,
+    autoCompact: true,
+  };
+
+  test("the owner's: sent, acked, started, then each end; a nack is a failure that ran nothing", () => {
+    const sent = run([...open, { type: "compact_sent", id: "c1" }]);
+    expect(sent.compactReq).toBe("c1");
+    expect(sendBusy(sent)).toBe("壓縮中");
+    const started = run(
+      [server("ack", {}, { re: "c1" }), server("compact", { state: "started" }, { conv: CONV })],
+      sent,
+    );
+    expect([started.compactReq, started.compacting]).toEqual([undefined, true]);
+    const failed = run(
+      [
+        server(
+          "compact",
+          { state: "failed", reason: "budget_stopped", data: { provider: "anthropic" } },
+          { conv: CONV },
+        ),
+      ],
+      started,
+    );
+    expect(failed.compacting).toBeUndefined();
+    expect(failed.compactEnd).toEqual({
+      state: "failed",
+      reason: "budget_stopped",
+      data: { provider: "anthropic" },
+    });
+    const done = run([server("compact", { state: "completed" }, { conv: CONV })], started);
+    expect([done.compacting, done.compactEnd]).toEqual([undefined, undefined]);
+    const busy = run([server("nack", { reason: "busy" }, { re: "c1" })], sent);
+    expect([busy.compactReq, busy.compactEnd]).toEqual([
+      undefined,
+      { state: "failed", nack: "busy" },
+    ]);
+    expect(run([{ type: "compact_sent" }], run(open)).compactEnd).toEqual({
+      state: "failed",
+      nack: "offline",
+    });
+    // Another conversation's says nothing here.
+    expect(
+      run([server("compact", { state: "started" }, { conv: "conv-2" })], run(open)).compacting,
+    ).toBeUndefined();
+  });
+
+  test("a turn's own: compact_start, then its summary item, a failure notice or the turn's start", () => {
+    const start = run([...open, server("notice", { code: "compact_start" }, { conv: CONV })]);
+    expect(start.compacting).toBe(true);
+    const summary = run(
+      [server("item", { item: item(9, "compaction", { text: "## Goal" }) }, { conv: CONV })],
+      start,
+    );
+    expect(summary.compacting).toBeUndefined();
+    expect(
+      run([server("notice", { code: "compact_failed" }, { conv: CONV })], start).compacting,
+    ).toBeUndefined();
+    expect(
+      run([server("turn", { turn: TURN, state: "started" }, { conv: CONV })], start).compacting,
+    ).toBeUndefined();
+  });
+
+  test("a snapshot says whether one runs; opening another conversation forgets it all", () => {
+    const s = run([
+      ...open,
+      server(
+        "conv.snapshot",
+        { epoch: "e1", items: [], more: false, compacting: true },
+        { conv: CONV },
+      ),
+      server("conv.context", ctx, { conv: CONV }),
+    ]);
+    expect([s.compacting, s.context]).toEqual([true, ctx]);
+    expect(
+      run([server("conv.snapshot", { epoch: "e1", items: [], more: false }, { conv: CONV })], s)
+        .compacting,
+    ).toBeUndefined();
+    const away = run([{ type: "open_conv", conv: "conv-2" }], s);
+    expect([away.compacting, away.context]).toEqual([undefined, undefined]);
+  });
+
+  test("E5: past the stop line, on the ratio itself, the send waits; the model control does not", () => {
+    const at = (used: number) =>
+      run([...open, server("conv.context", { ...ctx, contextUsed: used }, { conv: CONV })]);
+    // 84.96% rounds to 85% but is under the line.
+    expect(sendBusy(at(8_496))).toBeUndefined();
+    expect(sendBusy(at(8_500))).toBe(
+      "這個對話太長（85%），超過硬停門檻。請先執行 /compact，或開新對話接續",
+    );
+    expect(runBusy(at(8_500))).toBeUndefined();
+  });
 });

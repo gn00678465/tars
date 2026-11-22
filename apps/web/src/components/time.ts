@@ -27,6 +27,12 @@ export function leftText(ms: number): string {
   return `剩餘 ${two(Math.floor(s / 60))}:${two(s % 60)}`;
 }
 
+/** Hour and minute on this device's clock, as the prototype's tags write a time (13:14). */
+export const clock = (ms: number) => {
+  const t = new Date(ms);
+  return `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+};
+
 /** The last 8 characters, as tars serve status and the notification show an id. */
 export const shortId = (id: string) => id.slice(-8);
 

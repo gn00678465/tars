@@ -1,3 +1,5 @@
+import { clock } from "./components/time.ts";
+
 /** The local end's figures behind a code (an error's or a turn's data). */
 export type Data = Readonly<Record<string, string | number>>;
 
@@ -21,11 +23,6 @@ const usd = (v: string | number | undefined) => Number(v).toFixed(2);
 const has = (d: Data, ...keys: string[]) => keys.every((k) => d[k] !== undefined);
 const period = (d: Data) =>
   d.period === "month" ? "本月" : d.period === "cumulative" ? "累計" : "本期";
-const hhmm = (ms: number) => {
-  const t = new Date(ms);
-  return `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
-};
-
 export const REASONS: Record<string, Reason> = {
   aborted: { text: "已取消" },
   config_invalid: { text: "本機的 config.toml 有問題，請在終端檢查" },
@@ -84,7 +81,7 @@ export const REASONS: Record<string, Reason> = {
     // The local end counts a day in UTC (ledger.ts spentToday): resetAt is the next UTC midnight.
     desc: (p, d) =>
       has(d, "todayUsd", "resetAt")
-        ? `${p} 今日已用 ${usd(d.todayUsd)} USD，這個回合已自動結束。UTC 00:00（這台裝置的 ${hhmm(Number(d.resetAt))}）重算，或在本機的設定檔調整上限。`
+        ? `${p} 今日已用 ${usd(d.todayUsd)} USD，這個回合已自動結束。UTC 00:00（這台裝置的 ${clock(Number(d.resetAt))}）重算，或在本機的設定檔調整上限。`
         : "這個回合已自動結束。要提高上限，請在本機的設定檔調整。",
     tone: "warn",
   },

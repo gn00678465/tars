@@ -5,10 +5,12 @@ import { Icon, Monolith } from "./Icon.tsx";
 import { ErrorCard } from "./ErrorCard.tsx";
 import { NoticeCard } from "./Notices.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { CompactEndCard } from "./CompactEndCard.tsx";
 import { effortName } from "./RunSetup.tsx";
-import { shortId } from "./time.ts";
+import { clock, shortId } from "./time.ts";
 
 const cut = (truncated: boolean) => (truncated ? "（已截斷）" : "");
+const n = (v: number) => v.toLocaleString("en-US");
 
 const ASSISTANT_STATE: Record<string, string> = {
   truncated: "（輸出被截斷）",
@@ -207,23 +209,121 @@ function One({
         />
       );
     case "compaction":
-      return (
-        <div key={item.seq} className="compaction-divider">
-          <details>
-            <summary className="compaction-trigger">這之前的內容已壓縮成摘要</summary>
-            <div className="compaction-body">
-              <p>
-                {item.text}
-                {cut(item.truncated)}
-              </p>
-            </div>
-          </details>
-        </div>
-      );
+      // One that says where its summary ends is drawn there, by Thread; an older local end's
+      // where it came.
+      return item.firstKeptSeq === undefined ? (
+        <Compaction key={item.seq} item={item} merged={false} />
+      ) : null;
   }
 }
 
-const n = (v: number) => v.toLocaleString("en-US");
+type CompactionItem = Extract<WireItem, { kind: "compaction" }>;
+
+/** The summary's headings (src/features/agent/compaction.ts SUMMARY_HEADINGS) in Chinese. */
+const HEADINGS: Record<string, string> = {
+  Goal: "目標",
+  "Constraints & Preferences": "限制與偏好",
+  Progress: "進度",
+  "Key Decisions": "關鍵決定",
+  "Scripts, Outputs & Facts": "腳本、輸出與事實",
+  "Next Steps": "下一步",
+  "Critical Context": "關鍵背景",
+};
+const SUBHEADINGS: Record<string, string> = {
+  Done: "已完成",
+  "In Progress": "進行中",
+  Blocked: "受阻",
+};
+
+/**
+ * The summary as its sections, each heading in Chinese and its body as Markdown (only ever
+ * text). A summary without the headings (cut short) is shown whole as it is.
+ */
+function Summary({ text }: { text: string }) {
+  const parts = text.split(/^## +(.+?)\s*$/m);
+  if (parts.length < 3) return <Markdown text={text} />;
+  const sections: ReactNode[] = [];
+  if (parts[0]?.trim() !== "") sections.push(<Markdown key="pre" text={parts[0] as string} />);
+  for (let i = 1; i < parts.length; i += 2) {
+    const head = parts[i] as string;
+    // Progress's subsections as bold labels and its checkboxes as plain items, as the prototype;
+    // the prompt's "(none)" in the page's words.
+    const body = (parts[i + 1] ?? "")
+      .replace(/^### +(.+?)\s*$/gm, (_, sub: string) => `**${SUBHEADINGS[sub] ?? sub}**`)
+      .replace(/^(\s*[-*+]\s+)\[[ xX]\]\s+/gm, "$1")
+      .replace(/^(\s*[-*+]\s+)\(none\)\s*$/gm, "$1（無）");
+    sections.push(
+      <Fragment key={i}>
+        <h2>{HEADINGS[head] ?? head}</h2>
+        <Markdown text={body} />
+      </Fragment>,
+    );
+  }
+  return sections;
+}
+
+const by = (c: CompactionItem) =>
+  c.trigger === undefined ? "" : c.trigger === "auto" ? "自動" : "手動";
+
+/**
+ * A compaction as the prototype's divider (13-07 to 13-11). The latest opens to its summary; an
+ * earlier one was taken into the latest's summary and says so.
+ */
+function Compaction({ item, merged }: { item: CompactionItem; merged: boolean }) {
+  const [open, setOpen] = useState(false);
+  const when = item.at === undefined ? "" : `${clock(item.at)} `;
+  if (merged)
+    return (
+      <div className="compaction-divider">
+        <div className="compaction-trigger">
+          <span className="compaction-trigger-left">
+            <Icon name="layers" />
+            <span>
+              {when}
+              {by(item)}壓縮{item.count === undefined ? "" : `（早期 ${n(item.count)} 則）`}
+            </span>
+          </span>
+          <span className="sg-tag">已併入後面的摘要</span>
+        </div>
+      </div>
+    );
+  const figures =
+    item.count !== undefined && item.beforeTokens !== undefined && item.keptTokens !== undefined
+      ? `已壓縮早期 ${n(item.count)} 則訊息（原 ${n(item.beforeTokens)} tokens · 保留近期 ${n(item.keptTokens)} tokens）`
+      : "這之前的內容已壓縮成摘要";
+  const tag = `${when}${by(item)}`.trim();
+  return (
+    <div className="compaction-divider">
+      <button
+        className="compaction-trigger"
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <span className="compaction-trigger-left">
+          <Icon name="layers" />
+          <span>{figures}</span>
+          {tag === "" ? null : <span className="sg-tag">{tag}</span>}
+        </span>
+        <span className="sg-tag">{open ? "收合摘要" : "展開摘要"}</span>
+      </button>
+      {open ? (
+        <div className="compaction-body">
+          <div className="compaction-meta">
+            {item.costUsd === undefined
+              ? ""
+              : `本次摘要花費 ${item.costUsd.toFixed(3)} USD（估）· `}
+            {item.count === undefined
+              ? "原始紀錄仍完整保存於本機資料庫。"
+              : `原始 ${n(item.count)} 則紀錄仍完整保存於本機資料庫。`}
+          </div>
+          <Summary text={item.text} />
+          {item.truncated ? <p>{cut(true)}</p> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * The prototype's usage line (A1). inputTokens counts cache reads too: they are taken out of
@@ -258,11 +358,24 @@ function TurnEnd({
   turn,
   items,
   provider,
+  compacting,
 }: {
   turn: State["turn"];
   items: readonly WireItem[];
   provider: string | undefined;
+  compacting: boolean;
 }) {
+  if (compacting)
+    return (
+      <div className="turn-status" role="status">
+        <span className="status-glyph" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+        <span>壓縮中…</span>
+      </div>
+    );
   if (turn === undefined) return null;
   if (turn.state === "started")
     return (
@@ -288,6 +401,27 @@ function TurnEnd({
       {...(turn.data === undefined ? {} : { data: turn.data })}
     />
   );
+}
+
+/**
+ * Where the compactions are drawn: before the group the latest one's first kept item is in, so
+ * what it summarized is above it (all.length: after every group). Earlier ones were taken into
+ * its summary and are drawn with it, as the prototype (13-09). The groups above are what the
+ * model no longer sees, drawn faded (13-10).
+ */
+function placed(all: ReturnType<typeof groups>, items: readonly WireItem[]) {
+  const compactions = items.filter(
+    (i): i is CompactionItem => i.kind === "compaction" && i.firstKeptSeq !== undefined,
+  );
+  const latest = compactions.at(-1);
+  if (latest === undefined) return { compactions, latest, faded: 0 };
+  const last = (g: (typeof all)[number]) =>
+    Math.max(
+      g.user?.seq ?? -Infinity,
+      ...g.rest.filter((i) => i.kind !== "compaction").map((i) => i.seq),
+    );
+  const found = all.findIndex((g) => last(g) >= (latest.firstKeptSeq as number));
+  return { compactions, latest, faded: found === -1 ? all.length : found };
 }
 
 /** Each message the owner sent starts a group; what the turn wrote follows it. */
@@ -342,6 +476,10 @@ export function Thread(props: {
       </div>
     );
   const all = groups(items);
+  const { compactions, latest, faded } = placed(all, items);
+  const dividers = compactions.map((c) => (
+    <Compaction key={c.seq} item={c} merged={c !== latest} />
+  ));
   const here = props.state.convs.find((c) => c.id === conv);
   const provider = here?.provider;
   return (
@@ -354,30 +492,45 @@ export function Thread(props: {
         </div>
       ) : null}
       {all.map((g, i) => (
-        <div className="msg-group" key={g.user?.seq ?? `g${i}`}>
-          {g.user === undefined ? null : (
-            <div className="msg-user">
-              {g.user.text}
-              {cut(g.user.truncated)}
-            </div>
-          )}
-          <div className="msg-assistant">
-            {g.user === undefined ? null : props.after(g.user.seq)}
-            <Rest items={g.rest} after={props.after} provider={provider} origin={props.origin} />
-            {i === all.length - 1 && running !== undefined ? (
-              <div className="msg-assistant-text streaming">
-                <Markdown text={running.text} />
+        <Fragment key={g.user?.seq ?? `g${i}`}>
+          {i === 0 && faded > 0 ? (
+            <div className="compacted-notice-line">模型已看不到以下的原文，只看得到摘要</div>
+          ) : null}
+          {latest !== undefined && i === faded ? dividers : null}
+          <div className={i < faded ? "msg-group compacted-old" : "msg-group"}>
+            {g.user === undefined ? null : (
+              <div className="msg-user">
+                {g.user.text}
+                {cut(g.user.truncated)}
               </div>
-            ) : null}
+            )}
+            <div className="msg-assistant">
+              {g.user === undefined ? null : props.after(g.user.seq)}
+              <Rest items={g.rest} after={props.after} provider={provider} origin={props.origin} />
+              {i === all.length - 1 && running !== undefined ? (
+                <div className="msg-assistant-text streaming">
+                  <Markdown text={running.text} />
+                </div>
+              ) : null}
+            </div>
           </div>
-        </div>
+        </Fragment>
       ))}
+      {latest !== undefined && faded === all.length ? dividers : null}
       {all.length === 0 && running !== undefined ? (
         <div className="msg-assistant-text streaming">
           <Markdown text={running.text} />
         </div>
       ) : null}
-      <TurnEnd turn={turn} items={items} provider={provider} />
+      <TurnEnd
+        turn={turn}
+        items={items}
+        provider={provider}
+        compacting={props.state.compacting === true}
+      />
+      {props.state.compactEnd === undefined ? null : (
+        <CompactEndCard end={props.state.compactEnd} provider={provider} />
+      )}
       {notices.map((n, i) => (
         <NoticeCard
           key={i}

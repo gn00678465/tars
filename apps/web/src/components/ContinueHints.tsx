@@ -1,4 +1,5 @@
-import type { WireModel, WireStatus } from "@tars/protocol";
+import type { WireContext, WireModel, WireStatus } from "@tars/protocol";
+import { contextPct, overStop } from "../state.ts";
 import { reasonText } from "../reasons.ts";
 import { Icon } from "./Icon.tsx";
 import { periodName, providerName, providerSpend } from "./StatusBar.tsx";
@@ -74,4 +75,38 @@ export function ContinueHints(props: {
       </button>
     </div>
   ));
+}
+
+/**
+ * The conversation nears or passes the local end's stop line (9-04, 9-05): said before the next
+ * message, with the compaction that makes room. Past the stop line the send is off (sendBusy).
+ */
+export function ContextHint(props: { context: WireContext; onCompact: () => void }) {
+  const c = props.context;
+  if (c.contextUsed / c.contextLimit < c.warnRatio) return null;
+  const pct = contextPct(c);
+  const stop = Math.round(c.stopRatio * 100);
+  const over = overStop(c);
+  const title = over
+    ? `這個對話太長（${pct}%），請先壓縮或開新對話接續`
+    : `這個對話太長（${pct}%）`;
+  const desc = over
+    ? `超過 ${stop}% 硬停門檻時本機端不再接受新回合。`
+    : c.autoCompact
+      ? `到 ${Math.round(c.compactRatio * 100)}% 時，送出前會自動壓縮較早的部分；也可以先手動壓縮。`
+      : `自動壓縮沒有開啟。到 ${stop}% 硬停門檻時本機端不再接受新回合，請先壓縮或開新對話接續。`;
+  return (
+    <div className="task-notice warn">
+      <div className="task-notice-body">
+        <div className="task-notice-title">
+          <Icon name="alert" />
+          {title}
+        </div>
+        <div className="task-notice-desc">{desc}</div>
+      </div>
+      <button className="sg-btn" type="button" onClick={props.onCompact}>
+        開啟壓縮
+      </button>
+    </div>
+  );
 }

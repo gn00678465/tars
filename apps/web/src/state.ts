@@ -11,6 +11,7 @@ import type {
   Phase,
   ServerMessage,
   WireApproval,
+  WireContext,
   WireConv,
   WireItem,
   WireModel,
@@ -119,6 +120,28 @@ export interface State {
   readonly notices: readonly Notice[];
   readonly error?: string;
   readonly wiki: WikiState;
+  /**
+   * The open conversation's context, from conv.context. Only a local end that takes
+   * conv.compact sends it: the page offers compaction only once it came.
+   */
+  readonly context?: WireContext;
+  /**
+   * A compaction of the open conversation is under way: the owner's (compact started), the one
+   * a turn runs first (notice compact_start), or either one a snapshot says is running.
+   */
+  readonly compacting?: true;
+  /** This page's conv.compact, until its ack or nack. */
+  readonly compactReq?: string;
+  /** How the owner's last compaction here ended, when not with a summary; cleared by the next. */
+  readonly compactEnd?: CompactEnd;
+}
+
+export interface CompactEnd {
+  readonly state: "skipped" | "failed" | "aborted";
+  readonly reason?: string;
+  readonly data?: Readonly<Record<string, string | number>>;
+  /** The local end refused conv.compact itself (busy, not_found). */
+  readonly nack?: NackReason;
 }
 
 export type Event =
@@ -132,6 +155,8 @@ export type Event =
   | { readonly type: "message"; readonly m: ServerMessage; readonly at: number }
   | { readonly type: "open_conv"; readonly conv: string | undefined }
   | { readonly type: "submitted"; readonly requestId: string }
+  /** conv.compact went (its id), or could not be sent at all (no id). */
+  | { readonly type: "compact_sent"; readonly id?: string }
   | { readonly type: "pinged"; readonly id: string; readonly at: number }
   | {
       readonly type: "submit_result";
@@ -254,10 +279,23 @@ function message(s: State, m: ServerMessage, at: number): State {
         (s.turn.turn === undefined || s.turn.turn === m.p.turn)
         ? { ...s, turn: { ...s.turn, turn: m.p.turn, phase: m.p.phase } }
         : s;
-    // Shown from the batch 4 web commits on; until then the page ignores them.
-    case "compact":
+    case "compact": {
+      if (!here) return s;
+      if (m.p.state === "started") return { ...withoutKeys(s, "compactEnd"), compacting: true };
+      const ended = withoutKeys(s, "compacting", "compactReq", "compactEnd");
+      return m.p.state === "completed"
+        ? ended
+        : {
+            ...ended,
+            compactEnd: {
+              state: m.p.state,
+              ...(m.p.reason === undefined ? {} : { reason: m.p.reason }),
+              ...(m.p.data === undefined ? {} : { data: m.p.data }),
+            },
+          };
+    }
     case "conv.context":
-      return s;
+      return here ? { ...s, context: m.p } : s;
     case "relay.status": {
       const since = m.p.localSince;
       const changed = since !== undefined && s.localSince !== undefined && since !== s.localSince;
@@ -284,7 +322,10 @@ function message(s: State, m: ServerMessage, at: number): State {
       const older =
         first !== undefined && m.p.items.length > 0 && m.p.items.every((i) => i.seq < first);
       if (older) return { ...s, items: [...m.p.items, ...s.items], more: m.p.more };
-      const base = withoutKeys({ ...s, items: m.p.items, more: m.p.more }, "running", "load");
+      const base = {
+        ...withoutKeys({ ...s, items: m.p.items, more: m.p.more }, "running", "load", "compacting"),
+        ...(m.p.compacting === true ? { compacting: true as const } : {}),
+      };
       const r = m.p.running;
       if (r === undefined) return base;
       // A page opened mid-turn: the turn is under way, in the phase the snapshot says.
@@ -312,8 +353,9 @@ function message(s: State, m: ServerMessage, at: number): State {
       // Still ours at its end: its start, and so its items, were missed. Only a turn the
       // database has (named) is worth loading, and only in the conversation the page is on.
       const missed = ours && m.p.state !== "started" && m.p.turn !== undefined && (follow || here);
+      // A turn's own compaction runs before the turn starts: it is over by now.
       const next: State = {
-        ...(ours ? withoutKeys(s, "submitting") : s),
+        ...withoutKeys(ours ? withoutKeys(s, "submitting") : s, "compacting"),
         ...(follow ? { conv: m.conv as string } : {}),
         ...(missed ? { load: m.conv as string } : {}),
         turn,
@@ -326,6 +368,7 @@ function message(s: State, m: ServerMessage, at: number): State {
     case "item": {
       if (!here || s.items.some((i) => i.seq === m.p.item.seq)) return s;
       const items = bySeq([...s.items, m.p.item]);
+      if (m.p.item.kind === "compaction") return { ...withoutKeys(s, "compacting"), items };
       return m.p.item.kind === "assistant"
         ? { ...withoutKeys(s, "running"), items, spoken: m.p.item.text }
         : { ...s, items };
@@ -337,7 +380,11 @@ function message(s: State, m: ServerMessage, at: number): State {
     }
     case "notice": {
       if (m.conv !== undefined && !here) return s;
-      return { ...s, notices: [...s.notices, m.p].slice(-NOTICES) };
+      const notices = [...s.notices, m.p].slice(-NOTICES);
+      if (m.p.code === "compact_start") return { ...s, notices, compacting: true };
+      if (m.p.code === "compact_failed" || m.p.code === "compact_skipped")
+        return { ...withoutKeys(s, "compacting"), notices };
+      return { ...s, notices };
     }
     case "approval.request": {
       // The local end sends every pending one again after each hello: it keeps its place, and
@@ -390,6 +437,16 @@ function message(s: State, m: ServerMessage, at: number): State {
     }
     case "ack":
     case "nack": {
+      if (s.compactReq !== undefined && m.re === s.compactReq) {
+        const settled = withoutKeys(s, "compactReq");
+        // The ack: compact started follows. A nack: it never ran, the conversation is as it was.
+        if (m.kind === "ack") return settled;
+        return {
+          ...settled,
+          ...(m.p.reason === "auth_expired" ? { connection: "auth_expired" as const } : {}),
+          compactEnd: { state: "failed", nack: m.p.reason },
+        };
+      }
       const card = s.cards.find((c) => c.deciding !== undefined && c.deciding === m.re);
       if (card === undefined) {
         if (m.kind === "nack" && m.p.reason === "auth_expired")
@@ -481,12 +538,20 @@ export function reduce(s: State, e: Event): State {
         "error",
         "conv",
         "spoken",
+        "context",
+        "compacting",
+        "compactReq",
+        "compactEnd",
       );
       const chat = { ...base, wiki: wikiReduce(s.wiki, { type: "view", view: "chat" }) };
       return e.conv === undefined ? chat : { ...chat, conv: e.conv };
     }
     case "submitted":
-      return { ...withoutKeys(s, "error"), submitting: e.requestId };
+      return { ...withoutKeys(s, "error", "compactEnd"), submitting: e.requestId };
+    case "compact_sent":
+      return e.id === undefined
+        ? { ...s, compactEnd: { state: "failed", nack: "offline" } }
+        : { ...withoutKeys(s, "compactEnd"), compactReq: e.id };
     case "submit_result": {
       if (s.submitting !== e.requestId) return s;
       if (!e.ok) return { ...withoutKeys(s, "submitting"), error: nackText(e.reason) };
@@ -551,7 +616,28 @@ export function composerBlocked(s: State): string | undefined {
  * while a turn runs, as the prototype, and only the send waits (the local end runs one turn).
  */
 export function sendBusy(s: State): string | undefined {
+  const busy = runBusy(s);
+  if (busy !== undefined) return busy;
+  if (overStop(s.context))
+    return `這個對話太長（${contextPct(s.context)}%），超過硬停門檻。請先執行 /compact，或開新對話接續`;
+  return undefined;
+}
+
+/**
+ * The local end is running something (a turn, a compaction) or about to: nothing else that runs
+ * the model can start, and the conversation's model cannot change.
+ */
+export function runBusy(s: State): string | undefined {
   if (s.submitting !== undefined) return "送出中";
+  if (s.compacting === true || s.compactReq !== undefined) return "壓縮中";
   if (s.status?.turnRunning === true || s.turn?.state === "started") return "回合進行中";
   return undefined;
 }
+
+/** At or past the local end's stop line, judged on the ratio itself, not the rounded share. */
+export const overStop = (c: WireContext | undefined) =>
+  c !== undefined && c.contextUsed / c.contextLimit >= c.stopRatio;
+
+/** The context used as a whole percentage of the window. */
+export const contextPct = (c: WireContext | undefined): number | undefined =>
+  c === undefined ? undefined : Math.round((c.contextUsed / c.contextLimit) * 100);

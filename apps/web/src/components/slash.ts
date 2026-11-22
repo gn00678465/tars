@@ -3,11 +3,12 @@ import { skillInvocationText, type WireStatus } from "@tars/protocol";
 export type Skill = NonNullable<WireStatus["skills"]>[number];
 
 /**
- * The terminal's built-ins that have a page here, in the prototype's order and words. /effort and
- * /compact have no message to the local end yet, so they are not offered at all. /wiki takes its
- * keywords after a space, so picking it from the menu leaves it in the box to type them.
+ * The terminal's built-ins that have a page here, in the prototype's order and words. /effort has
+ * no message to the local end yet, so it is not offered at all. /compact and /wiki take words
+ * after a space (what to keep, the keywords), so picking one from the menu leaves it in the box.
  */
 export const BUILTINS = [
+  { name: "compact", description: "壓縮早期對話前綴，保留近期原文（送出一次模型請求）" },
   { name: "wiki", description: "唯讀瀏覽個人知識庫與雙軌搜尋原始對話" },
   { name: "model", description: "以另一個模型接續目前對話（開新對話）" },
   { name: "new", description: "開啟新對話（模型與推理強度在輸入框選）" },
@@ -17,8 +18,15 @@ export const BUILTINS = [
 
 export type Builtin = (typeof BUILTINS)[number]["name"];
 
-/** /wiki only once the local end answered wiki.status: an older one cannot. */
-const ALL: readonly Builtin[] = BUILTINS.map((b) => b.name).filter((n) => n !== "wiki");
+export const TAKES_ARG: ReadonlySet<Builtin> = new Set(["compact", "wiki"]);
+
+/**
+ * /wiki only once the local end answered wiki.status, /compact once it sent conv.context: an
+ * older one can do neither.
+ */
+const ALL: readonly Builtin[] = BUILTINS.map((b) => b.name).filter(
+  (n) => n !== "wiki" && n !== "compact",
+);
 
 export interface Option {
   readonly group: "內建指令" | "Skills" | "僅限本機（tars claude）";
