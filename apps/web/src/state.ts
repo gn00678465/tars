@@ -37,6 +37,8 @@ export interface State {
   /** The page's monotonic clock when status arrived, to count on from status.now. */
   readonly statusAt?: number;
   readonly convs: readonly WireConv[];
+  /** conv.list.result came at least once: an empty list is empty, not still loading. */
+  readonly listed?: boolean;
   /** The open conversation; undefined is a new one. */
   readonly conv?: string;
   readonly items: readonly WireItem[];
@@ -137,7 +139,11 @@ function message(s: State, m: ServerMessage, at: number): State {
       };
     }
     case "conv.list.result":
-      return { ...s, convs: [...m.p.convs].sort((a, b) => b.updatedAt - a.updatedAt) };
+      return {
+        ...s,
+        listed: true,
+        convs: [...m.p.convs].sort((a, b) => b.updatedAt - a.updatedAt),
+      };
     case "conv.snapshot": {
       if (!here) return s;
       if (s.epoch !== undefined && m.p.epoch !== s.epoch) return fresh(s, m.p.epoch);

@@ -23,8 +23,7 @@ test("connects, asks for the list after hello, and shows what the relay says", a
   await act(async () =>
     h.last().receive(server("relay.status", { online: true, localSince: 1_800_000_000_000 })),
   );
-  expect(root.textContent).toContain("本機端在線");
-  expect(root.textContent).toContain("本機端這一次連上");
+  expect(root.querySelector(".conn-pill")?.textContent).toBe("在線");
   unmount();
 });
 
@@ -131,7 +130,7 @@ describe("an ack with the turn after a reconnect, in a conversation already open
   });
 });
 
-describe("the conversation list and the open conversation", () => {
+describe("the sidebar and the open conversation", () => {
   const many = Array.from({ length: 40 }, (_, i) => ({
     id: `conv-${i}`,
     title: `對話 ${i}`,
@@ -150,91 +149,100 @@ describe("the conversation list and the open conversation", () => {
     });
     return { h, ...r };
   }
-  const list = (root: HTMLElement) => root.querySelector(".convs details") as HTMLDetailsElement;
-  const thread = (root: HTMLElement) => root.querySelector(".thread") as HTMLElement;
+  const scroll = (root: HTMLElement) => root.querySelector(".thread-scroll") as HTMLElement;
   const entry = (root: HTMLElement, title: string) =>
-    [...root.querySelectorAll<HTMLButtonElement>(".convs li button")].find(
-      (b) => b.querySelector(".title")?.textContent === title,
+    [...root.querySelectorAll<HTMLButtonElement>(".conv-item")].find(
+      (b) => b.querySelector(".conv-title")?.textContent === title,
     ) as HTMLButtonElement;
 
-  test("no conversation open: the list is unfolded, 新對話 above it", async () => {
-    const { root, unmount } = await listed();
-    expect(list(root).open).toBe(true);
-    const first = buttons(root).find((b) => b.textContent === "新對話");
-    expect(first?.closest(".convs")).not.toBeNull();
-    expect(first?.compareDocumentPosition(list(root)) ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  test("before the list arrives it is loading; then 新對話 comes before it", async () => {
+    const h = socketHarness();
+    const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
+    await act(async () => h.last().ready());
+    await act(async () => h.last().receive(server("relay.status", { online: true })));
+    expect(root.querySelector(".conv-skeleton")).not.toBeNull();
     unmount();
+    const l = await listed();
+    expect(l.root.querySelector(".conv-skeleton")).toBeNull();
+    const fresh = l.root.querySelector(".new-chat-btn") as HTMLElement;
+    const first = entry(l.root, "對話 0");
+    expect(fresh.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(l.root.querySelector(".empty-state h2")?.textContent).toBe("新對話");
+    l.unmount();
   });
 
-  test("opening one folds the list, moves the focus to the thread and marks it in words", async () => {
+  test("opening one moves the focus to the thread and marks it in words and shape", async () => {
     const { root, unmount } = await listed();
     await act(async () => entry(root, "對話 30").click());
-    expect(list(root).open).toBe(false);
-    expect(document.activeElement).toBe(thread(root));
+    expect(document.activeElement).toBe(scroll(root));
     const current = entry(root, "對話 30");
     expect(current.getAttribute("aria-current")).toBe("true");
-    expect(current.textContent?.startsWith("目前：")).toBe(true);
-    expect(entry(root, "對話 31").textContent?.includes("目前")).toBe(false);
-    // The folded list names what is open, so it shows without unfolding.
-    expect(list(root).querySelector("summary")?.textContent).toContain("對話 30");
+    expect(current.className).toContain("active");
+    expect(current.querySelector(".sg-tag")?.textContent).toBe("目前");
+    expect(entry(root, "對話 31").querySelector(".sg-tag")).toBeNull();
     unmount();
   });
 
-  test("unfolded by hand while one is open, it folds again when another is opened", async () => {
+  test("新對話 clears the mark and shows the empty state", async () => {
     const { root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());
-    await act(async () => {
-      list(root).open = true;
-    });
-    await act(async () => entry(root, "對話 2").click());
-    expect(list(root).open).toBe(false);
-    expect(document.activeElement).toBe(thread(root));
+    await act(async () => (root.querySelector(".new-chat-btn") as HTMLButtonElement).click());
+    expect(root.querySelector(".conv-item[aria-current]")).toBeNull();
+    expect(root.querySelector(".empty-state")).not.toBeNull();
     unmount();
   });
 
-  test("新對話 unfolds the list again", async () => {
-    const { root, unmount } = await listed();
-    await act(async () => entry(root, "對話 1").click());
+  test("the local end offline: the list says why instead of listing", async () => {
+    const { h, root, unmount } = await listed();
     await act(async () =>
-      buttons(root)
-        .find((b) => b.textContent === "新對話")
-        ?.click(),
+      h.last().receive(server("relay.status", { online: false, lastSeenAt: 1 })),
     );
-    expect(list(root).open).toBe(true);
-    expect(root.querySelector(".convs [aria-current]")).toBeNull();
+    expect(root.querySelector(".conv-offline-box")?.textContent).toContain("本機端離線");
+    expect(root.querySelector(".conn-pill")?.textContent).toContain("本機端離線");
     unmount();
   });
 
-  test("pending approvals stay above the list and the thread", async () => {
+  const request = (conv: string) =>
+    server("approval.request", {
+      approval: {
+        approvalId: "approval-00000001",
+        conv,
+        hash: "a".repeat(64),
+        action: "run_script",
+        script: "push",
+        version: "v1",
+        summary: "推播",
+        effects: "external-write",
+        domains: [],
+        secret: null,
+        argv: [],
+        expiresAt: 600_000,
+      },
+    });
+
+  test("a waiting card of this conversation is in the thread", async () => {
     const { h, root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());
+    await act(async () => h.last().receive(request("conv-1")));
+    expect(root.querySelector(".thread-scroll .approval-card")).not.toBeNull();
+    expect(root.querySelector(".composer-dock .approval-card")).toBeNull();
+    unmount();
+  });
+
+  test("one from another conversation is pinned above the composer, says where, and jumps there", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    await act(async () => h.last().receive(request("conv-2")));
+    const pinned = root.querySelector(".composer-dock .approval-card") as HTMLElement;
+    expect(pinned.querySelector(".approval-origin-bar")?.textContent).toContain("對話 2");
+    expect(entry(root, "對話 2").querySelector(".sg-tag.wait")?.textContent).toBe("待核准");
     await act(async () =>
-      h.last().receive(
-        server("approval.request", {
-          approval: {
-            approvalId: "approval-00000001",
-            conv: "conv-1",
-            hash: "a".repeat(64),
-            action: "run_script",
-            script: "push",
-            version: "v1",
-            summary: "推播",
-            effects: "external-write",
-            domains: [],
-            secret: null,
-            argv: [],
-            expiresAt: 600_000,
-          },
-        }),
-      ),
+      buttons(pinned)
+        .find((b) => b.textContent === "跳至該對話")
+        ?.click(),
     );
-    const card = root.querySelector(".approval") as HTMLElement;
-    expect(
-      card.compareDocumentPosition(list(root)) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      card.compareDocumentPosition(thread(root)) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(entry(root, "對話 2").getAttribute("aria-current")).toBe("true");
+    expect(root.querySelector(".thread-scroll .approval-card")).not.toBeNull();
     unmount();
   });
 });

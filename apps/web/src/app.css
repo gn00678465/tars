@@ -1,0 +1,19 @@
+/* What the prototype did not need: React's markup around its classes. Static, no inline styles. */
+.approval-card ol.approval-argv {
+  list-style: none;
+  margin: 0;
+}
+
+.approval-card dl,
+.approval-card dd {
+  margin: 0;
+}
+
+.thread-scroll:focus {
+  outline: none;
+}
+
+.thread-scroll:focus-visible {
+  outline: 2px solid var(--focus-line);
+  outline-offset: -2px;
+}

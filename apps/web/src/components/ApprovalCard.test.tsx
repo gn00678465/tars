@@ -29,32 +29,31 @@ const card = (over: Partial<Card> = {}): Card => ({ approval, ...over });
 const args = (root: HTMLElement) =>
   [...root.querySelectorAll("ol.argv li")].map((li) => li.textContent);
 
-test("the nine fields, as text", async () => {
+test("the nine fields, as text, in the prototype's two parts", async () => {
   const { root } = await render(
     <ApprovalCard card={card()} localNow={1_800_000_000_000} onDecide={() => undefined} />,
   );
+  expect(root.querySelector(".approval-head-title")?.textContent).toContain("執行腳本");
   const labels = [...root.querySelectorAll("dt")].map((d) => d.textContent);
   expect(labels).toEqual([
-    "動作",
     "對象",
-    "內容",
-    "腳本說明",
     "影響",
+    "腳本說明",
     "連線對象",
     "用到的金鑰",
+    "內容",
     "到期時間",
     "核准編號、雜湊前 8 碼",
   ]);
   const values = [...root.querySelectorAll("dd")].map((d) => d.textContent);
-  expect(values[0]).toBe("執行腳本");
-  expect(values[1]).toBe("push（版本 v1）");
+  expect(values[0]).toBe("push（版本 v1）");
+  expect(values[1]).toBe("寫外部");
+  expect(values[2]).toBe("推播一則通知");
+  expect(values[3]).toBe("api.example.com、任意主機");
+  expect(values[4]).toBe("bark");
   expect(args(root)).toEqual(['"--text"', '"<script>alert(1)</script>"']);
-  expect(values[3]).toBe("推播一則通知");
-  expect(values[4]).toBe("寫外部");
-  expect(values[5]).toBe("api.example.com、任意主機");
-  expect(values[6]).toBe("bark");
-  expect(values[7]).toContain("剩 10 分 0 秒");
-  expect(values[8]).toBe("e56800aa、01234567");
+  expect(values[6]).toContain("剩 10 分 0 秒");
+  expect(values[7]).toBe("e56800aa、01234567");
   // The argv's markup stays text: no element was made from it.
   expect(root.querySelector("script")).toBeNull();
 });
@@ -68,25 +67,39 @@ test("no secret and no domains read 無", async () => {
     />,
   );
   const values = [...root.querySelectorAll("dd")].map((d) => d.textContent);
-  expect(values[5]).toBe("無");
-  expect(values[6]).toBe("無");
-  expect(values[7]).not.toContain("剩");
+  expect(values[3]).toBe("無");
+  expect(values[4]).toBe("無");
+  expect(values[6]).not.toContain("剩");
 });
+
+const DENY = "拒絕（預設）";
+const APPROVE = "確認核准寫外部";
 
 test("deny has the focus, and comes first", async () => {
   const { root } = await render(
     <ApprovalCard card={card()} localNow={undefined} onDecide={() => undefined} />,
   );
-  expect(document.activeElement).toBe(button(root, "拒絕"));
-  expect([...root.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["拒絕", "核准"]);
+  expect(document.activeElement).toBe(button(root, DENY));
+  expect([...root.querySelectorAll("button")].map((b) => b.textContent)).toEqual([DENY, APPROVE]);
 });
 
-test("a click decides; once deciding or resolved, both buttons are off", async () => {
+test("a read-only script's approve button says so plainly", async () => {
+  const { root } = await render(
+    <ApprovalCard
+      card={card({ approval: { ...approval, effects: "read-only" } })}
+      localNow={undefined}
+      onDecide={() => undefined}
+    />,
+  );
+  expect(button(root, "核准執行").className).toContain("sg-btn-approve");
+});
+
+test("a click decides; while deciding both buttons are off; decided, the outcome replaces them", async () => {
   const decided: string[] = [];
   const { root, rerender } = await render(
     <ApprovalCard card={card()} localNow={undefined} onDecide={(d) => decided.push(d)} />,
   );
-  await act(async () => button(root, "核准").click());
+  await act(async () => button(root, APPROVE).click());
   expect(decided).toEqual(["approved"]);
   await rerender(
     <ApprovalCard
@@ -95,8 +108,8 @@ test("a click decides; once deciding or resolved, both buttons are off", async (
       onDecide={(d) => decided.push(d)}
     />,
   );
-  expect(button(root, "核准").disabled).toBe(true);
-  expect(button(root, "拒絕").disabled).toBe(true);
+  expect(button(root, "等待本機回應…").disabled).toBe(true);
+  expect(button(root, DENY).disabled).toBe(true);
   await rerender(
     <ApprovalCard
       card={card({ resolved: { state: "approved", here: false } })}
@@ -104,7 +117,7 @@ test("a click decides; once deciding or resolved, both buttons are off", async (
       onDecide={() => undefined}
     />,
   );
-  expect(button(root, "核准").disabled).toBe(true);
+  expect(root.querySelectorAll("button")).toHaveLength(0);
   expect(root.textContent).toContain("已核准（在別處決定）");
 });
 
