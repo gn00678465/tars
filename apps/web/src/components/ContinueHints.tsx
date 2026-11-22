@@ -79,7 +79,8 @@ export function ContinueHints(props: {
 
 /**
  * The conversation nears or passes the local end's stop line (9-04, 9-05): said before the next
- * message, with the compaction that makes room. Past the stop line the send is off (sendBusy).
+ * message, with the compaction that makes room. Past the stop line with auto compaction off, the
+ * send is off (sendBusy); with it on, the local end compacts first and the send goes.
  */
 export function ContextHint(props: { context: WireContext; onCompact: () => void }) {
   const c = props.context;
@@ -87,13 +88,16 @@ export function ContextHint(props: { context: WireContext; onCompact: () => void
   const pct = contextPct(c);
   const stop = Math.round(c.stopRatio * 100);
   const over = overStop(c);
-  const title = over
-    ? `這個對話太長（${pct}%），請先壓縮或開新對話接續`
-    : `這個對話太長（${pct}%）`;
-  const desc = over
-    ? `超過 ${stop}% 硬停門檻時本機端不再接受新回合。`
-    : c.autoCompact
-      ? `到 ${Math.round(c.compactRatio * 100)}% 時，送出前會自動壓縮較早的部分；也可以先手動壓縮。`
+  const title =
+    over && !c.autoCompact
+      ? `這個對話太長（${pct}%），請先壓縮或開新對話接續`
+      : `這個對話太長（${pct}%）`;
+  const desc = c.autoCompact
+    ? over
+      ? `已超過 ${stop}% 硬停門檻。送出時本機端會先自動壓縮較早的部分；也可以先手動壓縮。`
+      : `到 ${Math.round(c.compactRatio * 100)}% 時，送出前會自動壓縮較早的部分；也可以先手動壓縮。`
+    : over
+      ? `自動壓縮沒有開啟，超過 ${stop}% 硬停門檻時本機端不再接受新回合。`
       : `自動壓縮沒有開啟。到 ${stop}% 硬停門檻時本機端不再接受新回合，請先壓縮或開新對話接續。`;
   return (
     <div className="task-notice warn">

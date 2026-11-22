@@ -116,8 +116,29 @@ test("E2, E3: the sheet says the local end's figures and starts a compaction; bu
   unmount();
 });
 
-test("E5: past the stop line the send is off with the reason, and /compact still goes", async () => {
+test("E5, auto compaction on: past the stop line the hint offers compaction, and the send goes", async () => {
   const { root, type, key, sent, unmount } = await opened({ ...CONTEXT, contextUsed: 174_000 });
+  expect(root.querySelector(".composer-disabled-reason")).toBeNull();
+  const hint = root.querySelector(".task-notice.warn") as HTMLElement;
+  expect(hint.querySelector(".task-notice-title")?.textContent).toBe("這個對話太長（87%）");
+  expect(hint.querySelector(".task-notice-desc")?.textContent).toBe(
+    "已超過 85% 硬停門檻。送出時本機端會先自動壓縮較早的部分；也可以先手動壓縮。",
+  );
+  await act(async () => button(root, "開啟壓縮").click());
+  expect(root.querySelector(".sheet-panel h2")?.textContent).toBe("上下文用量與壓縮");
+  await act(async () => button(root, "取消").click());
+  await type("你好");
+  await key("Enter");
+  expect(sent("turn.submit")).toHaveLength(1);
+  unmount();
+});
+
+test("E5, auto compaction off: past the stop line the send is off with the reason, and /compact still goes", async () => {
+  const { root, type, key, sent, unmount } = await opened({
+    ...CONTEXT,
+    contextUsed: 174_000,
+    autoCompact: false,
+  });
   expect(root.querySelector(".composer-disabled-reason")?.textContent).toBe(
     "這個對話太長（87%），超過硬停門檻。請先執行 /compact，或開新對話接續",
   );

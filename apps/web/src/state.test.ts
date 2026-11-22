@@ -695,9 +695,14 @@ describe("state: compaction (E)", () => {
     expect([away.compacting, away.context]).toEqual([undefined, undefined]);
   });
 
-  test("E5: past the stop line, on the ratio itself, the send waits; the model control does not", () => {
-    const at = (used: number) =>
-      run([...open, server("conv.context", { ...ctx, contextUsed: used }, { conv: CONV })]);
+  test("E5: auto compaction off, past the stop line (on the ratio itself) the send waits", () => {
+    const at = (used: number, autoCompact = false) =>
+      run([
+        ...open,
+        server("conv.context", { ...ctx, contextUsed: used, autoCompact }, { conv: CONV }),
+      ]);
+    // On, the local end compacts before the message goes: nothing waits.
+    expect(sendBusy(at(9_000, true))).toBeUndefined();
     // 84.96% rounds to 85% but is under the line.
     expect(sendBusy(at(8_496))).toBeUndefined();
     expect(sendBusy(at(8_500))).toBe(

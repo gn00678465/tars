@@ -643,7 +643,9 @@ export function composerBlocked(s: State): string | undefined {
 export function sendBusy(s: State): string | undefined {
   const busy = runBusy(s);
   if (busy !== undefined) return busy;
-  if (overStop(s.context))
+  // With auto compaction on, the local end compacts before a message past the line goes
+  // (engine.ts autoCompact): only with it off does a send stop here.
+  if (overStop(s.context) && s.context?.autoCompact === false)
     return `這個對話太長（${contextPct(s.context)}%），超過硬停門檻。請先執行 /compact，或開新對話接續`;
   return undefined;
 }
