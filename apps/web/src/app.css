@@ -280,3 +280,10 @@
   background: var(--hover);
   border-color: var(--glass-edge);
 }
+
+/* Under the price table: what its figures are, and when the list was cut. */
+.catalog-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--subtle-foreground);
+}

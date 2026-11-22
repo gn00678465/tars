@@ -12,6 +12,7 @@ import type {
   ServerMessage,
   WireApproval,
   WireContext,
+  WireCatalogEntry,
   WireConv,
   WireItem,
   WireModel,
@@ -90,6 +91,16 @@ export interface State {
    * page offers no other model, since such a local end refuses a turn.submit that names one.
    */
   readonly models?: readonly WireModel[];
+  /**
+   * The read-only price table, with models.result: every model the local list has, active first
+   * (total: how many there are, more than entries when it was cut), and the UTC date the list
+   * last saw a model. Absent from a local end older than it.
+   */
+  readonly catalog?: {
+    readonly entries: readonly WireCatalogEntry[];
+    readonly total?: number;
+    readonly updatedAt?: string;
+  };
   readonly convs: readonly WireConv[];
   /** conv.list.result came at least once: an empty list is empty, not still loading. */
   readonly listed?: boolean;
@@ -259,8 +270,22 @@ function message(s: State, m: ServerMessage, at: number): State {
       return s.epoch !== undefined && s.epoch !== m.p.epoch
         ? fresh(s, m.p.epoch)
         : { ...s, epoch: m.p.epoch };
-    case "models.result":
-      return { ...s, models: m.p.models };
+    case "models.result": {
+      const { catalog, catalogTotal, updatedAt } = m.p;
+      return {
+        ...withoutKeys(s, "catalog"),
+        models: m.p.models,
+        ...(catalog === undefined && updatedAt === undefined
+          ? {}
+          : {
+              catalog: {
+                entries: catalog ?? [],
+                ...(catalogTotal === undefined ? {} : { total: catalogTotal }),
+                ...(updatedAt === undefined ? {} : { updatedAt }),
+              },
+            }),
+      };
+    }
     // An answer no request waits on any more: it waited too long, or the connection dropped.
     case "wiki.status.result":
     case "wiki.list.result":
@@ -504,7 +529,7 @@ export function reduce(s: State, e: Event): State {
         // A measurement belongs to the connection it was made on.
         // models too: the local end the page reconnects to may be one that does not list them.
         ...withoutKeys(
-          e.connection === "open" ? s : withoutKeys(s, "ping", "rtt", "models"),
+          e.connection === "open" ? s : withoutKeys(s, "ping", "rtt", "models", "catalog"),
           "reconnect",
           "need",
         ),

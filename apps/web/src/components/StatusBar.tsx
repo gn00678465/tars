@@ -2,6 +2,7 @@ import type { WireStatus } from "@tars/protocol";
 import { contextPct, type State, versionText } from "../state.ts";
 import { useRef } from "react";
 import { ContextRing } from "./ContextSheet.tsx";
+import { PriceNotices, PriceTable, priceButtonText, updatedText } from "./Prices.tsx";
 import { Icon } from "./Icon.tsx";
 import { useModal } from "./modal.ts";
 import { timeText } from "./time.ts";
@@ -99,8 +100,18 @@ export function certTag(
   return { tone: "", text: "連線憑證正常" };
 }
 
-/** The catalog button: 花費與模型, or the provider past a threshold. Stopping wins over warning. */
-function spendButton(status: WireStatus | undefined): { tone?: string; text: string } {
+/**
+ * The catalog button: 花費與模型 with the list's last update, or the provider past a threshold,
+ * or the model whose price needs confirming. Stopping wins over warning.
+ */
+function spendButton(state: State): {
+  tone?: string;
+  text: string;
+  date?: string;
+  /** At phone width, where a model's name would push the button past the edge. */
+  short?: string;
+} {
+  const { status, catalog } = state;
   const providers = status?.providers ?? [];
   const stopped = providers.find((p) => level(p) === "error");
   if (stopped !== undefined) return { tone: "error", text: `${label(stopped)} 已達停用門檻` };
@@ -110,10 +121,16 @@ function spendButton(status: WireStatus | undefined): { tone?: string; text: str
       tone: "warn",
       text: `${label(warned)} 已用 ${Math.round((warned.spentUsd / warned.quotaUsd) * 100)}%`,
     };
-  if (status?.pricesWarn === true) return { tone: "warn", text: "價目表過期" };
+  if (status?.pricesWarn === true)
+    return {
+      tone: "warn",
+      text: priceButtonText(status, catalog) ?? "價目表過期",
+      short: "價目待確認",
+    };
   const cert = certTag(status);
   if (cert !== undefined && cert.tone !== "") return cert;
-  return { text: "花費與模型" };
+  const date = updatedText(catalog);
+  return { text: "花費與模型", ...(date === undefined ? {} : { date }) };
 }
 
 export function TopBar(props: {
@@ -125,7 +142,7 @@ export function TopBar(props: {
   onContext?: () => void;
 }) {
   const c = connection(props.state);
-  const spend = spendButton(props.state.status);
+  const spend = spendButton(props.state);
   const warn = c.tone !== "ok" || spend.tone !== undefined;
   return (
     <header className="topbar">
@@ -163,6 +180,11 @@ export function TopBar(props: {
         <button className="sg-btn desktop-only" type="button" onClick={props.onSheet}>
           {spend.tone === undefined ? null : <span className={`status-dot ${spend.tone}`} />}
           <span>{spend.text}</span>
+          {spend.date === undefined ? null : (
+            <span className="mono conn-latency" aria-label={`模型清單 ${spend.date} 更新`}>
+              {spend.date}
+            </span>
+          )}
         </button>
         {props.state.context === undefined || props.onContext === undefined ? null : (
           <ContextRing context={props.state.context} onOpen={props.onContext} />
@@ -176,7 +198,7 @@ export function TopBar(props: {
           <span className={`status-dot ${warn ? "warn" : "ok"}`} />
           {/* The pill beside it already says the connection; a second copy pushed this one past
               the edge at 375px. */}
-          <span>{spend.tone === undefined ? "狀態" : spend.text}</span>
+          <span>{spend.tone === undefined ? "狀態" : (spend.short ?? spend.text)}</span>
         </button>
       </div>
     </header>
@@ -209,7 +231,7 @@ export function StatusSheet(props: {
         aria-labelledby="sheet-title"
       >
         <div className="sheet-head">
-          <h2 id="sheet-title">花費與狀態</h2>
+          <h2 id="sheet-title">花費、模型清單與價目表（唯讀）</h2>
           <button className="sg-icon-btn" type="button" aria-label="關閉" onClick={props.onClose}>
             <Icon name="close" size={15} />
           </button>
@@ -258,6 +280,12 @@ export function StatusSheet(props: {
               })
             )}
           </div>
+          {status === undefined ? null : (
+            <PriceNotices status={status} catalog={props.state.catalog} />
+          )}
+          {props.state.catalog === undefined || props.state.catalog.entries.length === 0 ? null : (
+            <PriceTable catalog={props.state.catalog} warns={status?.prices ?? []} />
+          )}
           {context === undefined ? null : (
             <div className="provider-group">
               <div className="provider-group-head">
@@ -298,7 +326,8 @@ export function StatusSheet(props: {
                   </span>
                 </div>
               )}
-              {status.pricesWarn ? (
+              {/* A local end older than prices says only that some are old. */}
+              {status.pricesWarn && status.prices === undefined ? (
                 <div className="task-notice warn">
                   <div className="task-notice-body">
                     <div className="task-notice-title">價目表過期</div>
@@ -309,13 +338,19 @@ export function StatusSheet(props: {
             </div>
           )}
         </div>
-        {context === undefined || props.onCompact === undefined ? null : (
-          <div className="sheet-foot">
-            <button className="sg-btn" type="button" onClick={props.onCompact}>
-              開啟壓縮
+        <div className="sheet-foot">
+          <span>模型啟用、單價與額度只能在本機終端修改</span>
+          <div className="sheet-foot-actions">
+            {context === undefined || props.onCompact === undefined ? null : (
+              <button className="sg-btn" type="button" onClick={props.onCompact}>
+                開啟壓縮
+              </button>
+            )}
+            <button className="sg-btn" type="button" onClick={props.onClose}>
+              關閉
             </button>
           </div>
-        )}
+        </div>
       </section>
     </div>
   );

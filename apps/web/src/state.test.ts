@@ -706,3 +706,26 @@ describe("state: compaction (E)", () => {
     expect(runBusy(at(8_500))).toBeUndefined();
   });
 });
+
+describe("state: the price table (F)", () => {
+  test("models.result keeps the catalog; an older local end's has none; a drop forgets it", () => {
+    const entry = {
+      provider: "anthropic",
+      id: "m",
+      label: "M",
+      status: "active" as const,
+    };
+    const s = run([
+      ...open,
+      server("models.result", {
+        models: [],
+        catalog: [entry],
+        catalogTotal: 3,
+        updatedAt: "2026-11-19",
+      }),
+    ]);
+    expect(s.catalog).toEqual({ entries: [entry], total: 3, updatedAt: "2026-11-19" });
+    expect(run([server("models.result", { models: [] })], s).catalog).toBeUndefined();
+    expect(run([{ type: "connection", connection: "offline" }], s).catalog).toBeUndefined();
+  });
+});
