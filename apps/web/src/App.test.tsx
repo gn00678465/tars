@@ -1386,13 +1386,31 @@ describe("effort: the level beside the model, its menu, and what the message car
       );
       h.last().receive(server("notice", { code: "effort_truncated" }, { conv: "conv-1" }));
     });
-    expect(root.querySelector(".compaction-meta")?.textContent).toBe(
-      "這個模型不支援原本的推理強度，這次用「中」",
-    );
-    const card = root.querySelector(".thread .task-notice.warn") as HTMLElement;
-    expect(card.textContent).toContain("輸出上限被思考用完，請降低推理強度");
+    const cards = () =>
+      [...root.querySelectorAll(".thread .task-notice")].map((e) => [
+        e.className,
+        e.querySelector(".task-notice-title")?.textContent,
+        e.querySelector(".task-notice-desc")?.textContent,
+      ]);
+    // conv-1 asked for 高; the local end said it used 中.
+    expect(cards()).toEqual([
+      [
+        "task-notice warn",
+        "模型不支援「高」，已改用「中」",
+        "點開右下角的推理強度重選後，這個警告就會消失。",
+      ],
+      [
+        "task-notice warn",
+        "輸出上限被思考用完，請降低推理強度",
+        "這次請求用完了單次輸出上限，但沒有輸出正文。",
+      ],
+    ]);
+    const card = root.querySelectorAll(".thread .task-notice")[1] as HTMLElement;
     await act(async () => button(card, "調整推理強度").click());
     expect(menu()?.getAttribute("aria-label")).toBe("選擇推理強度");
+    await act(async () => button(menu() as HTMLElement, "低（low）回應最快，思考最少").click());
+    // Picked again: the downgrade warning is done with; the truncation card stays.
+    expect(cards().map((c) => c[1])).toEqual(["輸出上限被思考用完，請降低推理強度"]);
     unmount();
   });
 

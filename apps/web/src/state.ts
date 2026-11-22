@@ -106,7 +106,9 @@ export type Event =
       readonly choice?: "approved" | "denied";
     }
   /** approval.decide could not be sent at all: the card says so instead of waiting. */
-  | { readonly type: "decide_failed"; readonly approvalId: string };
+  | { readonly type: "decide_failed"; readonly approvalId: string }
+  /** The owner acted on what these notices asked for. */
+  | { readonly type: "notices_done"; readonly code: string };
 
 export const initial: State = {
   connection: "connecting",
@@ -350,6 +352,8 @@ export function reduce(s: State, e: Event): State {
     }
     case "message":
       return message(s, e.m, e.at);
+    case "notices_done":
+      return { ...s, notices: s.notices.filter((n) => n.code !== e.code) };
     case "pinged":
       return { ...s, ping: { id: e.id, at: e.at } };
     case "open_conv": {

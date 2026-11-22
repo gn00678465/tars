@@ -256,6 +256,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           onOpen: setEffortOpen,
           onPick: (level) => {
             setEffortPick(level);
+            dispatch({ type: "notices_done", code: "effort_clamped" });
             setEffortOpen(false);
             setToast((n) => n + 1);
           },
