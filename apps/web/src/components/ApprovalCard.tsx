@@ -53,6 +53,9 @@ const STATUS: Record<string, [string, string]> = {
   cancelled: ["", "已取消"],
 };
 
+/** How long after the ack a missing result is said to be missing (the protocol cannot ask). */
+const RESULT_MS = 15_000;
+
 const OUTCOME: Record<string, string> = {
   approved: "已核准並放行執行",
   denied: "已拒絕，沒有執行這個腳本",
@@ -84,22 +87,30 @@ export function ApprovalCard(props: {
   origin?: { title: string; onJump: () => void; onDismiss?: () => void };
   /** Why a decision cannot be sent now (offline); the buttons are off while it is set. */
   blocked?: string;
-  /** Takes the focus when it appears; false for all but the oldest waiting card. */
+  /** Takes the focus when this becomes true; false for all but the oldest card to decide. */
   focus?: boolean;
+  /** The page's clock, as the ack's time was taken. */
+  pageNow?: number;
 }) {
   const { approval: a, resolved, deciding } = props.card;
   // Acked but not resolved yet: the local end has the decision, a second one must not go.
   const waiting = resolved === undefined && props.card.acked === true;
-  const done =
+  const off =
     resolved !== undefined || deciding !== undefined || waiting || props.blocked !== undefined;
+  // After a drop the first decision may have arrived: only that one may be sent again.
+  const only = props.card.lost === true ? props.card.choice : undefined;
+  const missing =
+    waiting &&
+    props.card.ackedAt !== undefined &&
+    props.pageNow !== undefined &&
+    props.pageNow - props.card.ackedAt > RESULT_MS;
   const deny = useRef<HTMLButtonElement>(null);
-  // Only the card App names gets the focus, once, and not from someone typing a message.
+  // Only the card App names gets the focus, each time it is named, and not from someone typing.
   useEffect(() => {
     if (props.focus === false) return;
     if (document.activeElement?.closest(".composer") != null) return;
     deny.current?.focus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [props.focus]);
   const left = props.localNow === undefined ? undefined : a.expiresAt - props.localNow;
   const external = a.effects === "external-write";
   const [tone, label] =
@@ -198,7 +209,7 @@ export function ApprovalCard(props: {
               className="sg-btn sg-btn-danger"
               type="button"
               ref={deny}
-              disabled={done}
+              disabled={off || only === "approved"}
               onClick={() => props.onDecide("denied")}
             >
               拒絕（預設）
@@ -206,7 +217,7 @@ export function ApprovalCard(props: {
             <button
               className={external ? "sg-btn sg-btn-warn-action" : "sg-btn sg-btn-approve"}
               type="button"
-              disabled={done}
+              disabled={off || only === "denied"}
               onClick={() => props.onDecide("approved")}
             >
               {waiting
@@ -227,6 +238,17 @@ export function ApprovalCard(props: {
           {props.blocked}
         </p>
       )}
+      {only === undefined ? null : (
+        <p className="composer-disabled-reason" role="status">
+          你剛才選的是「{only === "approved" ? "核准" : "拒絕"}
+          」，連線中斷後沒有收到結果；只能重送同一個決定，或重新整理頁面確認
+        </p>
+      )}
+      {missing ? (
+        <p className="composer-disabled-reason" role="status">
+          還沒收到結果。腳本可能已執行或已被拒絕，請重新整理頁面確認
+        </p>
+      ) : null}
       {props.card.error === undefined ? null : (
         <p className="composer-inline-err" role="alert">
           {props.card.error}

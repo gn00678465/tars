@@ -78,7 +78,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     dispatch(
       id === undefined
         ? { type: "decide_failed", approvalId: card.approval.approvalId }
-        : { type: "deciding", approvalId: card.approval.approvalId, id },
+        : { type: "deciding", approvalId: card.approval.approvalId, id, choice: decision },
     );
   };
   const oldest = state.items[0]?.seq;
@@ -87,24 +87,22 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // In its own conversation a card is part of the thread, waiting or decided (ui_spec 5.4);
   // one waiting from another conversation is pinned above the composer, saying where it is from.
   const here = state.cards.filter((c) => c.approval.conv === state.conv);
-  const settled = [
-    ...here.filter((c) => c.resolved !== undefined).slice(-3),
-    ...here.filter((c) => c.resolved === undefined),
-  ];
+  const byDecision = (cards: readonly (typeof state.cards)[number][]) =>
+    cards
+      .filter((c) => c.resolved !== undefined)
+      .sort((a, b) => (a.decidedOrder ?? 0) - (b.decidedOrder ?? 0))
+      .slice(-3);
+  const settled = [...byDecision(here), ...here.filter((c) => c.resolved === undefined)];
   // From other conversations: the waiting ones, and the last three decided, so a decision made
   // here or elsewhere stays visible until closed.
   const elsewhere = state.cards.filter(
     (c) => c.approval.conv !== state.conv && !dismissed.has(c.approval.approvalId),
   );
-  const pinned = [
-    ...elsewhere
-      .filter((c) => c.resolved !== undefined)
-      .sort((a, b) => (a.decidedOrder ?? 0) - (b.decidedOrder ?? 0))
-      .slice(-3),
-    ...elsewhere.filter((c) => c.resolved === undefined),
-  ];
-  // One card on the page takes the focus: the oldest waiting one.
-  const first = pending[0]?.approval.approvalId;
+  const pinned = [...byDecision(elsewhere), ...elsewhere.filter((c) => c.resolved === undefined)];
+  // One card on the page takes the focus: the oldest one still to be decided, so it moves on
+  // when that one is sent.
+  const first = pending.find((c) => c.deciding === undefined && c.acked !== true)?.approval
+    .approvalId;
   const blocked =
     state.connection !== "open" || !state.relay.online ? "離線，無法送出決定" : undefined;
   const waiting = new Set(pending.map((c) => c.approval.conv));
@@ -180,6 +178,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                   localNow={localNow(state, tick)}
                   onDecide={(d) => decide(card, d)}
                   focus={card.approval.approvalId === first}
+                  pageNow={tick}
                   {...(blocked === undefined ? {} : { blocked })}
                 />
               ))}
@@ -195,6 +194,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                     localNow={localNow(state, tick)}
                     onDecide={(d) => decide(card, d)}
                     focus={card.approval.approvalId === first}
+                    pageNow={tick}
                     {...(blocked === undefined ? {} : { blocked })}
                     origin={{
                       title: titleOf(card.approval.conv),

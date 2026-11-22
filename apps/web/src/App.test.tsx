@@ -346,6 +346,45 @@ describe("the sidebar and the open conversation", () => {
     unmount();
   });
 
+  test("the focus moves on to the next card once the first is decided", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    for (const n of [2, 3]) await act(async () => h.last().receive(requestN(n, `conv-${n}`)));
+    expect(document.activeElement).toBe(denyOf(root, "s2"));
+    await act(async () =>
+      h.last().receive(
+        server("approval.resolved", {
+          approvalId: "approval-00000002",
+          state: "denied",
+          via: "remote",
+        }),
+      ),
+    );
+    expect(document.activeElement).toBe(denyOf(root, "s3"));
+    unmount();
+  });
+
+  test("in this conversation too, the one decided last stays though it came first", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    for (const n of [2, 3, 4, 5]) await act(async () => h.last().receive(requestN(n, "conv-1")));
+    for (const n of [3, 4, 5, 2])
+      await act(async () =>
+        h.last().receive(
+          server("approval.resolved", {
+            approvalId: `approval-0000000${n}`,
+            state: "approved",
+            via: "remote",
+          }),
+        ),
+      );
+    const shown = [...root.querySelectorAll(".thread-scroll .approval-card")].map(
+      (c) => c.querySelector(".approval-field-val")?.textContent,
+    );
+    expect(shown).toEqual(["s4（版本 v1）", "s5（版本 v1）", "s2（版本 v1）"]);
+    unmount();
+  });
+
   test("typing in the composer: a new card does not take the focus", async () => {
     const { h, root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());

@@ -250,3 +250,40 @@ test("a card told not to take the focus leaves it where it is", async () => {
   );
   expect(document.activeElement).not.toBe(button(root, DENY));
 });
+
+test("after a drop only the same decision can go again, and the card says why", async () => {
+  const { root } = await render(
+    <ApprovalCard
+      card={card({
+        lost: true,
+        choice: "approved",
+        error: "連線曾中斷，決定可能沒有送達；可以再按一次",
+      })}
+      localNow={undefined}
+      onDecide={() => undefined}
+    />,
+  );
+  expect(button(root, DENY).disabled).toBe(true);
+  expect(button(root, APPROVE).disabled).toBe(false);
+  expect(root.textContent).toContain("你剛才選的是「核准」，連線中斷後沒有收到結果");
+});
+
+test("acked and no result for 15 s: the card says to reload, buttons still off", async () => {
+  const at = (pageNow: number) =>
+    render(
+      <ApprovalCard
+        card={card({ acked: true, ackedAt: 1000 })}
+        pageNow={pageNow}
+        localNow={undefined}
+        onDecide={() => undefined}
+      />,
+    );
+  const early = await at(15_000);
+  expect(early.root.textContent).not.toContain("還沒收到結果");
+  early.unmount();
+  const late = await at(16_001);
+  expect(late.root.querySelector("[role=status]")?.textContent).toContain(
+    "還沒收到結果。腳本可能已執行或已被拒絕，請重新整理頁面確認",
+  );
+  expect(button(late.root, DENY).disabled).toBe(true);
+});

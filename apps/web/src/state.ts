@@ -25,6 +25,12 @@ export interface Card {
   readonly error?: string;
   /** Which decision this was among those this page saw, 1 first: the newest ones are kept. */
   readonly decidedOrder?: number;
+  /** What this page sent, so a resend after a drop can only be the same decision. */
+  readonly choice?: "approved" | "denied";
+  /** Sent, then the connection dropped before an ack: only `choice` may go again. */
+  readonly lost?: boolean;
+  /** The page's clock when the ack came: a result long in coming is said to be missing. */
+  readonly ackedAt?: number;
 }
 
 export interface State {
@@ -70,7 +76,12 @@ export type Event =
       readonly turn?: string;
       readonly conv?: string;
     }
-  | { readonly type: "deciding"; readonly approvalId: string; readonly id: string }
+  | {
+      readonly type: "deciding";
+      readonly approvalId: string;
+      readonly id: string;
+      readonly choice?: "approved" | "denied";
+    }
   /** approval.decide could not be sent at all: the card says so instead of waiting. */
   | { readonly type: "decide_failed"; readonly approvalId: string };
 
@@ -209,12 +220,15 @@ function message(s: State, m: ServerMessage, at: number): State {
     case "approval.request": {
       // The local end sends every pending one again after each hello: it keeps its place, and
       // an error shown on it (a decision lost to the reconnect) stays until the next decision.
+      // What the page knows wins over a resend: a decided card stays decided, an acked one
+      // keeps waiting; only one never answered goes back to being decidable.
       const old = s.cards.find((c) => c.approval.approvalId === m.p.approval.approvalId);
       if (old === undefined) return { ...s, cards: [...s.cards, { approval: m.p.approval }] };
-      const card: Card = {
-        approval: m.p.approval,
-        ...(old.resolved === undefined && old.error !== undefined ? { error: old.error } : {}),
-      };
+      if (old.resolved !== undefined) return s;
+      const card: Card =
+        old.acked === true
+          ? { ...old, approval: m.p.approval }
+          : { ...withoutKeys(old, "deciding"), approval: m.p.approval };
       return { ...s, cards: s.cards.map((c) => (c === old ? card : c)) };
     }
     case "approval.resolved": {
@@ -245,8 +259,14 @@ function message(s: State, m: ServerMessage, at: number): State {
       }
       const updated: Card =
         m.kind === "ack"
-          ? { ...withoutKeys(card, "deciding", "error"), acked: true }
-          : { ...withoutKeys(card, "deciding"), error: nackText(m.p.reason) };
+          ? { ...withoutKeys(card, "deciding", "error", "lost"), acked: true, ackedAt: at }
+          : {
+              ...withoutKeys(card, "deciding"),
+              error:
+                m.p.reason === "already_decided"
+                  ? "本機端已收到先前的決定，結果以本機為準；請重新整理確認"
+                  : nackText(m.p.reason),
+            };
       return {
         ...s,
         ...(m.kind === "nack" && m.p.reason === "auth_expired"
@@ -272,7 +292,7 @@ export function reduce(s: State, e: Event): State {
           ? {
               cards: s.cards.map((c) =>
                 c.deciding !== undefined && c.acked !== true
-                  ? { ...withoutKeys(c, "deciding"), error: LOST }
+                  ? { ...withoutKeys(c, "deciding"), error: LOST, lost: true }
                   : c,
               ),
             }
@@ -323,7 +343,11 @@ export function reduce(s: State, e: Event): State {
         ...s,
         cards: s.cards.map((c) =>
           c.approval.approvalId === e.approvalId
-            ? { ...withoutKeys(c, "error"), deciding: e.id }
+            ? {
+                ...withoutKeys(c, "error", "lost"),
+                deciding: e.id,
+                ...(e.choice === undefined ? {} : { choice: e.choice }),
+              }
             : c,
         ),
       };

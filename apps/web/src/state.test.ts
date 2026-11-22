@@ -253,11 +253,54 @@ describe("state: a conversation", () => {
     const back = run([{ type: "connection", connection: "open" }, req(1), req(2)], sent);
     expect(back.cards[0]?.deciding).toBeUndefined();
     expect(back.cards[0]?.error).toBe("連線曾中斷，決定可能沒有送達；可以再按一次");
-    // Sent again after hello, it is still pending: the local end never took the decision.
-    expect(back.cards[1]?.acked).toBeUndefined();
+    // Sent again after hello: what the page knows stays, the acked one keeps waiting.
+    expect(back.cards[0]?.error).toBe("連線曾中斷，決定可能沒有送達；可以再按一次");
+    expect(back.cards[1]?.acked).toBe(true);
     const waiting = run([{ type: "connection", connection: "open" }], sent);
     expect(waiting.cards[1]?.acked).toBe(true);
     expect(waiting.cards[1]?.error).toBeUndefined();
+  });
+
+  test("a resend of a decided card is ignored; of an acked one keeps it waiting, with the new fields", () => {
+    const decided = run([req(1), req(2), res(2), res(1)], run(open));
+    const again = run([req(1)], decided);
+    expect(again.cards[0]?.resolved?.state).toBe("approved");
+    expect(again.cards[0]?.decidedOrder).toBe(2);
+    const acked = run(
+      [
+        req(3),
+        { type: "deciding", approvalId: "approval-00000003", id: "m3", choice: "approved" },
+        server("ack", {}, { re: "m3" }),
+      ],
+      run(open),
+    );
+    const later = run(
+      [
+        server("approval.request", {
+          approval: { ...approval, approvalId: "approval-00000003", expiresAt: 999 },
+        }),
+      ],
+      acked,
+    );
+    expect(later.cards[0]?.acked).toBe(true);
+    expect(later.cards[0]?.approval.expiresAt).toBe(999);
+  });
+
+  test("lost to a drop: the card remembers what was chosen; the ack keeps its time", () => {
+    const sent = run(
+      [req(1), { type: "deciding", approvalId: "approval-00000001", id: "m1", choice: "approved" }],
+      run(open),
+    );
+    const back = run(
+      [
+        { type: "connection", connection: "offline" },
+        { type: "connection", connection: "open" },
+      ],
+      sent,
+    );
+    expect(back.cards[0]).toMatchObject({ lost: true, choice: "approved" });
+    const acked = run([server("ack", {}, { re: "m1" })], sent);
+    expect(acked.cards[0]?.ackedAt).toBe(1000);
   });
 
   test("another epoch: everything held is dropped", () => {
@@ -318,7 +361,7 @@ describe("state: approvals", () => {
       { type: "deciding", approvalId: approval.approvalId, id: "d1" },
       server("nack", { reason: "already_decided" }, { re: "d1" }),
     ]);
-    expect(late.cards[0]?.error).toBe("已在別處決定");
+    expect(late.cards[0]?.error).toBe("本機端已收到先前的決定，結果以本機為準；請重新整理確認");
     expect(late.cards[0]?.deciding).toBeUndefined();
   });
 
