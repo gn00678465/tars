@@ -145,6 +145,27 @@ export interface State {
   readonly compactReq?: string;
   /** How the owner's last compaction here ended, when not with a summary; cleared by the next. */
   readonly compactEnd?: CompactEnd;
+  /** This page's conv.archive, until its ack or nack; undo: it takes the archive back. */
+  readonly archiveReq?: {
+    readonly id: string;
+    readonly conv: string;
+    readonly undo: boolean;
+  };
+  /**
+   * What the archive toast says, for a few seconds: 已封存 with its 復原 (undo), or a sentence.
+   * seq tells one toast from the next, so an old one's timer does not close a new one.
+   */
+  readonly archiveNote?: {
+    readonly undo: boolean;
+    /** With undo: the conversation 復原 takes back. */
+    readonly conv?: string;
+    readonly text?: string;
+    readonly seq: number;
+  };
+  /** The last conv.open the page sent: a refusal for an archived conversation is told apart by it. */
+  readonly openReq?: { readonly id: string; readonly conv: string };
+  /** How many times the page was taken out of a conversation that was archived: it starts anew. */
+  readonly left?: number;
 }
 
 export interface CompactEnd {
@@ -186,6 +207,15 @@ export type Event =
     }
   /** approval.decide could not be sent at all: the card says so instead of waiting. */
   | { readonly type: "decide_failed"; readonly approvalId: string }
+  /** conv.archive went (its id), or could not be sent at all (no id). */
+  | {
+      readonly type: "archive_sent";
+      readonly conv: string;
+      readonly undo: boolean;
+      readonly id?: string;
+    }
+  | { readonly type: "archive_toast_done"; readonly seq: number }
+  | { readonly type: "open_sent"; readonly conv: string; readonly id?: string }
   /** The owner acted on what these notices asked for. */
   | { readonly type: "notices_done"; readonly code: string }
   | { readonly type: "wiki"; readonly e: WikiEvent };
@@ -261,6 +291,30 @@ const compactOver = (s: State): State => ({
   ...withoutKeys(s, "compacting"),
   notices: s.notices.filter((n) => n.code !== "compact_start"),
 });
+
+const ARCHIVED_ELSEWHERE = "這個對話已封存；要取回請在終端執行 tars chat --unarchive";
+const UNDO_LOST =
+  "復原不了：已超過 60 秒，或不是從這個分頁封存的；要取回請在終端執行 tars chat --unarchive";
+
+const note = (
+  s: State,
+  n: { undo: boolean; conv?: string; text?: string },
+): State["archiveNote"] => ({
+  ...n,
+  seq: (s.archiveNote?.seq ?? 0) + 1,
+});
+
+/**
+ * The page is on a conversation that is archived: it goes back to a new one, and the list loses
+ * it until the local end sends the next one. The page's own state (the model picked, the level)
+ * is forgotten by whoever sees `left` change.
+ */
+const leaveArchived = (s: State, conv: string): State => {
+  const gone = { ...s, convs: s.convs.filter((c) => c.id !== conv) };
+  return s.conv === conv
+    ? { ...reduce(gone, { type: "open_conv", conv: undefined }), left: (s.left ?? 0) + 1 }
+    : gone;
+};
 
 function message(s: State, m: ServerMessage, at: number): State {
   const wiki = wikiMessage(s.wiki, m);
@@ -412,6 +466,15 @@ function message(s: State, m: ServerMessage, at: number): State {
     }
     case "notice": {
       if (m.conv !== undefined && !here) return s;
+      // Archived by another device or tab: this page leaves it and says why. Its own archive
+      // is answered by the ack, which brings the toast with its 復原.
+      if (m.p.code === "conv_archived" && m.conv !== undefined) {
+        const own = s.archiveReq?.conv === m.conv && !s.archiveReq.undo;
+        const left = leaveArchived(s, m.conv);
+        return own
+          ? left
+          : { ...left, archiveNote: note(s, { undo: false, text: ARCHIVED_ELSEWHERE }) };
+      }
       const notices = [...s.notices, m.p].slice(-NOTICES);
       if (m.p.code === "compact_start") return { ...s, notices, compacting: true };
       if (m.p.code === "compact_failed" || m.p.code === "compact_skipped")
@@ -469,6 +532,36 @@ function message(s: State, m: ServerMessage, at: number): State {
     }
     case "ack":
     case "nack": {
+      const archive = s.archiveReq;
+      if (archive !== undefined && m.re === archive.id) {
+        const settled = withoutKeys(s, "archiveReq");
+        if (m.kind === "ack")
+          return archive.undo
+            ? withoutKeys(settled, "archiveNote")
+            : {
+                ...leaveArchived(settled, archive.conv),
+                archiveNote: note(s, { undo: true, conv: archive.conv }),
+              };
+        return {
+          ...settled,
+          ...(m.p.reason === "auth_expired" ? { connection: "auth_expired" as const } : {}),
+          archiveNote: note(s, {
+            undo: false,
+            text: archive.undo && m.p.reason === "not_allowed" ? UNDO_LOST : nackText(m.p.reason),
+          }),
+        };
+      }
+      // conv.open of a conversation archived meanwhile (a tab that was offline): leave it.
+      if (
+        s.openReq !== undefined &&
+        m.re === s.openReq.id &&
+        m.kind === "nack" &&
+        m.p.reason === "conv_archived"
+      )
+        return {
+          ...leaveArchived(withoutKeys(s, "openReq"), s.openReq.conv),
+          archiveNote: note(s, { undo: false, text: ARCHIVED_ELSEWHERE }),
+        };
       if (s.compactReq !== undefined && m.re === s.compactReq) {
         const settled = withoutKeys(s, "compactReq");
         // The ack: compact started follows. A nack: it never ran, the conversation is as it was.
@@ -580,6 +673,14 @@ export function reduce(s: State, e: Event): State {
     }
     case "submitted":
       return { ...withoutKeys(s, "error", "compactEnd"), submitting: e.requestId };
+    case "archive_sent":
+      return e.id === undefined
+        ? { ...s, archiveNote: note(s, { undo: false, text: nackText("offline") }) }
+        : { ...s, archiveReq: { id: e.id, conv: e.conv, undo: e.undo } };
+    case "archive_toast_done":
+      return s.archiveNote?.seq === e.seq ? withoutKeys(s, "archiveNote") : s;
+    case "open_sent":
+      return e.id === undefined ? s : { ...s, openReq: { id: e.id, conv: e.conv } };
     case "compact_sent":
       return e.id === undefined
         ? { ...s, compactEnd: { state: "failed", nack: "offline" } }

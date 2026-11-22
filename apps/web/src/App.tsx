@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard, announceText } from "./components/ApprovalCard.tsx";
+import { ArchiveToast } from "./components/ArchiveToast.tsx";
 import { Composer } from "./components/Composer.tsx";
 import { ContextHint, ContinueHints } from "./components/ContinueHints.tsx";
 import { ContextSheet } from "./components/ContextSheet.tsx";
@@ -30,7 +31,15 @@ import { WikiSideList, WikiTabs } from "./components/wiki/WikiSidebar.tsx";
 import { WikiWorkspace } from "./components/wiki/WikiWorkspace.tsx";
 import type { Builtin } from "./components/slash.ts";
 import type { Socket } from "./socket.ts";
-import { composerBlocked, initial, localNow, reduce, runBusy, sendBusy } from "./state.ts";
+import {
+  composerBlocked,
+  initial,
+  localNow,
+  NACK_TEXT,
+  reduce,
+  runBusy,
+  sendBusy,
+} from "./state.ts";
 import { useWikiRequests } from "./wiki/requests.ts";
 import type { WikiEvent } from "./wiki/state.ts";
 
@@ -44,6 +53,8 @@ const BOTTOM_PX = 24;
 const PING_MS = 30_000;
 /** How long "from the next message" shows after a level is picked, as the prototype's toast. */
 const TOAST_MS = 2_600;
+/** How long 已封存 · 復原 stays: longer than a toast, so a thumb on a phone is not too late. */
+const ARCHIVE_TOAST_MS = 8_000;
 
 export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [state, dispatch] = useReducer(reduce, initial);
@@ -61,12 +72,18 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     return () => clearInterval(t);
   }, [now]);
 
+  /** conv.open, remembering its id: a refusal for an archived conversation is told apart by it. */
+  const openSent = (c: string) => {
+    const id = socket.send("conv.open", {}, c);
+    dispatch({ type: "open_sent", conv: c, ...(id === undefined ? {} : { id }) });
+  };
+
   // After every hello (a reload, a reconnect, another epoch): the list and the open conversation.
   const { connection, conv } = state;
   useEffect(() => {
     if (connection !== "open") return;
     socket.send("conv.list");
-    if (conv !== undefined) socket.send("conv.open", {}, conv);
+    if (conv !== undefined) openSent(conv);
     // conv is read, not watched: opening another conversation asks for it itself.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection, socket]);
@@ -74,7 +91,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // A new conversation followed from an ack: its start and first items were missed.
   const { load } = state;
   useEffect(() => {
-    if (load !== undefined) socket.send("conv.open", {}, load);
+    if (load !== undefined) openSent(load);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load, socket]);
 
   // A turn that ended may have made or renamed a conversation.
@@ -136,6 +154,37 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     const hide = setTimeout(() => setToast(0), TOAST_MS);
     return () => clearTimeout(hide);
   }, [toast]);
+  // The archive toast goes by itself; each one has its own seq, so an old timer leaves a new one.
+  const archiveNote = state.archiveNote;
+  useEffect(() => {
+    if (archiveNote === undefined) return;
+    const hide = setTimeout(
+      () => dispatch({ type: "archive_toast_done", seq: archiveNote.seq }),
+      ARCHIVE_TOAST_MS,
+    );
+    return () => clearTimeout(hide);
+  }, [archiveNote]);
+  // An archive was answered, here or elsewhere: the list is asked for again (the local end also
+  // sends it), since what the page has may be one conversation short or long.
+  useEffect(() => {
+    if (state.archiveNote !== undefined) socket.send("conv.list");
+  }, [state.archiveNote, socket]);
+  // The page was taken out of a conversation that was archived: it starts a new one, forgetting
+  // the model and the level picked for the old one.
+  const { left } = state;
+  useEffect(() => {
+    if (left === undefined) return;
+    setNext(undefined);
+    setEffortPick(undefined);
+    setEffortOpen(false);
+    setModelOpen(false);
+    setDrawer(false);
+    setStarted((n) => n + 1);
+  }, [left]);
+  // A message to an archived conversation was refused: the list is asked for again.
+  useEffect(() => {
+    if (state.error === NACK_TEXT.conv_archived) socket.send("conv.list");
+  }, [state.error, socket]);
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
   /** The reconnection the owner closed; a later one shows again. */
   const [seenReconnect, setSeenReconnect] = useState<number | undefined>(undefined);
@@ -178,7 +227,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     dispatch({ type: "open_conv", conv: c });
     setDrawer(false);
     if (c === undefined) return setStarted((n) => n + 1);
-    socket.send("conv.open", {}, c);
+    openSent(c);
     setOpened((n) => n + 1);
   };
   // Only a local end that sent conv.context takes conv.compact.
@@ -188,6 +237,18 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     setContextSheet(undefined);
     const id = socket.send("conv.compact", focus === undefined ? {} : { focus }, state.conv);
     dispatch({ type: "compact_sent", ...(id === undefined ? {} : { id }) });
+  };
+  // Only a local end that says archive takes conv.archive; a conversation waiting on an approval
+  // or the one running now cannot be archived, and the action says so.
+  const archiveWhy = (id: string) =>
+    waiting.has(id)
+      ? "有待核准項目，不能封存"
+      : id === state.conv && (running || runBusy(state) !== undefined)
+        ? "回合進行中，不能封存"
+        : undefined;
+  const archive = (conv: string, undo: boolean) => {
+    const id = socket.send("conv.archive", { archived: !undo }, conv);
+    dispatch({ type: "archive_sent", conv, undo, ...(id === undefined ? {} : { id }) });
   };
   const decide = (card: (typeof state.cards)[number], decision: "approved" | "denied") => {
     const id = socket.send("approval.decide", {
@@ -396,6 +457,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           now={today}
           modelName={(provider, id) => shortName(modelName(provider, id))}
           {...(cert === undefined ? {} : { cert })}
+          {...(state.status?.archive === true && state.connection === "open"
+            ? { archive: { blocked: archiveWhy, onArchive: (c: string) => archive(c, false) } }
+            : {})}
           {...(wiki.available ? { tabs: <WikiTabs wiki={wiki} dispatch={toWiki} /> } : {})}
           {...(wikiOn
             ? {
@@ -760,6 +824,16 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               if (state.conv !== undefined) open(undefined);
               setNext({ model, from: source as string });
             }}
+          />
+        )}
+        {archiveNote === undefined ? null : (
+          <ArchiveToast
+            note={archiveNote}
+            onUndo={() => {
+              if (archiveNote.conv !== undefined && state.archiveReq === undefined)
+                archive(archiveNote.conv, true);
+            }}
+            onClose={() => dispatch({ type: "archive_toast_done", seq: archiveNote.seq })}
           />
         )}
       </div>

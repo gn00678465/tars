@@ -34,6 +34,14 @@ export function ConversationList(props: {
   tabs?: ReactNode;
   /** The knowledge base's pages, in place of the conversations while its tab is on. */
   wiki?: ReactNode;
+  /**
+   * Archiving, when the local end takes it: why a conversation cannot be archived now (the
+   * action is off and says so), or undefined; and the action itself.
+   */
+  archive?: {
+    readonly blocked: (conv: string) => string | undefined;
+    readonly onArchive: (conv: string) => void;
+  };
 }) {
   const aside = useRef<HTMLElement>(null);
   // The parent may be past the list's 500: then it is named only as another conversation.
@@ -96,8 +104,15 @@ export function ConversationList(props: {
         ) : (
           props.convs.map((c) => {
             const here = c.id === props.current;
+            const why = props.archive?.blocked(c.id);
             return (
-              <div className="conv-list-row" role="listitem" key={c.id}>
+              <div
+                className={
+                  props.archive === undefined ? "conv-list-row" : "conv-list-row has-archive"
+                }
+                role="listitem"
+                key={c.id}
+              >
                 <button
                   className={here ? "conv-item active" : "conv-item"}
                   type="button"
@@ -120,6 +135,18 @@ export function ConversationList(props: {
                     </div>
                   )}
                 </button>
+                {props.archive === undefined ? null : (
+                  <button
+                    className="conv-archive-btn"
+                    type="button"
+                    aria-label={`封存「${titleOf(c)}」`}
+                    title={why ?? "封存"}
+                    disabled={why !== undefined}
+                    onClick={() => props.archive?.onArchive(c.id)}
+                  >
+                    <Icon name="archive" size={16} />
+                  </button>
+                )}
               </div>
             );
           })

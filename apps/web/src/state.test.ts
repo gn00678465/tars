@@ -734,3 +734,175 @@ describe("state: the price table (F)", () => {
     expect(run([{ type: "connection", connection: "offline" }], s).catalog).toBeUndefined();
   });
 });
+
+describe("archive", () => {
+  const conv = (id: string, title = id) => ({
+    id,
+    title,
+    provider: "anthropic",
+    model: "m",
+    updatedAt: 1,
+  });
+  const listed = run([
+    server("conv.list.result", { convs: [conv("conv-1"), conv("conv-2")] }),
+    { type: "open_conv", conv: "conv-1" },
+  ]);
+
+  test("its ack takes the open conversation out of the list and the page, and brings the toast", () => {
+    const s = run(
+      [
+        { type: "archive_sent", conv: "conv-1", undo: false, id: "a-1" },
+        server("ack", {}, { re: "a-1" }),
+      ],
+      listed,
+    );
+    expect(s.conv).toBeUndefined();
+    expect(s.convs.map((c) => c.id)).toEqual(["conv-2"]);
+    expect(s.left).toBe(1);
+    expect(s.archiveReq).toBeUndefined();
+    expect(s.archiveNote).toMatchObject({ undo: true, conv: "conv-1" });
+  });
+
+  test("another conversation: the page stays where it is and does not start anew", () => {
+    const s = run(
+      [
+        { type: "archive_sent", conv: "conv-2", undo: false, id: "a-1" },
+        server("ack", {}, { re: "a-1" }),
+      ],
+      listed,
+    );
+    expect(s.conv).toBe("conv-1");
+    expect(s.left).toBeUndefined();
+    expect(s.convs.map((c) => c.id)).toEqual(["conv-1"]);
+    expect(s.archiveNote?.undo).toBe(true);
+  });
+
+  test("the local end's notice before its ack does not lose the toast", () => {
+    const s = run(
+      [
+        { type: "archive_sent", conv: "conv-1", undo: false, id: "a-1" },
+        server("notice", { code: "conv_archived", data: { conv: "conv-1" } }, { conv: "conv-1" }),
+        server("ack", {}, { re: "a-1" }),
+      ],
+      listed,
+    );
+    expect(s.conv).toBeUndefined();
+    expect(s.left).toBe(1);
+    expect(s.archiveNote).toMatchObject({ undo: true, conv: "conv-1" });
+  });
+
+  test("archived from another tab: the page leaves it and says it is archived, with no 復原", () => {
+    const s = run(
+      [server("notice", { code: "conv_archived", data: { conv: "conv-1" } }, { conv: "conv-1" })],
+      listed,
+    );
+    expect(s.conv).toBeUndefined();
+    expect(s.convs.map((c) => c.id)).toEqual(["conv-2"]);
+    expect(s.archiveNote).toMatchObject({ undo: false });
+    expect(s.archiveNote?.text).toContain("tars chat --unarchive");
+  });
+
+  test("a notice for a conversation the page is not on changes nothing", () => {
+    const s = run(
+      [server("notice", { code: "conv_archived", data: { conv: "conv-2" } }, { conv: "conv-2" })],
+      listed,
+    );
+    expect(s).toEqual(listed);
+  });
+
+  test("a refusal says why in words, and the conversation stays", () => {
+    const s = run(
+      [
+        { type: "archive_sent", conv: "conv-1", undo: false, id: "a-1" },
+        server("nack", { reason: "conv_active" }, { re: "a-1" }),
+      ],
+      listed,
+    );
+    expect(s.conv).toBe("conv-1");
+    expect(s.convs).toHaveLength(2);
+    expect(s.archiveNote).toMatchObject({
+      undo: false,
+      text: "這個對話還有進行中的回合或待核准項目，不能封存",
+    });
+  });
+
+  test("復原: the ack closes the toast; a refusal says it can only be done in the terminal", () => {
+    const archived = run(
+      [
+        { type: "archive_sent", conv: "conv-1", undo: false, id: "a-1" },
+        server("ack", {}, { re: "a-1" }),
+      ],
+      listed,
+    );
+    const back = run(
+      [
+        { type: "archive_sent", conv: "conv-1", undo: true, id: "a-2" },
+        server("ack", {}, { re: "a-2" }),
+      ],
+      archived,
+    );
+    expect(back.archiveNote).toBeUndefined();
+    const late = run(
+      [
+        { type: "archive_sent", conv: "conv-1", undo: true, id: "a-2" },
+        server("nack", { reason: "not_allowed" }, { re: "a-2" }),
+      ],
+      archived,
+    );
+    expect(late.archiveNote?.undo).toBe(false);
+    expect(late.archiveNote?.text).toContain("tars chat --unarchive");
+  });
+
+  test("a toast's timer closes only that toast", () => {
+    const first = run(
+      [
+        { type: "archive_sent", conv: "conv-2", undo: false, id: "a-1" },
+        server("ack", {}, { re: "a-1" }),
+      ],
+      listed,
+    );
+    const seq = first.archiveNote?.seq as number;
+    const second = run(
+      [
+        { type: "archive_sent", conv: "conv-1", undo: false, id: "a-2" },
+        server("ack", {}, { re: "a-2" }),
+      ],
+      first,
+    );
+    expect(reduce(second, { type: "archive_toast_done", seq }).archiveNote).toBeDefined();
+    expect(
+      reduce(second, { type: "archive_toast_done", seq: second.archiveNote?.seq as number })
+        .archiveNote,
+    ).toBeUndefined();
+  });
+
+  test("conv.open refused for an archived conversation: the page leaves it", () => {
+    const s = run(
+      [
+        { type: "open_sent", conv: "conv-1", id: "o-1" },
+        server("nack", { reason: "conv_archived" }, { re: "o-1" }),
+      ],
+      listed,
+    );
+    expect(s.conv).toBeUndefined();
+    expect(s.convs.map((c) => c.id)).toEqual(["conv-2"]);
+    expect(s.archiveNote?.text).toContain("已封存");
+  });
+
+  test("a message to an archived conversation: the refusal text names the terminal", () => {
+    const s = run(
+      [
+        { type: "submitted", requestId: "r-1" },
+        { type: "submit_result", requestId: "r-1", ok: false, reason: "conv_archived" },
+      ],
+      listed,
+    );
+    expect(s.error).toBe("這個對話已封存，不能繼續；要取回請在終端執行 tars chat --unarchive");
+  });
+
+  test("not sent at all: the toast says the page is offline", () => {
+    const s = run([{ type: "archive_sent", conv: "conv-1", undo: false }], listed);
+    expect(s.archiveNote?.text).toBe("本機端離線");
+    expect(s.convs).toHaveLength(2);
+  });
+});

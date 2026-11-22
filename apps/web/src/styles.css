@@ -2697,3 +2697,107 @@ button:disabled {
     transition: none;
   }
 }
+
+/* Archive: the action on a conversation, and the note after it (prototype scene 16) */
+.conv-list-row.has-archive {
+  position: relative;
+}
+.conv-list-row.has-archive .conv-item {
+  padding-right: 44px;
+}
+.conv-archive-btn {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-control);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+  opacity: 0;
+  transition:
+    opacity var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out);
+}
+.conv-list-row.has-archive:hover .conv-archive-btn,
+.conv-list-row.has-archive:focus-within .conv-archive-btn,
+.conv-archive-btn:focus-visible {
+  opacity: 1;
+}
+.conv-archive-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--foreground);
+}
+.conv-archive-btn:disabled {
+  cursor: not-allowed;
+}
+.conv-list-row.has-archive:hover .conv-archive-btn:disabled {
+  opacity: 0.4;
+}
+
+.archive-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 112px;
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 6px 6px 6px 16px;
+  font-size: 13px;
+  color: var(--foreground);
+}
+.archive-toast:not(:has(.archive-toast-undo)) {
+  white-space: normal;
+}
+.archive-toast:has(.archive-toast-undo) {
+  white-space: nowrap;
+}
+.archive-toast-dot {
+  color: var(--subtle-foreground);
+}
+.archive-toast-undo {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: var(--radius-control);
+  font-weight: 600;
+  color: var(--status-active);
+}
+.archive-toast-undo:hover {
+  background: var(--status-active-bg);
+}
+/* Over the workspace, not the folded-in column beside it. */
+@media (min-width: 1024px) {
+  .app-shell:not(:has(.sidebar.collapsed)) .archive-toast {
+    left: calc(50% + 140px);
+  }
+}
+
+/* No hover on touch or a narrow screen: the action is always shown, with a 44px target. */
+@media (hover: none), (max-width: 767px) {
+  .conv-list-row.has-archive .conv-item {
+    padding-right: 56px;
+  }
+  .conv-archive-btn {
+    opacity: 1;
+    width: 44px;
+    height: 44px;
+    top: 50%;
+    right: 4px;
+    transform: translateY(-50%);
+  }
+  .conv-archive-btn:disabled {
+    opacity: 0.4;
+  }
+  .archive-toast-undo {
+    min-height: 44px;
+  }
+  .archive-toast {
+    bottom: 96px;
+  }
+}
