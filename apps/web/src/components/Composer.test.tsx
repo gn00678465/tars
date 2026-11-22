@@ -188,6 +188,15 @@ test("/ opens the menu: built-ins, the skills, local-only ones marked and not ch
     { name: "/memory", selected: false, disabled: true },
   ]);
   expect(c.root.textContent).toContain("僅限本機");
+  const title = (name: string) =>
+    [...c.root.querySelectorAll<HTMLElement>("[role=option]")]
+      .find((o) => o.querySelector(".slash-cmd")?.textContent === name)
+      ?.getAttribute("title");
+  expect(title("/memory")).toBe("此 skill 僅限在本機終端 tars claude 執行");
+  expect(title("/new")).toBe("開啟新對話（模型與推理強度在輸入框選）");
+  expect(c.root.querySelector(".slash-menu-foot")?.textContent).toContain(
+    "共 7 項（往下捲動檢視 Skills 與本機限定）",
+  );
   // No fake items: the terminal's /effort, /compact, /wiki have nothing to run here yet.
   expect(c.root.textContent).not.toMatch(/\/(effort|compact|wiki)/);
 });
@@ -241,11 +250,13 @@ test("a local-only skill or an unknown name sends nothing and says why; // sends
   await c.key("Enter");
   expect(c.sent).toEqual([]);
   expect(c.root.querySelector("[role=alert]")?.textContent).toBe(
-    "memory 要在 tars claude 裡用，這裡不送出",
+    "/memory 僅限在本機終端 tars claude 執行。",
   );
   await c.type("/nope x");
   await c.key("Enter");
-  expect(c.root.querySelector("[role=alert]")?.textContent).toContain("不認得的指令 /nope");
+  expect(c.root.querySelector("[role=alert]")?.textContent).toBe(
+    "不認得的指令「/nope」。輸入 / 查看可用指令與 skills，或以 // 開頭送出一般文字。",
+  );
   await c.type("//etc/hosts 是什麼");
   await c.key("Enter");
   expect(c.sent).toEqual(["/etc/hosts 是什麼"]);

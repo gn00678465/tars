@@ -92,8 +92,11 @@ export function slashOf(
   if (skills === undefined) return { kind: "message", text: line };
   const skill = skills.find((s) => s.name === name);
   if (skill === undefined)
-    return { kind: "refused", text: `不認得的指令 /${name}。輸入 /help 看可用的指令` };
+    return {
+      kind: "refused",
+      text: `不認得的指令「/${name}」。輸入 / 查看可用指令與 skills，或以 // 開頭送出一般文字。`,
+    };
   if (skill.localOnly)
-    return { kind: "refused", text: `${name} 要在 tars claude 裡用，這裡不送出` };
+    return { kind: "refused", text: `/${name} 僅限在本機終端 tars claude 執行。` };
   return { kind: "message", text: skillInvocationText(name, content) };
 }

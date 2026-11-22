@@ -113,6 +113,7 @@ export function Composer(props: {
                     role="option"
                     aria-selected={o === selected}
                     aria-disabled={!o.enabled}
+                    title={o.enabled ? o.description : "此 skill 僅限在本機終端 tars claude 執行"}
                     tabIndex={-1}
                     // Keep the focus in the text box.
                     onMouseDown={(e) => e.preventDefault()}
@@ -129,7 +130,7 @@ export function Composer(props: {
             )}
           </div>
           <div className="slash-menu-foot">
-            <span>共 {menu.length} 項</span>
+            <span>共 {menu.length} 項（往下捲動檢視 Skills 與本機限定）</span>
             <span>↑↓ 選擇 · Tab/Enter 套用 · Esc 關閉</span>
           </div>
         </div>
