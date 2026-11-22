@@ -12,6 +12,7 @@ import {
   type WireStatus,
 } from "@tars/protocol";
 import { SUMMARY_HEADINGS } from "../../../src/features/agent/compaction.ts";
+import { estimateTokens, utf8Bytes } from "../../../src/features/agent/bytes.ts";
 import { loadConfig } from "../../../src/features/agent/config.ts";
 import { adjust } from "../../../src/features/agent/ledger.ts";
 import * as store from "../../../src/features/agent/store.ts";
@@ -1165,8 +1166,43 @@ describe("conv.compact: the terminal's /compact from a page", () => {
     const prompt = JSON.stringify(s.h.fake.messages().at(-1)?.body);
     expect(prompt).toContain("Additional focus: 保留路徑");
     allValid(s);
-    const context = s.hub.to(CONN_A, "conv.context").at(-1)?.p as { lastCompactedAt?: number };
+    const context = s.hub.to(CONN_A, "conv.context").at(-1)?.p as {
+      lastCompactedAt?: number;
+      contextUsed: number;
+      estimated?: boolean;
+    };
     expect(context.lastCompactedAt).toBe(s.h.clock.now().getTime());
+    // The measured total is zeroed: the kept turns and the summary, as an estimate, not 0.
+    expect(store.getConversation(s.db, conv).lastTotalInputTokens).toBe(0);
+    expect(context.contextUsed).toBe(
+      (item?.keptTokens as number) + estimateTokens(utf8Bytes(SUMMARY)),
+    );
+    expect(context.estimated).toBe(true);
+    // The owner asked for it: the notice says so, not that the context is near its limit.
+    const notices = s.hub.to(CONN_B, "notice").map((m) => m.p);
+    expect(notices).toContainEqual({ code: "compact_start", data: { trigger: "manual" } });
+  });
+
+  test("the next request measures the context again: no estimate after it", async () => {
+    const { s, conv } = await opened();
+    s.h.fake.reply(text(SUMMARY));
+    await s.msg(CONN_A, "conv.compact", {}, { conv });
+    await done(s);
+    s.h.fake.reply(text("好"));
+    await s.msg(
+      CONN_A,
+      "turn.submit",
+      { requestId: "req-after-compact", text: "暗號是？" },
+      { conv },
+    );
+    await done(s);
+    const context = s.hub.to(CONN_A, "conv.context").at(-1)?.p as {
+      contextUsed: number;
+      estimated?: boolean;
+    };
+    expect(context.estimated).toBeUndefined();
+    expect(context.contextUsed).toBe(store.getConversation(s.db, conv).lastTotalInputTokens);
+    expect(context.contextUsed).toBeGreaterThan(0);
   });
 
   test("one at a time: a second compact and a turn while it runs are busy", async () => {

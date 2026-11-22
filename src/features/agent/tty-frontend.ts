@@ -18,7 +18,8 @@ type Data = Readonly<Record<string, string | number>>;
 const reasonText = (reason: unknown) => REASON_TEXT[reason as ReasonCode] ?? String(reason);
 
 const NOTICE_TEXT: Readonly<Record<NoticeCode, (d: Data) => string>> = {
-  compact_start: () => "（上下文接近上限，先壓縮較早的部分）",
+  compact_start: (d) =>
+    d.trigger === "manual" ? "（正在壓縮較早的部分）" : "（上下文接近上限，先壓縮較早的部分）",
   compact_skipped: () => "上下文接近上限，但沒有可以壓縮的部分",
   compact_failed: (d) => `壓縮失敗：${reasonText(d.reason)}`,
   blocked: (d) => `已擋下：${d.reason}`,

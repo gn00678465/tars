@@ -244,6 +244,11 @@ export const wireContext = z.strictObject({
   /** Of the last request's input, the share read from the cache, 0 to 100. */
   cacheHitPct: z.number().min(0).max(100).optional(),
   lastCompactedAt: z.number().optional(),
+  /**
+   * contextUsed is tars's estimate, not a request's count: after a compaction, before the next
+   * request measures it.
+   */
+  estimated: z.literal(true).optional(),
   warnRatio: z.number(),
   compactRatio: z.number(),
   stopRatio: z.number(),

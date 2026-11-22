@@ -157,3 +157,90 @@ test("E5, auto compaction off: past the stop line the send is off with the reaso
   expect(sent("conv.compact")).toHaveLength(1);
   unmount();
 });
+
+const notices = (root: HTMLElement) =>
+  [...root.querySelectorAll(".task-notice .task-notice-title")].map((e) => e.textContent);
+
+test("the owner's compaction: its notice says no limit, and is gone once the summary comes", async () => {
+  const { root, type, key, sent, receive, unmount } = await opened(CONTEXT);
+  await type("/compact ");
+  await key("Enter");
+  const [compact] = sent("conv.compact");
+  await receive(server("ack", {}, { re: compact?.id }));
+  await receive(server("compact", { state: "started" }, { conv: "conv-1" }));
+  await receive(
+    server("notice", { code: "compact_start", data: { trigger: "manual" } }, { conv: "conv-1" }),
+  );
+  expect(notices(root)).toEqual(["正在壓縮較早的部分"]);
+  await receive(
+    server(
+      "item",
+      {
+        item: {
+          seq: 9,
+          turn: "turn-c",
+          kind: "compaction",
+          text: "## Goal\n- x",
+          truncated: false,
+          trigger: "manual",
+          keptTokens: 20_000,
+          firstKeptSeq: 1,
+        },
+      },
+      { conv: "conv-1" },
+    ),
+  );
+  await receive(server("compact", { state: "completed" }, { conv: "conv-1" }));
+  expect(notices(root)).toEqual([]);
+  expect(root.querySelector(".turn-status")).toBeNull();
+  // Still gone after the next message and its reply.
+  await type("暗號是？");
+  await key("Enter");
+  const [submit] = sent("turn.submit");
+  const requestId = (submit?.p as { requestId: string } | undefined)?.requestId;
+  await receive(
+    server("turn", { turn: "turn-2", requestId, state: "started" }, { conv: "conv-1" }),
+  );
+  await receive(
+    server("turn", { turn: "turn-2", requestId, state: "completed" }, { conv: "conv-1" }),
+  );
+  expect(notices(root)).toEqual([]);
+  unmount();
+});
+
+test("an automatic compaction says the limit; its notice goes when the turn starts", async () => {
+  const { root, receive, unmount } = await opened(CONTEXT);
+  await receive(
+    server("notice", { code: "compact_start", data: { trigger: "auto" } }, { conv: "conv-1" }),
+  );
+  expect(notices(root)).toEqual(["上下文接近上限，正在壓縮較早的部分"]);
+  expect(root.querySelector(".turn-status")?.textContent).toBe("壓縮中…");
+  await receive(server("turn", { turn: "turn-2", state: "started" }, { conv: "conv-1" }));
+  expect(notices(root)).toEqual([]);
+  unmount();
+});
+
+test("a skipped compaction's card goes with the next message", async () => {
+  const { root, type, key, sent, receive, unmount } = await opened(CONTEXT);
+  await type("/compact ");
+  await key("Enter");
+  const [compact] = sent("conv.compact");
+  await receive(server("ack", {}, { re: compact?.id }));
+  await receive(server("compact", { state: "started" }, { conv: "conv-1" }));
+  await receive(server("compact", { state: "skipped" }, { conv: "conv-1" }));
+  expect(notices(root)).toEqual(["沒有可以壓縮的部分"]);
+  await type("下一則");
+  await key("Enter");
+  expect(notices(root)).toEqual([]);
+  unmount();
+});
+
+test("after a compaction, before a request measures it: the local end's estimate, marked 約", async () => {
+  const { root, unmount } = await opened({ ...CONTEXT, contextUsed: 24_000, estimated: true });
+  expect(root.querySelector(".context-trigger .mono")?.textContent).toBe("約 12%");
+  await act(async () => (root.querySelector(".context-trigger") as HTMLButtonElement).click());
+  expect(root.querySelector(".sheet-panel dd")?.textContent).toBe(
+    "約 24,000 / 200,000 tokens（12%），壓縮後的估計，下一則訊息後更新",
+  );
+  unmount();
+});

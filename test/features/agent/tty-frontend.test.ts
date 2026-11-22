@@ -265,6 +265,13 @@ describe("items and notices", () => {
     }
   });
 
+  test("compact_start: only an automatic compaction is said to come from the limit", () => {
+    expect(noticeText("compact_start", { trigger: "manual" })).toBe("（正在壓縮較早的部分）");
+    expect(noticeText("compact_start", { trigger: "auto" })).toBe(
+      "（上下文接近上限，先壓縮較早的部分）",
+    );
+  });
+
   test("notices with data put the values in", () => {
     expect(noticeText("compact_failed", { reason: "compact_bad_summary" })).toContain(
       REASON_TEXT.compact_bad_summary,

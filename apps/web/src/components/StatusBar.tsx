@@ -1,5 +1,5 @@
 import type { WireStatus } from "@tars/protocol";
-import { contextPct, type State, versionText } from "../state.ts";
+import { about, contextPct, type State, versionText } from "../state.ts";
 import { useRef } from "react";
 import { ContextRing } from "./ContextSheet.tsx";
 import { PriceNotices, PriceTable, priceButtonText, updatedText } from "./Prices.tsx";
@@ -294,6 +294,7 @@ export function StatusSheet(props: {
               <div className="model-option">
                 <span>上下文用量</span>
                 <span className="mono">
+                  {about(context)}
                   {contextPct(context)}%
                   {context.cacheHitPct === undefined ? "" : `（快取 ${context.cacheHitPct}%）`}
                 </span>

@@ -364,6 +364,9 @@ describe("batch 4: every new field optional, each bounded", () => {
   test("conv.context: the ratios and the window are required; the cache share is 0 to 100", () => {
     expect(server("conv.context", context, { conv: ID })).toBe("ok");
     expect(server("conv.context", { ...context, cacheHitPct: 101 })).toBe("bad_message");
+    // An estimate is marked true; nothing else stands for it.
+    expect(server("conv.context", { ...context, estimated: true }, { conv: ID })).toBe("ok");
+    expect(server("conv.context", { ...context, estimated: false })).toBe("bad_message");
     expect(server("conv.context", { ...context, contextLimit: 0 })).toBe("bad_message");
   });
 

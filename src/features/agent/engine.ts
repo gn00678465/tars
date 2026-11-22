@@ -1063,7 +1063,8 @@ export function createEngine(deps: EngineDeps) {
       return insertRequest(s, { turnId, convId: conv.id, step: 1, attempt: 1 }, r);
     })();
     deps.log.log("turn_start", { turn: turnId, conv: conv.id, turnKind: "compaction" });
-    frontend.emit({ type: "notice", code: "compact_start" });
+    // The trigger: only an automatic one comes from a context near its limit.
+    frontend.emit({ type: "notice", code: "compact_start", data: { trigger: opts.trigger } });
     const req: ModelRequest = {
       model: s.model.id,
       maxOutputTokens: r.maxTokens,

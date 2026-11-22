@@ -3,6 +3,8 @@ import type { WireContext } from "@tars/protocol";
 import type { Catalog } from "../agent/catalog.ts";
 import type { Limits } from "../agent/config.ts";
 import type { Conversation } from "../agent/store.ts";
+import { estimateTokens, utf8Bytes } from "../agent/bytes.ts";
+import type { CompactionBody } from "../agent/types.ts";
 
 /**
  * A conversation's context against its model's window, as the engine measures it: the last
@@ -27,18 +29,34 @@ export function convContext(
     )
     .get(conv.id) as { r: number; total: number } | null;
   const compacted = db
-    .query("SELECT MAX(created_at) AS at FROM items WHERE conv_id = ? AND kind = 'compaction'")
-    .get(conv.id) as { at: number | null };
+    .query(
+      `SELECT created_at AS at, body FROM items WHERE conv_id = ? AND kind = 'compaction'
+       ORDER BY seq DESC LIMIT 1`,
+    )
+    .get(conv.id) as { at: number; body: string } | null;
+  const after = conv.lastTotalInputTokens === 0 ? afterCompaction(compacted?.body) : undefined;
   return {
-    contextUsed: conv.lastTotalInputTokens,
+    contextUsed: after ?? conv.lastTotalInputTokens,
+    ...(after === undefined ? {} : { estimated: true as const }),
     contextLimit: Math.max(1, window),
     ...(last === null || last.total === 0
       ? {}
       : { cacheHitPct: Math.round((last.r / last.total) * 100) }),
-    ...(compacted.at === null ? {} : { lastCompactedAt: compacted.at }),
+    ...(compacted === null ? {} : { lastCompactedAt: compacted.at }),
     warnRatio: limits.context_warn_ratio,
     compactRatio: limits.context_compact_ratio,
     stopRatio: limits.context_stop_ratio,
     autoCompact: limits.auto_compact,
   };
+}
+
+/**
+ * A compaction zeroes the measured total (finishCompaction): until the next request measures it,
+ * the context is about what the next one sends, the turns kept verbatim and the summary, on the
+ * engine's own estimate. Undefined with no compaction: 0 is then what was measured.
+ */
+function afterCompaction(body: string | undefined): number | undefined {
+  if (body === undefined) return undefined;
+  const b = JSON.parse(body) as Partial<CompactionBody>;
+  return (b.keptTokens ?? 0) + estimateTokens(utf8Bytes(b.summary ?? ""));
 }

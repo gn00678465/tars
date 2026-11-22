@@ -35,7 +35,9 @@ function shown(n: Notice, c: NoticeContext): Shown {
     case "compact_start":
       return {
         tone: "active",
-        title: "上下文接近上限，正在壓縮較早的部分",
+        // The owner's own compaction is not about the limit; a local end older than trigger
+        // starts one only near it.
+        title: d.trigger === "manual" ? "正在壓縮較早的部分" : "上下文接近上限，正在壓縮較早的部分",
         desc: "較早的訊息會換成摘要，本機資料庫的原始紀錄仍完整保存。",
       };
     case "compact_skipped":

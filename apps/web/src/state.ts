@@ -254,6 +254,12 @@ const withoutKeys = <T extends object>(o: T, ...keys: (keyof T)[]): T => {
 
 const bySeq = (items: readonly WireItem[]) => [...items].sort((a, b) => a.seq - b.seq);
 
+/** A compaction ended, however it did: nothing says it is running any more. */
+const compactOver = (s: State): State => ({
+  ...withoutKeys(s, "compacting"),
+  notices: s.notices.filter((n) => n.code !== "compact_start"),
+});
+
 function message(s: State, m: ServerMessage, at: number): State {
   const wiki = wikiMessage(s.wiki, m);
   if (wiki !== undefined)
@@ -307,7 +313,7 @@ function message(s: State, m: ServerMessage, at: number): State {
     case "compact": {
       if (!here) return s;
       if (m.p.state === "started") return { ...withoutKeys(s, "compactEnd"), compacting: true };
-      const ended = withoutKeys(s, "compacting", "compactReq", "compactEnd");
+      const ended = withoutKeys(compactOver(s), "compactReq", "compactEnd");
       return m.p.state === "completed"
         ? ended
         : {
@@ -347,10 +353,9 @@ function message(s: State, m: ServerMessage, at: number): State {
       const older =
         first !== undefined && m.p.items.length > 0 && m.p.items.every((i) => i.seq < first);
       if (older) return { ...s, items: [...m.p.items, ...s.items], more: m.p.more };
-      const base = {
-        ...withoutKeys({ ...s, items: m.p.items, more: m.p.more }, "running", "load", "compacting"),
-        ...(m.p.compacting === true ? { compacting: true as const } : {}),
-      };
+      const loaded = withoutKeys({ ...s, items: m.p.items, more: m.p.more }, "running", "load");
+      const base =
+        m.p.compacting === true ? { ...loaded, compacting: true as const } : compactOver(loaded);
       const r = m.p.running;
       if (r === undefined) return base;
       // A page opened mid-turn: the turn is under way, in the phase the snapshot says.
@@ -380,7 +385,7 @@ function message(s: State, m: ServerMessage, at: number): State {
       const missed = ours && m.p.state !== "started" && m.p.turn !== undefined && (follow || here);
       // A turn's own compaction runs before the turn starts: it is over by now.
       const next: State = {
-        ...withoutKeys(ours ? withoutKeys(s, "submitting") : s, "compacting"),
+        ...compactOver(ours ? withoutKeys(s, "submitting") : s),
         ...(follow ? { conv: m.conv as string } : {}),
         ...(missed ? { load: m.conv as string } : {}),
         turn,
@@ -393,7 +398,7 @@ function message(s: State, m: ServerMessage, at: number): State {
     case "item": {
       if (!here || s.items.some((i) => i.seq === m.p.item.seq)) return s;
       const items = bySeq([...s.items, m.p.item]);
-      if (m.p.item.kind === "compaction") return { ...withoutKeys(s, "compacting"), items };
+      if (m.p.item.kind === "compaction") return { ...compactOver(s), items };
       return m.p.item.kind === "assistant"
         ? { ...withoutKeys(s, "running"), items, spoken: m.p.item.text }
         : { ...s, items };
@@ -408,7 +413,7 @@ function message(s: State, m: ServerMessage, at: number): State {
       const notices = [...s.notices, m.p].slice(-NOTICES);
       if (m.p.code === "compact_start") return { ...s, notices, compacting: true };
       if (m.p.code === "compact_failed" || m.p.code === "compact_skipped")
-        return { ...withoutKeys(s, "compacting"), notices };
+        return compactOver({ ...s, notices });
       return { ...s, notices };
     }
     case "approval.request": {
@@ -664,6 +669,9 @@ export function runBusy(s: State): string | undefined {
 /** At or past the local end's stop line, judged on the ratio itself, not the rounded share. */
 export const overStop = (c: WireContext | undefined) =>
   c !== undefined && c.contextUsed / c.contextLimit >= c.stopRatio;
+
+/** Before a figure the local end estimated (after a compaction, until a request measures it). */
+export const about = (c: WireContext | undefined) => (c?.estimated === true ? "約 " : "");
 
 /** The context used as a whole percentage of the window. */
 export const contextPct = (c: WireContext | undefined): number | undefined =>

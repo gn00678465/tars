@@ -1,6 +1,6 @@
 import { COMPACT_FOCUS_CHARS, type WireContext } from "@tars/protocol";
 import { useRef, useState } from "react";
-import { contextPct } from "../state.ts";
+import { about, contextPct } from "../state.ts";
 import { Icon } from "./Icon.tsx";
 import { useModal } from "./modal.ts";
 import { shortId, timeText } from "./time.ts";
@@ -38,7 +38,10 @@ export function ContextRing(props: { context: WireContext; onOpen: () => void })
           strokeDashoffset={(circ * (1 - Math.min(100, pct) / 100)).toFixed(2)}
         />
       </svg>
-      <span className="mono">{pct}%</span>
+      <span className="mono">
+        {about(c)}
+        {pct}%
+      </span>
       {c.cacheHitPct === undefined ? null : (
         <span className="conn-latency">快取 {c.cacheHitPct}%</span>
       )}
@@ -95,7 +98,9 @@ export function ContextSheet(props: {
             <div className="approval-field">
               <dt className="approval-field-key">目前上下文使用量</dt>
               <dd className="approval-field-val mono">
+                {about(c)}
                 {n(c.contextUsed)} / {n(c.contextLimit)} tokens（{contextPct(c)}%）
+                {c.estimated === true ? "，壓縮後的估計，下一則訊息後更新" : ""}
               </dd>
             </div>
             <div className="approval-field">
