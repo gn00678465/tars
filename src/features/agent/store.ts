@@ -130,25 +130,29 @@ export const archiveBlocker = (db: Database, id: string): ArchiveBlock | undefin
       ? "approval"
       : undefined;
 
-/**
- * Archives one conversation; the check and the write are one transaction. updated_at is left as
- * it is, so unarchiving puts it back where it was. Archiving an archived one keeps its time.
- */
-export function archiveConversation(
-  db: Database,
-  id: string,
-  now: number,
-): "archived" | "already" | ArchiveBlock {
-  return db
-    .transaction((): "archived" | "already" | ArchiveBlock => {
-      if (getConversation(db, id).archivedAt !== undefined) return "already";
-      const blocked = archiveBlocker(db, id);
-      if (blocked !== undefined) return blocked;
-      db.run("UPDATE conversations SET archived_at = ? WHERE id = ?", [now, id]);
-      return "archived";
-    })
-    .immediate();
+type ArchiveResult = "archived" | "already" | ArchiveBlock;
+
+function archiveOne(db: Database, id: string, now: number): ArchiveResult {
+  if (getConversation(db, id).archivedAt !== undefined) return "already";
+  const blocked = archiveBlocker(db, id);
+  if (blocked !== undefined) return blocked;
+  db.run("UPDATE conversations SET archived_at = ? WHERE id = ?", [now, id]);
+  return "archived";
 }
+
+/**
+ * Archives conversations; the checks and the writes are one transaction. updated_at is left as it
+ * is, so unarchiving puts one back where it was. Archiving an archived one keeps its time.
+ */
+export const archiveConversations = (
+  db: Database,
+  ids: readonly string[],
+  now: number,
+): ArchiveResult[] =>
+  db.transaction((): ArchiveResult[] => ids.map((id) => archiveOne(db, id, now))).immediate();
+
+export const archiveConversation = (db: Database, id: string, now: number): ArchiveResult =>
+  archiveConversations(db, [id], now)[0] as ArchiveResult;
 
 /** Whether it was archived. */
 export const unarchiveConversation = (db: Database, id: string): boolean =>

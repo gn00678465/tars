@@ -992,3 +992,236 @@ function clearAdjust(h: EngineHarness) {
     db.close();
   }
 }
+
+describe("archive", () => {
+  const DAY = 86_400_000;
+
+  /** Conversations made through chat, oldest first, each `ageDays` old by the test's clock. */
+  async function conversations(ages: number[]) {
+    const h = await setup();
+    const ids: string[] = [];
+    for (const [i, age] of ages.entries()) {
+      h.fake.reply(text(`reply ${i}`));
+      expect(await run(["chat", "--message", `question ${i}`], chatDeps(h).deps)).toBe(0);
+      const id = query<{ id: string }>(h, "SELECT id FROM conversations ORDER BY created_at, id")[i]
+        ?.id as string;
+      ids.push(id);
+      const db = new Database(h.paths.agentDb);
+      db.run("UPDATE conversations SET updated_at = ? WHERE id = ?", [TEST_NOW - age * DAY, id]);
+      db.close();
+    }
+    return { h, ids };
+  }
+
+  const archivedAt = (h: EngineHarness, id: string) =>
+    query<{ a: number | null }>(h, "SELECT archived_at AS a FROM conversations WHERE id = ?", id)[0]
+      ?.a;
+  const ran = async (h: EngineHarness, args: string[], opts?: Parameters<typeof chatDeps>[1]) => {
+    const d = chatDeps(h, opts);
+    const code = await run(["chat", ...args], d.deps);
+    return { code, deps: d.deps, terminal: d.terminal };
+  };
+
+  test("--archive: the conversation leaves --list, shows in --list --archived, and nothing else changes", async () => {
+    const { h, ids } = await conversations([0, 0]);
+    const before = counts(h);
+    const id = ids[0] as string;
+    const a = await ran(h, ["--archive", id.slice(-8)]);
+    expect(a.code).toBe(0);
+    expect(out(a.deps)).toContain(`已封存 ${id.slice(-8)}`);
+    expect(archivedAt(h, id)).toBe(TEST_NOW);
+    expect(counts(h)).toEqual(before);
+    const list = await ran(h, ["--list"]);
+    expect(list.deps.io.stdout.map((l) => l.split("\t")[0])).toEqual([ids[1]]);
+    const archived = await ran(h, ["--list", "--archived"]);
+    const cols = archived.deps.io.stdout[0]?.split("\t") ?? [];
+    expect(cols[0]).toBe(id);
+    expect(cols).toHaveLength(7);
+    expect(cols[6]).toBe(new Date(TEST_NOW).toISOString());
+    expect(cols[4]).toBe(new Date(TEST_NOW).toISOString());
+  });
+
+  test("--resume and --continue of an archived conversation are refused, saying how to unarchive", async () => {
+    const { h, ids } = await conversations([0]);
+    const short = (ids[0] as string).slice(-8);
+    await ran(h, ["--archive", short]);
+    const requests = h.fake.messages().length;
+    const resume = await ran(h, ["--resume", short, "--message", "hi"]);
+    expect(resume.code).toBe(1);
+    expect(err(resume.deps)).toContain(`已封存`);
+    expect(err(resume.deps)).toContain(`tars chat --unarchive ${short}`);
+    const cont = await ran(h, [
+      "--continue",
+      short,
+      "--model",
+      `anthropic/${MODEL_ID}`,
+      "--message",
+      "hi",
+    ]);
+    expect(cont.code).toBe(1);
+    expect(err(cont.deps)).toContain("已封存");
+    expect(h.fake.messages()).toHaveLength(requests);
+  });
+
+  test("--unarchive: back in the list with its old update time, and --resume works again", async () => {
+    const { h, ids } = await conversations([3]);
+    const id = ids[0] as string;
+    await ran(h, ["--archive", id]);
+    const u = await ran(h, ["--unarchive", id.slice(-8)]);
+    expect(u.code).toBe(0);
+    expect(archivedAt(h, id)).toBeNull();
+    const list = await ran(h, ["--list"]);
+    expect(list.deps.io.stdout[0]?.split("\t")[4]).toBe(new Date(TEST_NOW - 3 * DAY).toISOString());
+    h.fake.reply(text("again"));
+    expect((await ran(h, ["--resume", id, "--message", "more"])).code).toBe(0);
+  });
+
+  test("archiving an archived one, or unarchiving one in use, says so and exits 0", async () => {
+    const { h, ids } = await conversations([0]);
+    const id = ids[0] as string;
+    expect(out((await ran(h, ["--unarchive", id])).deps)).toContain("沒有封存");
+    await ran(h, ["--archive", id]);
+    const first = archivedAt(h, id);
+    const again = await ran(h, ["--archive", id]);
+    expect(again.code).toBe(0);
+    expect(out(again.deps)).toContain("已經封存");
+    expect(archivedAt(h, id)).toBe(first);
+  });
+
+  test("a conversation with a running turn is not archived, and the refusal says why", async () => {
+    const { h, ids } = await conversations([0]);
+    const db = new Database(h.paths.agentDb);
+    db.run(
+      "INSERT INTO turns (id, conv_id, kind, state, started_at) VALUES ('t-running', ?, 'chat', 'running', 1)",
+      [ids[0] as string],
+    );
+    db.close();
+    const a = await ran(h, ["--archive", ids[0] as string]);
+    expect(a.code).toBe(1);
+    expect(err(a.deps)).toContain("有進行中的回合");
+    expect(archivedAt(h, ids[0] as string)).toBeNull();
+  });
+
+  test("while tars serve holds the lock: writes are refused with what to do; reads work", async () => {
+    const { h, ids } = await conversations([40, 0]);
+    const lock = await acquireLock(h.paths, new Date(TEST_NOW), "serve");
+    try {
+      for (const args of [
+        ["--archive", ids[1] as string],
+        ["--unarchive", ids[1] as string],
+        ["--archive-older-than", "30", "--yes"],
+      ]) {
+        const r = await ran(h, args);
+        expect(r.code).toBe(1);
+        expect(err(r.deps)).toContain("對話資料庫正由 tars serve 使用");
+        expect(err(r.deps)).toContain("請先停止 tars serve（Ctrl-C）");
+        expect(err(r.deps)).toContain("60 秒內的「復原」");
+        expect(err(r.deps)).toContain(args[0] as string);
+      }
+      expect(archivedAt(h, ids[0] as string)).toBeNull();
+      expect((await ran(h, ["--list", "--archived"])).code).toBe(0);
+      const dry = await ran(h, ["--archive-older-than", "30", "--dry-run"]);
+      expect(dry.code).toBe(0);
+      expect(out(dry.deps)).toContain("將封存 1 個對話");
+    } finally {
+      lock.release();
+    }
+  });
+
+  test("--archive-older-than --dry-run lists what would go and changes nothing", async () => {
+    const { h, ids } = await conversations([40, 31, 5]);
+    const dry = await ran(h, ["--archive-older-than", "30", "--dry-run"]);
+    expect(dry.code).toBe(0);
+    const text = dry.deps.io.stdout.join("\n");
+    expect(text).toContain("將封存 2 個對話（最後更新早於 30 天前）");
+    expect(text).toContain((ids[0] as string).slice(-8));
+    expect(text).toContain((ids[1] as string).slice(-8));
+    expect(text).not.toContain((ids[2] as string).slice(-8));
+    expect(text).toContain("這只會做標記，不刪任何資料");
+    for (const id of ids) expect(archivedAt(h, id)).toBeNull();
+  });
+
+  test("--archive-older-than asks on the terminal; yes archives, no leaves everything", async () => {
+    const { h, ids } = await conversations([40, 31, 5]);
+    const no = await ran(h, ["--archive-older-than", "30"], { answers: ["no"] });
+    expect(no.code).toBe(1);
+    expect(err(no.deps)).toContain("沒有確認");
+    for (const id of ids) expect(archivedAt(h, id)).toBeNull();
+    const yes = await ran(h, ["--archive-older-than", "30"], { answers: ["yes"] });
+    expect(yes.code).toBe(0);
+    expect(out(yes.deps)).toContain("封存了 2 個對話");
+    expect(yes.terminal?.transcript.join("\n")).toContain("將封存 2 個對話");
+    expect(ids.map((id) => archivedAt(h, id) !== null)).toEqual([true, true, false]);
+  });
+
+  test("--yes archives without asking; no terminal and no --yes stops before anything changes", async () => {
+    const { h, ids } = await conversations([40, 5]);
+    const d = chatDeps(h).deps;
+    const noTty = {
+      deps: d,
+      code: await run(["chat", "--archive-older-than", "30"], {
+        ...d,
+        openTerminal: () => {
+          throw new TarsError("沒有控制終端");
+        },
+      }),
+    };
+    expect(noTty.code).toBe(1);
+    expect(err(noTty.deps)).toContain("--yes");
+    expect(archivedAt(h, ids[0] as string)).toBeNull();
+    const yes = await ran(h, ["--archive-older-than", "30", "--yes"]);
+    expect(yes.code).toBe(0);
+    expect(out(yes.deps)).toContain("封存了 1 個對話");
+    expect(archivedAt(h, ids[0] as string)).toBe(TEST_NOW);
+    expect(archivedAt(h, ids[1] as string)).toBeNull();
+  });
+
+  test("--archive-older-than skips a conversation that waits, and says which", async () => {
+    const { h, ids } = await conversations([40, 41]);
+    const db = new Database(h.paths.agentDb);
+    db.run(
+      "INSERT INTO turns (id, conv_id, kind, state, started_at) VALUES ('t-running', ?, 'chat', 'running', 1)",
+      [ids[1] as string],
+    );
+    db.close();
+    const r = await ran(h, ["--archive-older-than", "30", "--yes"]);
+    expect(r.code).toBe(0);
+    expect(out(r.deps)).toContain("略過 1 個");
+    expect(out(r.deps)).toContain("有進行中的回合");
+    expect(archivedAt(h, ids[0] as string)).toBe(TEST_NOW);
+    expect(archivedAt(h, ids[1] as string)).toBeNull();
+  });
+
+  test("nothing older than the days: says so and exits 0", async () => {
+    const { h } = await conversations([1]);
+    const r = await ran(h, ["--archive-older-than", "30", "--yes"]);
+    expect(r.code).toBe(0);
+    expect(out(r.deps)).toContain("沒有最後更新早於 30 天前的對話");
+  });
+
+  test.each([
+    [["--archived"]],
+    [["--archived", "--archive", "abcd"]],
+    [["--yes"]],
+    [["--dry-run"]],
+    [["--archive", "abcd", "--yes"]],
+    [["--archive-older-than", "30", "--yes", "--dry-run"]],
+    [["--archive", "abcd", "--unarchive", "abcd"]],
+    [["--archive", "abcd", "--resume", "abcd"]],
+    [["--archive", "abcd", "--message", "hi"]],
+    [["--unarchive", "abcd", "--model", `anthropic/${MODEL_ID}`]],
+    [["--archive-older-than", "0"]],
+    [["--archive-older-than", "x"]],
+  ])("chat %p is a usage error", async (args) => {
+    const h = await setup();
+    expect((await ran(h, args)).code).toBe(2);
+    expect(h.fake.messages()).toHaveLength(0);
+  });
+
+  test("inside a tars session the archive commands are refused", async () => {
+    const { h, ids } = await conversations([0]);
+    const r = await ran(h, ["--archive", ids[0] as string], { env: { TARS_IN_SESSION: "1" } });
+    expect(r.code).toBe(1);
+    expect(archivedAt(h, ids[0] as string)).toBeNull();
+  });
+});

@@ -544,6 +544,43 @@ async function inner(): Promise<number> {
         slash.stderr.includes("anthropic: 本期已用"),
       `exit ${slash.exitCode}; missed ${slash.missed}; requests ${sent.length}; text ${JSON.stringify(skillText)}; stderr ${JSON.stringify(slash.stderr.slice(-400))}`,
     );
+
+    // --- 15. Archive: out of the list, kept apart, not resumable, taken back.
+    const convList = await run("arch-list", "tars chat --list");
+    const archiveId = convList.stdout.split("\n")[0]?.split("\t")[0] ?? "";
+    const countsBefore = query<{ n: number }>(
+      "SELECT (SELECT COUNT(*) FROM conversations) + (SELECT COUNT(*) FROM items) + (SELECT COUNT(*) FROM usage) AS n",
+    )[0]?.n;
+    const archivedRun = await run("arch-archive", `tars chat --archive ${archiveId}`);
+    const listAfter = await run("arch-list-after", "tars chat --list");
+    const listArchived = await run("arch-list-archived", "tars chat --list --archived");
+    const requestsBefore = fake.messages().length;
+    const resumeArchived = await run(
+      "arch-resume",
+      `tars chat --resume ${archiveId} --message again`,
+    );
+    const dry = await run("arch-dry", "tars chat --archive-older-than 1 --dry-run");
+    const unarchived = await run("arch-unarchive", `tars chat --unarchive ${archiveId}`);
+    const listBack = await run("arch-list-back", "tars chat --list");
+    const countsAfter = query<{ n: number }>(
+      "SELECT (SELECT COUNT(*) FROM conversations) + (SELECT COUNT(*) FROM items) + (SELECT COUNT(*) FROM usage) AS n",
+    )[0]?.n;
+    check(
+      "archive",
+      "--archive takes a conversation out of --list into --list --archived; --resume refuses it; --unarchive brings it back; no data is lost",
+      archiveId !== "" &&
+        archivedRun.exitCode === 0 &&
+        !listAfter.stdout.includes(archiveId) &&
+        listArchived.stdout.startsWith(archiveId) &&
+        resumeArchived.exitCode === 1 &&
+        resumeArchived.stderr.includes("--unarchive") &&
+        fake.messages().length === requestsBefore &&
+        dry.exitCode === 0 &&
+        unarchived.exitCode === 0 &&
+        listBack.stdout.includes(archiveId) &&
+        countsBefore === countsAfter,
+      `exits ${[archivedRun, resumeArchived, dry, unarchived].map((r) => r.exitCode).join("/")}; resume stderr ${JSON.stringify(resumeArchived.stderr.slice(-200))}; counts ${countsBefore}/${countsAfter}`,
+    );
   } finally {
     await fake.stop();
     await runLog.stop(true);

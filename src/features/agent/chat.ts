@@ -12,6 +12,7 @@ import { parseModelRef, type AgentCommandContext, type ModelRef } from "./cli.ts
 import { usableModel } from "./start.ts";
 import { loadConfig, type Limits, type TarsConfig } from "./config.ts";
 import { budgetStatuses, statusLine, wikiLine, withReadDb } from "./cost-command.ts";
+import { archiveCommand, assertArchiveUsage, isArchiveCommand } from "./archive-command.ts";
 import { acquireLock, openDb } from "./db.ts";
 import { assertSelectable, EFFORTS, effectiveEffort, parseEffort } from "./effort.ts";
 import {
@@ -53,6 +54,12 @@ interface ChatOptions {
   effort?: Effort;
   resume?: string;
   list?: boolean;
+  archived?: boolean;
+  archive?: string;
+  unarchive?: string;
+  archiveOlderThan?: number;
+  yes?: boolean;
+  dryRun?: boolean;
   message?: string;
   continue?: string;
   keepLast?: number;
@@ -113,6 +120,12 @@ const parseKeepLast = (value: string): number => {
   return Number(value);
 };
 
+const parseDays = (value: string): number => {
+  if (!/^\d+$/.test(value) || Number(value) <= 0)
+    throw new InvalidArgumentError("use a whole number of days above 0.");
+  return Number(value);
+};
+
 const parseEffortArg = (value: string): Effort => {
   const effort = parseEffort(value);
   if (effort === undefined) throw new InvalidArgumentError(`use one of ${EFFORTS.join(", ")}.`);
@@ -159,6 +172,17 @@ export function registerChat(
         "continue",
       ]),
     )
+    .option("--archived", "with --list: only the archived conversations")
+    .option("--archive <id>", "archive a conversation: it leaves the list; no data is deleted")
+    .option("--unarchive <id>", "take a conversation back from the archive")
+    .addOption(
+      new Option(
+        "--archive-older-than <days>",
+        "archive the conversations not updated for this many days; shows them first",
+      ).argParser(parseDays),
+    )
+    .option("--yes", "with --archive-older-than: archive without asking")
+    .option("--dry-run", "with --archive-older-than: only show what would be archived")
     .option("--message <text>", "send this one message, print the reply on stdout, and exit")
     .addHelpText(
       "after",
@@ -166,6 +190,12 @@ export function registerChat(
 Without --message it is interactive: type a message, or a command (/help lists them; //text
 sends text that starts with "/"). Ctrl-C stops the running turn; Ctrl-D or /quit leaves.
 The API key is only for your own terminal: refused inside a tars session.
+
+An archived conversation leaves the list and the web page, and cannot be resumed, continued from
+or sent to until --unarchive; its data, spend and the knowledge base's reading stay as they are.
+--archive, --unarchive and --archive-older-than write the conversation database, which tars serve
+holds while it runs: stop tars serve first (Ctrl-C), or use the web page's Undo within 60 seconds.
+--list, --list --archived and --archive-older-than --dry-run only read and work while it runs.
 
 Exit codes: 0 done; 1 config, key, lock or model problem, or a --message turn that did not
 complete; 2 usage error; 143 SIGTERM.
@@ -176,6 +206,10 @@ Examples:
   tars chat --resume 3f2a9c1d
   tars chat --continue 3f2a9c1d --model gemini/<id> --keep-last 5
   tars chat --list
+  tars chat --list --archived
+  tars chat --archive 3f2a9c1d
+  tars chat --unarchive 3f2a9c1d
+  tars chat --archive-older-than 30 --dry-run
   tars chat --message "今天有什麼行程？" > reply.txt`,
     )
     .action(async (opts: ChatOptions) => exitWith(await chat(opts, ctx)));
@@ -189,7 +223,20 @@ async function chat(opts: ChatOptions, ctx: ChatContext): Promise<number> {
   // r63: the key pays for requests; a session's agent must not be able to spend it.
   if (inSession(ctx.env)) throw new TarsError("這把 API 金鑰只給你自己終端的 tars chat 用");
   const paths = resolvePaths(ctx.env);
-  if (opts.list === true) return listConversations(paths, ctx);
+  assertArchiveUsage(opts);
+  if (isArchiveCommand(opts) || opts.list === true) {
+    const others = [
+      opts.model,
+      opts.effort,
+      opts.resume,
+      opts.continue,
+      opts.message,
+      opts.keepLast,
+    ];
+    if (others.some((o) => o !== undefined))
+      throw new TarsError("--list 與封存的選項不能和對話用的選項一起用", EXIT.usage);
+    return archiveCommand(opts, ctx, paths);
+  }
   const { config, warnings } = await loadConfig(paths);
   warnings.forEach((w) => ctx.io.err(`warning: ${w}`));
   const start = await startingPoint(opts, config, paths, ctx);
@@ -219,23 +266,6 @@ async function chat(opts: ChatOptions, ctx: ChatContext): Promise<number> {
   }
 }
 
-function listConversations(paths: TarsPaths, ctx: ChatContext): number {
-  withReadDb(paths, (db) => {
-    for (const c of db === undefined ? [] : store.listConversations(db))
-      ctx.io.out(
-        [
-          c.id,
-          c.title,
-          `${c.provider}/${c.model}`,
-          c.effort,
-          new Date(c.updatedAt).toISOString(),
-          c.parentId === undefined ? "" : store.shortId(c.parentId),
-        ].join("\t"),
-      );
-  });
-  return 0;
-}
-
 interface Start {
   readonly provider: Provider;
   readonly model: string;
@@ -251,13 +281,18 @@ async function startingPoint(
   paths: TarsPaths,
   ctx: ChatContext,
 ): Promise<Start> {
-  const find = (id: string) =>
+  const find = (id: string, as: string) =>
     withReadDb(paths, (db) => {
       if (db === undefined) throw new TarsError("還沒有任何對話；列出：tars chat --list");
-      return store.findConversation(db, id);
+      const found = store.findConversation(db, id);
+      if (found.archivedAt !== undefined)
+        throw new TarsError(
+          `對話 ${store.shortId(found.id)} 已封存，不能${as}；先執行：tars chat --unarchive ${store.shortId(found.id)}`,
+        );
+      return found;
     });
-  const conv = opts.resume === undefined ? undefined : find(opts.resume);
-  const from = opts.continue === undefined ? undefined : find(opts.continue);
+  const conv = opts.resume === undefined ? undefined : find(opts.resume, "接續");
+  const from = opts.continue === undefined ? undefined : find(opts.continue, "當接續的來源");
   const provider = conv?.provider ?? opts.model?.provider ?? config.chat.provider;
   const { model, resolved } = await usableModel(
     provider,
