@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { skillInvocationText } from "@tars/protocol";
+import { PROTOCOL_VERSION, skillInvocationText } from "@tars/protocol";
 import { act } from "react";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
@@ -26,6 +26,43 @@ test("connects, asks for the list after hello, and shows what the relay says", a
     h.last().receive(server("relay.status", { online: true, localSince: 1_800_000_000_000 })),
   );
   expect(root.querySelector(".conn-pill")?.textContent).toBe("在線");
+  unmount();
+});
+
+test("the pill as scene 5: which reconnect in a warn pill; a version mismatch says which side to update", async () => {
+  const h = socketHarness();
+  const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
+  const pill = () => root.querySelector(".conn-pill") as HTMLElement;
+  await act(async () => h.last().ready());
+  await act(async () => {
+    h.last().end(4001);
+    await h.advance(1000);
+  });
+  expect([pill().className, pill().textContent]).toEqual(["conn-pill warn", "重連中，第 1 次"]);
+  expect(pill().querySelector(".status-dot")?.className).toBe("status-dot active");
+  const hello = h
+    .last()
+    .messages()
+    .findLast((m) => m.kind === "hello");
+  await act(async () => {
+    h.last().onopen?.();
+    h.last().receive({
+      v: PROTOCOL_VERSION,
+      id: "s-1",
+      kind: "nack",
+      re:
+        h
+          .last()
+          .messages()
+          .findLast((m) => m.kind === "hello")?.id ?? hello?.id,
+      p: { reason: "version", need: "client" },
+    });
+  });
+  expect([pill().className, pill().textContent]).toEqual([
+    "conn-pill warn",
+    "協定不合，請重新載入頁面重新載入",
+  ]);
+  expect(root.querySelector(".composer .reason")?.textContent).toBe("協定不合，請重新載入頁面");
   unmount();
 });
 

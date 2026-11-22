@@ -73,6 +73,59 @@ describe("Socket: hello and close codes", () => {
   });
 });
 
+describe("Socket: which reconnect, and a version the local end does not speak", () => {
+  const tries = (h: Harness) =>
+    h.events.flatMap((e) =>
+      e.type === "connection" ? [`${e.connection}${e.attempt ? `#${e.attempt}` : ""}`] : [],
+    );
+
+  test("each reconnect says which try it is; a hello starts counting again", async () => {
+    const h = await opened();
+    h.last().end(4001);
+    await h.advance(1000);
+    h.last().end(4001);
+    await h.advance(2000);
+    expect(tries(h)).toEqual([
+      "connecting",
+      "open",
+      "offline#1",
+      "connecting#1",
+      "offline#2",
+      "connecting#2",
+    ]);
+    h.last().ready();
+    h.last().end(4001);
+    expect(tries(h).slice(-2)).toEqual(["open", "offline#1"]);
+  });
+
+  test.each([
+    ["local", "local"],
+    ["client", "client"],
+    [undefined, "client"],
+  ] as const)(
+    "hello refused as another version (need %s): says which side, no reconnect",
+    async (need, said) => {
+      const h = socketHarness();
+      h.socket.start();
+      h.last().onopen?.();
+      const hello = h.last().messages()[0];
+      h.last().receive({
+        v: PROTOCOL_VERSION,
+        id: "s-1",
+        kind: "nack",
+        re: hello?.id,
+        p: { reason: "version", ...(need === undefined ? {} : { need }) },
+      });
+      const last = h.events.at(-1);
+      expect(last).toEqual({ type: "connection", connection: "version", need: said });
+      // Within the heartbeat (the fake socket answers no ping): nothing reconnects by itself.
+      await h.advance(20_000);
+      expect(h.sockets).toHaveLength(1);
+      expect(h.socket.send("conv.list")).toBeUndefined();
+    },
+  );
+});
+
 describe("Socket: telling an expired login from a dead network", () => {
   async function dropped(answer: Harness["answer"]) {
     const h = await opened();

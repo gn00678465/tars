@@ -93,8 +93,11 @@ export class Socket {
     ws?.close(1000);
   }
 
-  private state(connection: Connection): void {
-    this.listener({ type: "connection", connection });
+  private state(
+    connection: Connection,
+    more: { attempt?: number; need?: "client" | "local" } = {},
+  ): void {
+    this.listener({ type: "connection", connection, ...more });
   }
 
   /** Sends when the local end said hello; returns the message id, or undefined when not sent. */
@@ -188,7 +191,7 @@ export class Socket {
 
   private connect(): void {
     if (this.stopped) return;
-    this.state("connecting");
+    this.state("connecting", { attempt: this.attempt });
     const ws = this.d.open(this.d.url);
     this.ws = ws;
     let opened = false;
@@ -217,6 +220,15 @@ export class Socket {
         this.transmit();
         return;
       }
+      // hello refused as another version: nothing else is answered on this connection, and a
+      // reconnect gets the same answer until one side is updated.
+      if (
+        m.kind === "nack" &&
+        m.re !== undefined &&
+        m.re === this.helloId &&
+        m.p.reason === "version"
+      )
+        return this.state("version", { need: m.p.need ?? "client" });
       if (m.kind === "ack") this.answered(m.re, true, undefined, m.p.turn, m.conv);
       if (m.kind === "turn" && m.p.requestId === this.submit_?.requestId) this.settle(true);
       if (m.kind === "nack") this.answered(m.re, false, m.p.reason);
@@ -285,9 +297,9 @@ export class Socket {
   }
 
   private backoff(): void {
-    this.state("offline");
     const s = BACKOFF_S[this.attempt] ?? (BACKOFF_S.at(-1) as number);
     this.attempt++;
+    this.state("offline", { attempt: this.attempt });
     this.later(s * 1000);
   }
 

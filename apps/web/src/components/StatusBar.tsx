@@ -1,5 +1,5 @@
 import type { WireStatus } from "@tars/protocol";
-import type { State } from "../state.ts";
+import { type State, versionText } from "../state.ts";
 import { useRef } from "react";
 import { Icon } from "./Icon.tsx";
 import { useModal } from "./modal.ts";
@@ -39,22 +39,30 @@ export function providerSpend(
   };
 }
 
-/** ui_spec 5.2's connection pill: [dot tone, text]. */
-export function connection(state: State): { tone: string; text: string } {
-  if (state.connection === "auth_expired") return { tone: "error", text: "登入已過期" };
+/**
+ * ui_spec 5.2's connection pill, as the prototype's scene 5: the dot's tone, the pill's class
+ * ("" plain, warn, error) and the text. Reconnecting is a warn pill with an active dot.
+ */
+export function connection(state: State): { tone: string; pill: string; text: string } {
+  if (state.connection === "auth_expired")
+    return { tone: "error", pill: "error", text: "登入已過期" };
+  if (state.connection === "version")
+    return { tone: "warn", pill: "warn", text: versionText(state.need) };
   if (state.connection === "keys_unavailable")
-    return { tone: "warn", text: "本機端暫時無法驗證登入，稍後自動重試" };
-  if (state.connection === "connecting") return { tone: "active", text: "連線中" };
-  if (state.connection === "offline") return { tone: "active", text: "重連中" };
+    return { tone: "warn", pill: "warn", text: "本機端暫時無法驗證登入，稍後自動重試" };
+  if (state.reconnect !== undefined)
+    return { tone: "active", pill: "warn", text: `重連中，第 ${state.reconnect} 次` };
+  if (state.connection !== "open") return { tone: "active", pill: "", text: "連線中" };
   if (!state.relay.online)
     return {
       tone: "error",
+      pill: "error",
       text:
         state.relay.lastSeenAt === undefined
           ? "本機端離線"
           : `本機端離線，最後在線 ${timeText(state.relay.lastSeenAt)}`,
     };
-  return { tone: "ok", text: "在線" };
+  return { tone: "ok", pill: "", text: "在線" };
 }
 
 const DAY_MS = 86_400_000;
@@ -111,10 +119,7 @@ export function TopBar(props: {
         >
           <Icon name="menu" size={17} />
         </button>
-        <div
-          className={`conn-pill ${c.tone === "ok" || c.tone === "active" ? "" : c.tone}`}
-          role="status"
-        >
+        <div className={`conn-pill ${c.pill}`} role="status">
           <span className={`status-dot ${c.tone}`} />
           <span>{c.text}</span>
           {/* Hidden from screen readers: the pill is a status region, and a figure changing every
@@ -124,9 +129,10 @@ export function TopBar(props: {
               {Math.round(props.state.rtt)} ms
             </span>
           ) : null}
-          {props.state.connection === "auth_expired" ? (
+          {props.state.connection === "auth_expired" ||
+          (props.state.connection === "version" && props.state.need !== "local") ? (
             <button className="sg-btn sg-btn-sm" type="button" onClick={() => location.reload()}>
-              重新登入
+              {props.state.connection === "auth_expired" ? "重新登入" : "重新載入"}
             </button>
           ) : null}
         </div>

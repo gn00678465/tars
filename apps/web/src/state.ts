@@ -10,7 +10,14 @@ import type {
 } from "@tars/protocol";
 
 /** The page's own connection to the relay; "open" only after the local end's hello. */
-export type Connection = "connecting" | "open" | "offline" | "auth_expired" | "keys_unavailable";
+export type Connection =
+  | "connecting"
+  | "open"
+  | "offline"
+  | "auth_expired"
+  | "keys_unavailable"
+  /** hello was refused as another protocol version: which side is behind (nack.need). */
+  | "version";
 
 export type TurnState = "started" | "rejected" | "completed" | "failed" | "aborted";
 
@@ -45,6 +52,10 @@ export interface Card {
 
 export interface State {
   readonly connection: Connection;
+  /** Which reconnect try the page is on; absent once open, or before the first drop. */
+  readonly reconnect?: number;
+  /** With connection "version": the side to update. */
+  readonly need?: "client" | "local";
   readonly epoch?: string;
   readonly relay: { readonly online: boolean; readonly lastSeenAt?: number };
   /** When the local end connected this time, as the relay last said. */
@@ -90,7 +101,13 @@ export interface State {
 }
 
 export type Event =
-  | { readonly type: "connection"; readonly connection: Connection }
+  | {
+      readonly type: "connection";
+      readonly connection: Connection;
+      /** Reconnecting: which try this is, 1 first; absent for the first connect. */
+      readonly attempt?: number;
+      readonly need?: "client" | "local";
+    }
   | { readonly type: "message"; readonly m: ServerMessage; readonly at: number }
   | { readonly type: "open_conv"; readonly conv: string | undefined }
   | { readonly type: "submitted"; readonly requestId: string }
@@ -342,8 +359,14 @@ export function reduce(s: State, e: Event): State {
       return {
         // A measurement belongs to the connection it was made on.
         // models too: the local end the page reconnects to may be one that does not list them.
-        ...(e.connection === "open" ? s : withoutKeys(s, "ping", "rtt", "models")),
+        ...withoutKeys(
+          e.connection === "open" ? s : withoutKeys(s, "ping", "rtt", "models"),
+          "reconnect",
+          "need",
+        ),
         connection: e.connection,
+        ...(e.attempt === undefined || e.attempt === 0 ? {} : { reconnect: e.attempt }),
+        ...(e.need === undefined ? {} : { need: e.need }),
         ...(back
           ? {
               cards: s.cards.map((c) =>
@@ -419,9 +442,14 @@ export function reduce(s: State, e: Event): State {
 export const localNow = (s: State, at: number): number | undefined =>
   s.status === undefined || s.statusAt === undefined ? undefined : s.status.now + (at - s.statusAt);
 
+/** ui_spec 5.2: a version mismatch says which side to update, by hello's nack.need. */
+export const versionText = (need: "client" | "local" | undefined) =>
+  need === "local" ? "協定不合，請更新本機 tars" : "協定不合，請重新載入頁面";
+
 /** Why the composer is off (nothing can reach the local end), or undefined when it is on. */
 export function composerBlocked(s: State): string | undefined {
   if (s.connection === "auth_expired") return "登入已過期，請重新登入後再試。";
+  if (s.connection === "version") return versionText(s.need);
   if (s.connection === "keys_unavailable") return "本機端暫時無法驗證登入，稍後自動重試";
   if (s.connection !== "open") return "連線中斷，正在重新連線";
   if (!s.relay.online) return "本機端離線，暫時無法送出訊息。";

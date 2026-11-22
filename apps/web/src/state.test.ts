@@ -390,6 +390,19 @@ describe("state: approvals", () => {
     expect([composerBlocked(s), sendBusy(s)]).toEqual([undefined, "回合進行中"]);
   });
 
+  test("the reconnect try and a version mismatch are kept until the connection opens", () => {
+    const down = run([{ type: "connection", connection: "offline", attempt: 3 }]);
+    expect(down.reconnect).toBe(3);
+    const version = run([{ type: "connection", connection: "version", need: "local" }], down);
+    expect([version.reconnect, version.need, composerBlocked(version)]).toEqual([
+      undefined,
+      "local",
+      "協定不合，請更新本機 tars",
+    ]);
+    const back = run([{ type: "connection", connection: "open" }], version);
+    expect([back.reconnect, back.need]).toEqual([undefined, undefined]);
+  });
+
   test("the local end's clock counts on from status.now", () => {
     const s = reduce(initial, {
       type: "message",
