@@ -121,8 +121,8 @@ describe("ui_show: what the local end checks before the page draws the form", ()
 const ok = {
   date: "2026-11-23",
   amount: "190",
-  target: ["Expenses:Food:Dinner"],
-  source: ["Assets:Cash:Wallet"],
+  target: "Expenses:Food:Dinner",
+  source: "Assets:Cash:Wallet",
   narration: "晚餐",
   payee: "",
 };
@@ -163,12 +163,14 @@ describe("ledger_submit: a sent form's values, checked again here", () => {
       { amount: "1e3" },
       { amount: "1.23456" },
       { amount: "1234567890123" },
-      { target: ["Expenses:Unlisted"] },
-      { source: ["Assets:Bank:Other"] },
-      { source: ["Expenses:Food:Dinner"], target: ["Expenses:Food:Dinner"] },
+      { target: "Expenses:Unlisted" },
+      { source: "Assets:Bank:Other" },
+      { source: "Expenses:Food:Dinner", target: "Expenses:Food:Dinner" },
+      // The label, not the value: what the owner saw is not an account.
+      { target: "晚餐（Expenses:Food:Dinner）" },
+      { target: "" },
       { target: [] },
       { target: ["Expenses:Food:Dinner", "Expenses:Transport"] },
-      { target: "Expenses:Food:Dinner" },
       { amount: ["190"] },
       { narration: "" },
       { narration: "字".repeat(201) },
@@ -192,12 +194,24 @@ describe("ledger_submit: a sent form's values, checked again here", () => {
     const target = f.components.find((c) => c.id === "target") as { options: unknown[] };
     target.options = [{ label: "Income:Salary", value: "Income:Salary" }];
     expect(formMessage(f, ok).ok).toBe(false);
-    expect(formMessage(f, { ...ok, target: ["Income:Salary"] }).ok).toBe(true);
+    expect(formMessage(f, { ...ok, target: "Income:Salary" }).ok).toBe(true);
     // A form whose button is not ledger_submit has no rules here: refused.
     const other = form();
     (other.components.find((c) => c.id === "submit") as { action: unknown }).action = {
       event: { name: "other" },
     };
     expect(formMessage(other, ok).ok).toBe(false);
+  });
+
+  test("a ChoicePicker form shown before AccountSelect is still accepted, a list of one each", () => {
+    const old = form();
+    for (const id of ["target", "source"]) {
+      const c = old.components.find((x) => x.id === id) as Record<string, unknown>;
+      c.component = "ChoicePicker";
+      c.variant = "mutuallyExclusive";
+    }
+    const listed = { ...ok, target: ["Expenses:Food:Dinner"], source: ["Assets:Cash:Wallet"] };
+    expect(formMessage(old, listed).ok).toBe(true);
+    expect(formMessage(old, { ...listed, target: ["Expenses:Unlisted"] }).ok).toBe(false);
   });
 });

@@ -102,6 +102,8 @@ SOFTWARE.
 
 - 位置：`apps/web/src/vendor/shadcn-tailwind.css`
 - 版本：`shadcn` 套件 4.23.0 的 `dist/tailwind.css`，原樣複製，sha256 `4c371f7a1ff5d219ae2f7ff28bd256b4346fd546fe46fbae22092e57db2f0fae`。`shadcn` 是 CLI，不裝進 repo。
+- 元件位置：`apps/web/src/components/ui/`（`button`、`input`、`textarea`、`input-group`、`combobox`）、`apps/web/src/lib/utils.ts`
+- 元件版本：在 repo 外跑 `shadcn` 4.23.0 的 `init -b base -p nova` 與 `add button input input-group combobox`（2026-11-23，樣式 `base-nova`），把產生的檔搬進來後用 `vp fmt` 重排，內容沒有改。`textarea` 是 `input-group` 匯入的。重排前的 sha256：`button.tsx` `313353436d0fcc8e`、`combobox.tsx` `ccc44c4aa4afca18`、`input-group.tsx` `492310e6d519441c`、`input.tsx` `dab990dfefa0ba78`、`textarea.tsx` `82601c91ffc6c727`。要對上游時，先把 CLI 產生的檔用 `vp fmt` 重排再比。
 - 來源：https://github.com/shadcn-ui/ui
 - 授權：MIT
 

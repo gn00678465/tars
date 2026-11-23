@@ -256,6 +256,20 @@ node tools/visual/run.ts --control     # 基準和自己比，看雜訊有多少
 - 雜訊：`--control` 兩次實測的最大差異是 0.04% 與 0.01%，來自狀態列的延遲毫秒數。
 - 結果在 `.visual/report.md`，開頭寫兩邊的 commit。截圖在 `.visual/shots/base/` 與 `.visual/shots/head/`。任一張差異超過 0.5% 就失敗，要人看兩張截圖。`--only` 給了不存在的場景時報錯，退出碼 2。
 
+### CSP 與記帳表單的 Combobox
+
+Base UI 升級，或加了會畫浮層的元件之後跑：
+
+```
+cd apps/web
+node tools/visual/csp.ts
+```
+
+- 用 `headers.ts` 的 CSP 提供場景頁，在桌面與手機兩種寬度打開「記帳表單（A2UI）」場景。在兩個帳戶欄位分別打中文與英文、選取，填完金額與摘要後送出。
+- 有任何 CSP 違規或頁面錯誤，或 `ui.submit` 帶的不是英文帳戶名，就失敗（退出碼 1）。zod 4 每次載入會用 `Function("")` 試探一次 eval，`main` 就有，不算。
+- 截圖在 `.visual/csp/`。和畫面比對一樣需要 Chromium，不在 `bun run check` 裡。
+- 「記帳表單」是場景 16。拿 P1 之前的基準跑 `run.ts` 時，基準沒有這個場景，場景 16 會算失敗；比的是前 15 個場景。
+
 ## 手動驗收
 
 這些項目自動測試涵蓋不到，由擁有者在自己的 Cloudflare 與手機上做。結果寫回 `research/cloudflare-tunnel-mtls.md`。行為和設計不同時，記下請求與回應的形狀（不含 JWT、cookie、email、憑證內容）。

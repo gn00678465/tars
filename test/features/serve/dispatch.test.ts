@@ -1499,8 +1499,8 @@ describe("ui.submit: a form shown by ui_show, sent from a page", () => {
   const values = {
     date: "2026-11-23",
     amount: "190",
-    target: ["Expenses:Food:Dinner"],
-    source: ["Assets:Cash:Wallet"],
+    target: "Expenses:Food:Dinner",
+    source: "Assets:Cash:Wallet",
     narration: "晚餐",
     payee: "",
   };
@@ -1673,7 +1673,7 @@ describe("ui.submit: a form shown by ui_show, sent from a page", () => {
     const { s, conv, callId } = await shown();
     for (const change of [
       { target: ["Expenses:Unlisted"] },
-      { source: ["Expenses:Food:Dinner"], target: ["Expenses:Food:Dinner"] },
+      { source: "Expenses:Food:Dinner", target: "Expenses:Food:Dinner" },
       { amount: "0" },
     ]) {
       const id = await submit(s, conv, {

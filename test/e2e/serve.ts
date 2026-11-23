@@ -406,8 +406,8 @@ async function inner(): Promise<number> {
         context: {
           date: "2026-11-23",
           amount: "190",
-          target: ["Expenses:Food:Dinner"],
-          source: ["Assets:Cash:Wallet"],
+          target: "Expenses:Food:Dinner",
+          source: "Assets:Cash:Wallet",
           narration: "晚餐",
           payee: "",
         },

@@ -9,6 +9,7 @@ import type {
   WireModel,
   WireStatus,
 } from "@tars/protocol";
+import form from "../../src/components/ledger-form.sample.json" with { type: "json" };
 import { LIST, PAGE, SEARCH, STATUS as WIKI } from "../../src/wiki/fixtures.ts";
 
 /** The page's clock in every scene: 2026-11-23 12:00 in Taipei. */
@@ -249,7 +250,29 @@ const approval = (conv: string, callId?: string): WireApproval => ({
   ...(callId === undefined ? {} : { callId }),
 });
 
+/** The ledger form (A2UI) as the model shows it: the repo's sample, made-up accounts. */
+const FORM: WireItem[] = [
+  { ...at(1, "t1"), kind: "user", text: "記一筆晚餐 190", truncated: false },
+  {
+    ...at(2, "t1"),
+    kind: "tool_call",
+    callId: "call-form",
+    name: "ui_show",
+    input: JSON.stringify(form),
+    truncated: false,
+  },
+  {
+    ...at(3, "t1"),
+    kind: "tool_result",
+    callId: "call-form",
+    status: "done",
+    text: "已顯示表單。",
+    truncated: false,
+  },
+];
+
 const items: Record<string, WireItem[]> = {
+  "c-form": FORM,
   "c-backup": BACKUP,
   "c-ledger": ERRORS,
   "c-fts": COMPACTED,
@@ -427,5 +450,17 @@ export const SCENES: Scene[] = [
     steps: [{ click: 'button:has-text("個人知識庫")' }, { click: "text=NAS 備份腳本" }],
     // A phone opens on the page already.
     phone: [{ click: 'button:has-text("個人知識庫")' }],
+  },
+  {
+    // Only this scene lists the conversation, so the other scenes' lists stay as they were.
+    name: "記帳表單（A2UI）：帳戶的 Combobox 展開並過濾",
+    relay: online,
+    answers: answers({ convs: [conv("c-form", "記帳表單", "gpt-6", 0.1 * HOUR), ...CONVS] }),
+    ...both(
+      "記帳表單",
+      { click: 'input[role="combobox"]' },
+      { fill: 'input[role="combobox"]', text: "Food" },
+      { wait: 300 },
+    ),
   },
 ];

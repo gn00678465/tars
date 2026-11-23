@@ -11,6 +11,10 @@
 /* node_modules/shadcn/dist/tailwind.css of shadcn 4.23.0, copied as is (THIRD_PARTY_NOTICES.md):
  * the shadcn package is a CLI and stays out of the lockfile. */
 @import "./vendor/shadcn-tailwind.css";
+@import "tw-animate-css";
+/* The shadcn components in use (M4-P1): only these files are scanned for class names. */
+@source "./components/ui";
+@source "./components/AccountSelect.tsx";
 
 /*
  * Preflight gives every placeholder half the text's color. The prototype styles only some of its
@@ -77,4 +81,15 @@
   --input: var(--field-edge);
   --ring: var(--focus-line);
   --radius: var(--radius-control);
+}
+
+/* What Base UI puts in a <style> of its own, which main.tsx's CSPProvider turns off: the CSP
+ * allows no inline style. Base UI 1.9.0's utils/styles.mjs, as is. */
+@layer base {
+  .base-ui-disable-scrollbar {
+    scrollbar-width: none;
+  }
+  .base-ui-disable-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }

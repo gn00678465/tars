@@ -6,6 +6,9 @@
  * Key names are the installed 0.15.0's, not the website's: bindings are @path and @call, a
  * component's checks has no @ (research/a2ui_proto_result.md). Markdown is not wired, so Text is
  * plain text.
+ *
+ * Two catalogs: the basic one is the surface's default, and the page's own (AccountSelect) is
+ * named on each of its components by catalogId, which the page sets so the model never writes it.
  */
 import { A2uiSurface, type ReactCatalogComponent } from "@a2ui/react";
 import {
@@ -17,6 +20,7 @@ import {
   type SurfaceModel,
 } from "@a2ui/web_core/v1_0";
 import { type ReactNode, useEffect, useMemo, useRef } from "react";
+import { ACCOUNT_SELECT, TARS_CATALOG_ID, tarsCatalog } from "./AccountSelect.tsx";
 
 /** ui_show's input: the model writes components and data, the page the envelope. */
 export interface FormSpec {
@@ -38,16 +42,25 @@ export function buildSurface(
   spec: FormSpec,
   onAction: (action: ActionPayload) => void,
 ): Built {
-  const processor = new MessageProcessor<ReactCatalogComponent>([basicCatalog as never], onAction, {
-    validationConfig: { ...STRICT_VALIDATION, targetVersion: "1.0" },
-  });
+  const processor = new MessageProcessor<ReactCatalogComponent>(
+    [basicCatalog as never, tarsCatalog],
+    onAction,
+    { validationConfig: { ...STRICT_VALIDATION, targetVersion: "1.0" } },
+  );
+  const components = spec.components.map((c) =>
+    typeof c === "object" &&
+    c !== null &&
+    (c as { component?: unknown }).component === ACCOUNT_SELECT
+      ? { ...c, catalogId: TARS_CATALOG_ID }
+      : c,
+  );
   try {
     processor.processMessages({
       version: "1.0",
       createSurface: {
         surfaceId: callId,
         catalogId: basicCatalog.id,
-        components: spec.components,
+        components,
         ...(spec.dataModel === undefined ? {} : { dataModel: spec.dataModel }),
       },
     } as never);

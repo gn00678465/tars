@@ -442,6 +442,15 @@ th[aria-sort="descending"] .md-sort-mark::after {
   color: var(--foreground);
 }
 
+/*
+ * shadcn's input group shows focus as a ring around the whole field; styles.css's unlayered
+ * :focus-visible outline would draw a second box around the input inside it, and no layered
+ * utility can undo an unlayered rule. P2 decides that rule for every component.
+ */
+.ui-form-body [data-slot="input-group-control"]:focus-visible {
+  outline: none;
+}
+
 /* Sent, or on its way: inert, and faded so it does not look like it still takes input. */
 .ui-form-body[inert] {
   opacity: 0.6;

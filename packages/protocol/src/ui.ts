@@ -12,6 +12,8 @@ export const UI_COMPONENTS: readonly string[] = [
   "TextField",
   "DateTimeInput",
   "ChoicePicker",
+  // The page's own: a combobox of accounts (apps/web AccountSelect.tsx).
+  "AccountSelect",
   "Button",
 ];
 

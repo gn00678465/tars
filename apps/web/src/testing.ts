@@ -1,4 +1,5 @@
 import { PROTOCOL_VERSION, type ServerMessage } from "@tars/protocol";
+import { act } from "react";
 import { Socket, type SocketDeps, type WebSocketLike } from "./socket.ts";
 import type { Event } from "./state.ts";
 
@@ -117,3 +118,52 @@ export const server = (
   p: unknown,
   extra: { conv?: string; re?: string } = {},
 ) => ({ v: PROTOCOL_VERSION, id: `s-${++seq}`, kind, ...extra, p }) as ServerMessage;
+
+/** Lets React, Base UI's effects and Lit's microtasks settle. */
+const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)));
+
+/**
+ * A press as a pointer makes it. Base UI acts on the whole sequence, and click alone does not
+ * open its popups reliably (m4_web_stack_design.md 5.5).
+ */
+export async function press(el: Element) {
+  await act(async () => {
+    for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      const init = { bubbles: true, cancelable: true, button: 0 };
+      el.dispatchEvent(
+        type.startsWith("pointer")
+          ? new PointerEvent(type, { ...init, pointerType: "mouse" })
+          : new MouseEvent(type, init),
+      );
+    }
+  });
+  await settle();
+}
+
+/**
+ * Types into a combobox as a person would: a press opens it, then the text arrives as an
+ * InputEvent. The value goes through the element's own setter, past React's tracker.
+ */
+export async function typeInto(input: HTMLInputElement, text: string) {
+  await press(input);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, text);
+    input.dispatchEvent(
+      new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }),
+    );
+  });
+  await settle();
+}
+
+/** The options an open combobox lists, by their text. Its popup is under document.body. */
+export const listed = () =>
+  [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.trim() ?? "");
+
+/** Picks a listed option by its text. */
+export async function choose(text: string) {
+  const option = [...document.querySelectorAll('[role="option"]')].find(
+    (o) => o.textContent?.trim() === text,
+  );
+  if (option === undefined) throw new Error(`no option ${text}; listed: ${listed().join(", ")}`);
+  await press(option);
+}

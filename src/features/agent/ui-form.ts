@@ -60,11 +60,12 @@ export function formMessage(
     if (!(FIELDS as readonly string[]).includes(key)) return bad(`unknown field ${key}`);
   const values: Record<string, string> = {};
   for (const key of FIELDS) {
-    // A picker sends a list of one; a text field a string, absent when left unset.
-    const raw = context[key] ?? (key === "source" || key === "target" ? undefined : "");
+    // An account comes as a string from an AccountSelect, or a list of one from a ChoicePicker
+    // (forms shown before B3); a text field sends a string, absent when left unset.
+    const account = key === "source" || key === "target";
+    const raw = context[key] ?? (account ? undefined : "");
     const v = Array.isArray(raw) ? (raw.length === 1 ? raw[0] : undefined) : raw;
-    if (v === undefined || Array.isArray(raw) !== (key === "source" || key === "target"))
-      return bad(`${key} is not one value`);
+    if (v === undefined || (Array.isArray(raw) && !account)) return bad(`${key} is not one value`);
     if (CONTROL.test(v) || v.startsWith("-")) return bad(`${key} has a control character or a -`);
     values[key] = v;
   }
@@ -102,6 +103,9 @@ function realDate(date: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date;
 }
 
+/** Components that offer accounts: AccountSelect, and ChoicePicker in forms shown before it. */
+const PICKERS = ["AccountSelect", "ChoicePicker"];
+
 /** The values a picker offers: the one bound to the path the button sends as `key`. */
 function options(components: readonly unknown[], context: unknown, key: string): string[] {
   const bound = isRecord(context) && isRecord(context[key]) ? context[key]["@path"] : undefined;
@@ -109,7 +113,7 @@ function options(components: readonly unknown[], context: unknown, key: string):
   const picker = components.find(
     (c) =>
       isRecord(c) &&
-      c.component === "ChoicePicker" &&
+      PICKERS.includes(c.component as string) &&
       isRecord(c.value) &&
       c.value["@path"] === bound,
   );

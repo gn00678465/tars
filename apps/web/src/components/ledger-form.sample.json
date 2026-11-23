@@ -28,26 +28,22 @@
     },
     {
       "id": "target",
-      "component": "ChoicePicker",
+      "component": "AccountSelect",
       "label": "借方帳戶（錢去哪）",
-      "variant": "mutuallyExclusive",
-      "filterable": true,
       "value": { "@path": "/target" },
       "options": [
-        { "label": "Expenses:Food:Dinner", "value": "Expenses:Food:Dinner" },
+        { "label": "晚餐（Expenses:Food:Dinner）", "value": "Expenses:Food:Dinner" },
         { "label": "Expenses:Transport", "value": "Expenses:Transport" }
       ]
     },
     {
       "id": "source",
-      "component": "ChoicePicker",
+      "component": "AccountSelect",
       "label": "貸方帳戶（錢從哪來）",
-      "variant": "mutuallyExclusive",
-      "filterable": true,
       "value": { "@path": "/source" },
       "options": [
-        { "label": "Assets:Cash:Wallet", "value": "Assets:Cash:Wallet" },
-        { "label": "Liabilities:CreditCard", "value": "Liabilities:CreditCard" }
+        { "label": "錢包（Assets:Cash:Wallet）", "value": "Assets:Cash:Wallet" },
+        { "label": "信用卡（Liabilities:CreditCard）", "value": "Liabilities:CreditCard" }
       ]
     },
     {
@@ -75,11 +71,13 @@
               "values": [
                 { "@call": "required", "args": { "value": { "@path": "/date" } } },
                 { "@call": "required", "args": { "value": { "@path": "/amount" } } },
+                { "@call": "required", "args": { "value": { "@path": "/target" } } },
+                { "@call": "required", "args": { "value": { "@path": "/source" } } },
                 { "@call": "required", "args": { "value": { "@path": "/narration" } } }
               ]
             }
           },
-          "message": "日期、金額、摘要要填"
+          "message": "日期、金額、兩個帳戶、摘要要填"
         }
       ],
       "action": {
@@ -101,8 +99,8 @@
   "dataModel": {
     "date": "2026-11-23",
     "amount": "",
-    "target": [],
-    "source": ["Assets:Cash:Wallet"],
+    "target": "",
+    "source": "Assets:Cash:Wallet",
     "narration": "",
     "payee": ""
   }

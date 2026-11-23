@@ -2,6 +2,7 @@
 import { act } from "react";
 import { afterEach, expect, test } from "vite-plus/test";
 import { render } from "../render.ts";
+import { choose, listed, press, typeInto } from "../testing.ts";
 import A2uiCard, { buildSurface, type FormSpec } from "./A2uiCard.tsx";
 import sample from "./ledger-form.sample.json";
 
@@ -13,7 +14,16 @@ import sample from "./ledger-form.sample.json";
 const spec = sample as FormSpec;
 const CALL = "01a1fd71-be41-71e7-809a-4bb1e56800cc";
 
+/** Unmounted before the body is cleared: an open combobox's popup is a portal under body. */
+const mounted: (() => void)[] = [];
+const mount: typeof render = async (el) => {
+  const r = await render(el);
+  mounted.push(r.unmount);
+  return r;
+};
+
 afterEach(() => {
+  for (const unmount of mounted.splice(0)) unmount();
   document.body.innerHTML = "";
 });
 
@@ -44,7 +54,7 @@ test("the website's keys are refused: @checks on a component, a binding without 
 });
 
 test("drawn with the data model's values, none of them [object Object]", async () => {
-  const { root } = await render(
+  const { root } = await mount(
     <A2uiCard
       callId={CALL}
       spec={spec}
@@ -58,13 +68,14 @@ test("drawn with the data model's values, none of them [object Object]", async (
   expect(inputs.length).toBeGreaterThan(0);
   for (const i of inputs) expect(i.value).not.toContain("[object Object]");
   expect(root.querySelector<HTMLInputElement>('input[type="date"]')?.value).toBe("2026-11-23");
-  const checked = inputs.filter((i) => i.type === "radio" && i.checked).map((i) => i.value);
-  expect(checked).toEqual(["Assets:Cash:Wallet"]);
+  // The preset account shows its label; the one not preset is empty.
+  expect(account(root, "貸方帳戶（錢從哪來）").value).toBe("錢包（Assets:Cash:Wallet）");
+  expect(account(root, "借方帳戶（錢去哪）").value).toBe("");
   expect(root.textContent).toContain("記一筆帳");
 });
 
 test("a form that does not validate draws what it is given instead", async () => {
-  const { root } = await render(
+  const { root } = await mount(
     <A2uiCard
       callId={CALL}
       spec={{ components: [{ id: "root", component: "Modalx" }] }}
@@ -84,6 +95,14 @@ const field = (root: HTMLElement, label: string) => {
   return input;
 };
 
+/** An account field by its label, which names it (htmlFor). */
+const account = (root: HTMLElement, label: string) => {
+  const l = [...root.querySelectorAll("label")].find((x) => x.textContent === label);
+  const input = document.getElementById(l?.htmlFor ?? "");
+  if (!(input instanceof HTMLInputElement)) throw new Error(`no account field ${label}`);
+  return input;
+};
+
 /** Types into an input as a person would: the value, then the events Lit listens for. */
 const type = async (input: HTMLInputElement, value: string) => {
   await act(async () => {
@@ -96,7 +115,7 @@ const type = async (input: HTMLInputElement, value: string) => {
 
 test("the button's checks keep it off until the required fields are filled; then it sends", async () => {
   const sent: { name: string; context: unknown }[] = [];
-  const { root } = await render(
+  const { root } = await mount(
     <A2uiCard
       callId={CALL}
       spec={spec}
@@ -111,6 +130,10 @@ test("the button's checks keep it off until the required fields are filled; then
   await type(field(root, "金額"), "190");
   expect(submit?.disabled).toBe(true);
   await type(field(root, "摘要"), "晚餐");
+  // Both accounts are required too: the target is not preset.
+  expect(submit?.disabled).toBe(true);
+  await typeInto(account(root, "借方帳戶（錢去哪）"), "晚餐");
+  await choose("晚餐（Expenses:Food:Dinner）");
   expect(submit?.disabled).toBe(false);
   await act(async () => submit?.click());
   expect(sent.map((a) => [a.name, a.context])).toEqual([
@@ -119,11 +142,77 @@ test("the button's checks keep it off until the required fields are filled; then
       {
         date: "2026-11-23",
         amount: "190",
-        target: [],
-        source: ["Assets:Cash:Wallet"],
+        target: "Expenses:Food:Dinner",
+        source: "Assets:Cash:Wallet",
         narration: "晚餐",
         payee: "",
       },
     ],
   ]);
+});
+
+const card = async (
+  onAction: (a: { name: string; context: unknown }) => void = () => undefined,
+) => {
+  const { root } = await mount(
+    <A2uiCard
+      callId={CALL}
+      spec={spec}
+      onAction={onAction}
+      frame={(f) => f}
+      invalid={<p>bad</p>}
+    />,
+  );
+  await settle();
+  return root;
+};
+
+test("an account field lists every option, narrowed by typing Chinese or English", async () => {
+  const root = await card();
+  const target = account(root, "借方帳戶（錢去哪）");
+  expect(target.getAttribute("role")).toBe("combobox");
+  await press(target);
+  expect(listed()).toEqual(["晚餐（Expenses:Food:Dinner）", "Expenses:Transport"]);
+  await typeInto(target, "晚餐");
+  expect(listed()).toEqual(["晚餐（Expenses:Food:Dinner）"]);
+  await typeInto(target, "transport");
+  expect(listed()).toEqual(["Expenses:Transport"]);
+  await typeInto(target, "沒有這個");
+  expect(listed()).toEqual([]);
+  expect(document.body.textContent).toContain("沒有符合的帳戶");
+});
+
+test("a picked account is written as its English name, and the field shows its label", async () => {
+  const sent: { name: string; context: unknown }[] = [];
+  const root = await card((a) => sent.push(a));
+  const source = account(root, "貸方帳戶（錢從哪來）");
+  await typeInto(source, "信用卡");
+  await choose("信用卡（Liabilities:CreditCard）");
+  expect(source.value).toBe("信用卡（Liabilities:CreditCard）");
+  await typeInto(account(root, "借方帳戶（錢去哪）"), "Transport");
+  await choose("Expenses:Transport");
+  await type(field(root, "金額"), "35");
+  await type(field(root, "摘要"), "公車");
+  const submit = [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === "送出");
+  await act(async () => submit?.click());
+  expect(sent.map((a) => a.context)).toMatchObject([
+    { target: "Expenses:Transport", source: "Liabilities:CreditCard" },
+  ]);
+});
+
+test("the account field writes no style; the styles there are Base UI's and A2UI's own", async () => {
+  const root = await card();
+  await press(account(root, "借方帳戶（錢去哪）"));
+  expect(listed()).toHaveLength(2);
+  // Set by script (CSSOM), which the CSP allows, unlike a style attribute in markup: A2UI's host
+  // element, and Base UI's hidden form input, dismiss button, popup and its positioner.
+  const theirs = (e: Element) =>
+    e.tagName.startsWith("A2UI-") ||
+    e.id.endsWith("-hidden-input") ||
+    e.getAttribute("aria-label") === "Dismiss" ||
+    e.getAttribute("data-slot") === "combobox-content" ||
+    e.firstElementChild?.getAttribute("data-slot") === "combobox-content";
+  const styled = [...document.querySelectorAll("[style]")];
+  expect(styled.length).toBeGreaterThan(0);
+  expect(styled.filter((e) => !theirs(e)).map((e) => e.outerHTML)).toEqual([]);
 });

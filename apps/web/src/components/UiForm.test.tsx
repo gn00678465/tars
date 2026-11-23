@@ -4,11 +4,21 @@ import { act, useEffect, useState } from "react";
 import { afterEach, expect, test } from "vite-plus/test";
 import { render } from "../render.ts";
 import { initial, type State } from "../state.ts";
+import { choose, typeInto } from "../testing.ts";
 import sample from "./ledger-form.sample.json";
 import { Thread } from "./Thread.tsx";
 import { type FormHooks, toContext } from "./UiForm.tsx";
 
+/** Unmounted before the body is cleared: an open combobox's popup is a portal under body. */
+const mounted: (() => void)[] = [];
+const mount: typeof render = async (el) => {
+  const r = await render(el);
+  mounted.push(r.unmount);
+  return r;
+};
+
 afterEach(() => {
+  for (const unmount of mounted.splice(0)) unmount();
   document.body.innerHTML = "";
 });
 
@@ -74,7 +84,7 @@ async function drawn(root: HTMLElement) {
 }
 
 const draw = async (state: State, forms?: FormHooks) => {
-  const r = await render(
+  const r = await mount(
     <Thread
       state={state}
       onOlder={() => undefined}
@@ -101,20 +111,24 @@ const type = async (input: HTMLInputElement, value: string) => {
   await act(async () => new Promise((r) => setTimeout(r, 0)));
 };
 
-/** Picks an option of a ChoicePicker by its value, as a click would. */
-const pick = async (root: HTMLElement, value: string) => {
-  const radio = root.querySelector<HTMLInputElement>(`input[type="radio"][value="${value}"]`);
-  if (radio === null) throw new Error(`no option ${value}`);
-  await act(async () => radio.click());
-  await act(async () => new Promise((r) => setTimeout(r, 0)));
+/** An account field by its label, which names it (htmlFor). */
+const account = (root: HTMLElement, label: string) => {
+  const l = [...root.querySelectorAll("label")].find((x) => x.textContent === label);
+  const input = document.getElementById(l?.htmlFor ?? "");
+  if (!(input instanceof HTMLInputElement)) throw new Error(`no account field ${label}`);
+  return input;
 };
 
-/** What the user has put in: the amount, and the picked accounts. */
+/** Picks the target account by typing part of its label, then choosing it. */
+const pick = async (root: HTMLElement, typed: string, label: string) => {
+  await typeInto(account(root, "借方帳戶（錢去哪）"), typed);
+  await choose(label);
+};
+
+/** What the user has put in: the amount, and the accounts as shown. */
 const filled = (root: HTMLElement) => ({
   amount: field(root, "金額").value,
-  picked: [...root.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
-    .filter((r) => r.checked)
-    .map((r) => r.value),
+  picked: ["借方帳戶（錢去哪）", "貸方帳戶（錢從哪來）"].map((l) => account(root, l).value),
 });
 
 /**
@@ -160,15 +174,17 @@ test("the button sends the form's values as ui.submit's context, for this call",
   const root = await draw(thread({}), h);
   await type(field(root, "金額"), "190");
   await type(field(root, "摘要"), "晚餐");
+  await pick(root, "晚餐", "晚餐（Expenses:Food:Dinner）");
   await act(async () => submitButton(root)?.click());
+  // The English names, not the labels shown.
   expect(sent).toEqual([
     [
       CALL,
       {
         date: "2026-11-23",
         amount: "190",
-        target: [],
-        source: ["Assets:Cash:Wallet"],
+        target: "Expenses:Food:Dinner",
+        source: "Assets:Cash:Wallet",
         narration: "晚餐",
         payee: "",
       },
@@ -178,12 +194,15 @@ test("the button sends the form's values as ui.submit's context, for this call",
 
 test("what was typed and picked stays through a second's redraw and new item objects", async () => {
   const { h } = hooks();
-  const { root } = await render(<Ticking state={thread({})} forms={h} />);
+  const { root } = await mount(<Ticking state={thread({})} forms={h} />);
   await drawn(root);
   await type(field(root, "金額"), "190");
-  await pick(root, "Expenses:Food:Dinner");
+  await pick(root, "Dinner", "晚餐（Expenses:Food:Dinner）");
   const before = filled(root);
-  expect(before).toEqual({ amount: "190", picked: ["Expenses:Food:Dinner", "Assets:Cash:Wallet"] });
+  expect(before).toEqual({
+    amount: "190",
+    picked: ["晚餐（Expenses:Food:Dinner）", "錢包（Assets:Cash:Wallet）"],
+  });
   await act(async () => new Promise((r) => setTimeout(r, 1100)));
   expect(root.querySelector(".tick")?.textContent).not.toBe("0");
   expect(filled(root)).toEqual(before);
@@ -192,10 +211,10 @@ test("what was typed and picked stays through a second's redraw and new item obj
 test("sending, then refused: what was typed stays, the form opens again, the reason under it", async () => {
   const state = thread({});
   const sending = hooks({ sending: CALL }).h;
-  const { root, rerender } = await render(<Ticking state={state} forms={hooks().h} />);
+  const { root, rerender } = await mount(<Ticking state={state} forms={hooks().h} />);
   await drawn(root);
   await type(field(root, "金額"), "190");
-  await pick(root, "Expenses:Food:Dinner");
+  await pick(root, "Dinner", "晚餐（Expenses:Food:Dinner）");
   const before = filled(root);
   await rerender(<Ticking state={state} forms={sending} />);
   expect(root.querySelector(".ui-form-body")?.hasAttribute("inert")).toBe(true);

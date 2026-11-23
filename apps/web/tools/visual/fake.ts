@@ -8,6 +8,9 @@ const scene = SCENES[n - 1];
 if (scene === undefined) throw new Error(`no scene ${n}`);
 
 let seq = 0;
+/** What the page sent, for csp.ts to read back. */
+const sent: unknown[] = [];
+(globalThis as { visualSent?: unknown[] }).visualSent = sent;
 const envelope = (m: Push, re?: string) => ({ v: PROTOCOL_VERSION, id: `s-${++seq}`, re, ...m });
 
 class SceneSocket {
@@ -25,6 +28,7 @@ class SceneSocket {
   send(data: string) {
     if (data === "ping" || scene === undefined) return;
     const m = JSON.parse(data) as { id: string; kind: string; conv?: string; p: { path?: string } };
+    sent.push(m);
     if (m.kind === "hello") {
       this.reply({ kind: "hello", p: { epoch: EPOCH, tars: "0.0.1" } }, m.id);
       this.reply({ kind: "relay.status", p: scene.relay });
