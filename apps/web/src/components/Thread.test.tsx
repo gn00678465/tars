@@ -249,6 +249,40 @@ test("D1: a started turn's line names its phase, and is gone once the turn ends"
   expect(await line({ state: "aborted", turn: T })).toBeNull();
 });
 
+test("the sprites: the wheel while thinking, idle on the empty page, and no inline style", async () => {
+  const thinking = await render(
+    <Thread
+      state={turnState({ state: "started", turn: T, phase: "thinking" })}
+      onOlder={() => undefined}
+      after={() => null}
+    />,
+  );
+  const sprite = thinking.root.querySelector(".turn-status .tars-sprite");
+  expect(sprite?.className).toBe("tars-sprite wheel");
+  expect(sprite?.getAttribute("aria-hidden")).toBe("true");
+  expect(thinking.root.querySelector("[style], style")).toBeNull();
+  thinking.unmount();
+  const replying = await render(
+    <Thread
+      state={turnState({ state: "started", turn: T, phase: "replying" })}
+      onOlder={() => undefined}
+      after={() => null}
+    />,
+  );
+  expect(replying.root.querySelector(".tars-sprite")).toBeNull();
+  replying.unmount();
+  const empty = await render(
+    <Thread
+      state={{ ...initial, connection: "open" }}
+      onOlder={() => undefined}
+      after={() => null}
+    />,
+  );
+  expect(empty.root.querySelector(".empty-state .tars-sprite")?.className).toBe("tars-sprite idle");
+  expect(empty.root.querySelector("[style], style")).toBeNull();
+  empty.unmount();
+});
+
 test("C3: an interrupted turn is a warn card, from its error item or, without one, from the turn", async () => {
   const errorItem = {
     seq: 1,

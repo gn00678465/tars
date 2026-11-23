@@ -11,6 +11,12 @@ test("connect-src has 'self' and wss:// with the host given", () => {
   expect(file).toContain("frame-ancestors 'none'");
 });
 
+test("manifest-src 'self' for the PWA manifest; nothing inline is allowed", () => {
+  const file = headersFile("app.example.test");
+  expect(file).toContain("manifest-src 'self'");
+  expect(file).not.toContain("unsafe-inline");
+});
+
 test.each([
   undefined,
   "",

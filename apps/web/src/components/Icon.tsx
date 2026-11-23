@@ -90,9 +90,9 @@ export function Icon({ name, size = 14 }: { name: keyof typeof PATHS; size?: num
   );
 }
 
-export function Monolith({ large = false }: { large?: boolean }) {
+export function Monolith() {
   return (
-    <span className={large ? "tars-monolith lg" : "tars-monolith"} aria-hidden="true">
+    <span className="tars-monolith" aria-hidden="true">
       <span />
       <span />
       <span />
