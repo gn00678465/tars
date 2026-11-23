@@ -906,3 +906,70 @@ describe("archive", () => {
     expect(s.convs).toHaveLength(2);
   });
 });
+
+describe("an A2UI form's ui.submit", () => {
+  const open: Event[] = [
+    { type: "connection", connection: "open" },
+    { type: "open_conv", conv: CONV },
+  ];
+  const sending = () =>
+    run([...open, { type: "submitted", requestId: "f1", form: "call-1" }], initial);
+
+  test("it is a submit: the page is busy, and the form is the one on its way", () => {
+    const s = sending();
+    expect(sendBusy(s)).toBe("送出中");
+    expect(s.form).toEqual({ callId: "call-1", requestId: "f1" });
+  });
+
+  test("a refusal is said under the form, in its own words, not in the composer", () => {
+    const s = run(
+      [{ type: "submit_result", requestId: "f1", ok: false, reason: "bad_message" }],
+      sending(),
+    );
+    expect(s.error).toBeUndefined();
+    expect(s.form).toBeUndefined();
+    expect(s.submitting).toBeUndefined();
+    expect(s.formError).toEqual({
+      callId: "call-1",
+      text: "本機端沒有接受這張表單：值不對，或本機端還不支援表單",
+    });
+    // Sent again: the old reason goes.
+    expect(
+      run([{ type: "submitted", requestId: "f2", form: "call-1" }], s).formError,
+    ).toBeUndefined();
+  });
+
+  test("its turn starting ends it; one rejected says why under the form", () => {
+    const started = run(
+      [server("turn", { turn: TURN, requestId: "f1", state: "started" }, { conv: CONV })],
+      sending(),
+    );
+    expect(started.form).toBeUndefined();
+    expect(started.submitting).toBeUndefined();
+    const rejected = run(
+      [
+        server(
+          "turn",
+          { requestId: "f1", state: "rejected", reason: "budget_stopped" },
+          { conv: CONV },
+        ),
+      ],
+      sending(),
+    );
+    expect(rejected.error).toBeUndefined();
+    expect(rejected.formError).toEqual({
+      callId: "call-1",
+      text: "沒有開始：本期花費已到停用門檻",
+    });
+  });
+
+  test("a message's own refusal still goes to the composer", () => {
+    const s = run([
+      ...open,
+      { type: "submitted", requestId: "m1" },
+      { type: "submit_result", requestId: "m1", ok: false, reason: "busy" },
+    ]);
+    expect(s.error).toBe("本機端正在跑另一個回合");
+    expect(s.formError).toBeUndefined();
+  });
+});

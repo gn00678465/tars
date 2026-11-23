@@ -120,6 +120,11 @@ export const CLIENT: Record<string, object> = {
   "wiki.source": msg("wiki.source", { ref: REF, page: "people/wang-xiaoming" }),
   "conv.compact": msg("conv.compact", { focus: "保留腳本輸出路徑" }, { conv: ID }),
   "conv.archive": msg("conv.archive", { archived: true }, { conv: ID }),
+  "ui.submit": msg(
+    "ui.submit",
+    { requestId: ID, callId: ID, context: { amount: "120", account: ["Assets:Cash"] } },
+    { conv: ID },
+  ),
 };
 
 export const context = {
@@ -269,6 +274,7 @@ export const SERVER: Record<string, object> = {
 /** A required key of each kind's p, when it has one. */
 export const REQUIRED_P: Record<string, string> = {
   "turn.submit": "text",
+  "ui.submit": "callId",
   "approval.decide": "hash",
   hello: "epoch",
   nack: "reason",

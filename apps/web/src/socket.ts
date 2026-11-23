@@ -1,4 +1,10 @@
-import { parseServer, PROTOCOL_VERSION, type ClientKind, type NackReason } from "@tars/protocol";
+import {
+  parseServer,
+  PROTOCOL_VERSION,
+  type ClientKind,
+  type NackReason,
+  type UiContext,
+} from "@tars/protocol";
 import type { Connection, Event } from "./state.ts";
 
 const BACKOFF_S = [1, 2, 4, 8, 15];
@@ -46,9 +52,11 @@ export interface Start {
 
 interface Submit {
   readonly requestId: string;
-  readonly text: string;
+  /** A turn.submit, or a form's ui.submit, which the local end takes as one. */
+  readonly kind: "turn.submit" | "ui.submit";
+  /** p without requestId. */
+  readonly p: Readonly<Record<string, unknown>>;
   readonly conv: string | undefined;
-  readonly start: Start | undefined;
   /** Every turn.submit sent for it: an ack to an earlier one counts as well. */
   readonly ids: Set<string>;
   acked?: boolean;
@@ -127,10 +135,27 @@ export class Socket {
    * what reaches the next one.
    */
   submit(text: string, conv?: string, start?: Start): string {
+    return this.request("turn.submit", { text, ...start }, conv);
+  }
+
+  /**
+   * A form's values, sent as turn.submit is: the local end starts a turn from it, so it is
+   * resent and settled the same way, and only one of the two can be on its way at a time.
+   */
+  submitForm(conv: string, callId: string, context: UiContext): string {
+    return this.request("ui.submit", { callId, context }, conv, callId);
+  }
+
+  private request(
+    kind: Submit["kind"],
+    p: Submit["p"],
+    conv: string | undefined,
+    form?: string,
+  ): string {
     this.d.clearTimeout(this.submit_?.timer);
     const requestId = this.d.newId();
-    this.submit_ = { requestId, text, conv, start, ids: new Set() };
-    this.listener({ type: "submitted", requestId });
+    this.submit_ = { requestId, kind, p, conv, ids: new Set() };
+    this.listener({ type: "submitted", requestId, ...(form === undefined ? {} : { form }) });
     this.transmit();
     return requestId;
   }
@@ -139,11 +164,7 @@ export class Socket {
     const s = this.submit_;
     if (s === undefined) return;
     this.d.clearTimeout(s.timer);
-    const id = this.send(
-      "turn.submit",
-      { requestId: s.requestId, text: s.text, ...s.start },
-      s.conv,
-    );
+    const id = this.send(s.kind, { requestId: s.requestId, ...s.p }, s.conv);
     if (id !== undefined) s.ids.add(id);
     // Not sent while offline: hello sends it again.
     s.timer = this.d.setTimeout(() => this.transmit(), RESEND_MS);

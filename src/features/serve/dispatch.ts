@@ -306,6 +306,11 @@ export class Dispatch {
         )
           this.current.controller.abort();
         return this.d.hub.send(conn, message(this.d.hub, "ack", {}, { re: m.id }));
+      case "ui.submit":
+        // Forms are not handled yet (B2): refused outright, so the page stops resending and
+        // says so under the form instead of showing it as sending forever.
+        if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
+        return this.reply(conn, "nack", "bad_message", m.id);
       case "approval.decide":
         if (this.current === undefined) {
           if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);

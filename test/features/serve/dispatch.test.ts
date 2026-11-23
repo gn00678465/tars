@@ -688,6 +688,24 @@ describe("Dispatch: approvals while a turn runs", () => {
     expect(s.hub.to(CONN_A, "turn").at(-1)?.p).toMatchObject({ state: "aborted" });
   });
 
+  test("ui.submit is refused as bad_message until forms are handled (B2), with no turn", async () => {
+    const s = await setup();
+    await s.ready(CONN_A);
+    const id = await s.msg(
+      CONN_A,
+      "ui.submit",
+      {
+        requestId: "11111111-1111-4111-8111-111111111111",
+        callId: "call-1",
+        context: { amount: "190" },
+      },
+      { conv: "22222222-2222-4222-8222-222222222222" },
+    );
+    expect(reply(s, CONN_A, id)?.kind).toBe("nack");
+    expect(reason(reply(s, CONN_A, id))).toBe("bad_message");
+    expect(s.d.current).toBeUndefined();
+  });
+
   test("a decision with no turn running is already_decided", async () => {
     const s = await setup();
     await s.ready(CONN_A);

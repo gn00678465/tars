@@ -8,6 +8,7 @@ import { Markdown, type Sort, TableSorts } from "./Markdown.tsx";
 import { CompactEndCard } from "./CompactEndCard.tsx";
 import { effortName } from "./RunSetup.tsx";
 import { clock, shortId } from "./time.ts";
+import { type FormHooks, UI_SHOW, UiForm } from "./UiForm.tsx";
 
 const cut = (truncated: boolean) => (truncated ? "（已截斷）" : "");
 const n = (v: number) => v.toLocaleString("en-US");
@@ -131,16 +132,24 @@ export type After = (seq: number) => ReactNode;
 /** A conversation a new one continues: its title and its model's label, when it is listed. */
 export type Origin = (conv: string) => { title: string; model: string } | undefined;
 
+/** The forms in the thread: what the page can do with them, and those already sent. */
+interface Forms {
+  readonly hooks: FormHooks | undefined;
+  readonly sent: ReadonlySet<string>;
+}
+
 function Rest({
   items,
   after,
   provider,
   origin,
+  forms,
 }: {
   items: readonly WireItem[];
   after: After;
   provider: string | undefined;
   origin: Origin | undefined;
+  forms: Forms;
 }) {
   const results = new Map(
     items.filter((i): i is ToolResult => i.kind === "tool_result").map((i) => [i.callId, i]),
@@ -153,6 +162,7 @@ function Rest({
         result={item.kind === "tool_call" ? results.get(item.callId) : undefined}
         provider={provider}
         origin={origin}
+        forms={forms}
       />
       {after(item.seq)}
     </Fragment>
@@ -173,12 +183,14 @@ function One({
   result,
   provider,
   origin,
+  forms,
 }: {
   item: WireItem;
   reply: string | undefined;
   result: ToolResult | undefined;
   provider: string | undefined;
   origin: Origin | undefined;
+  forms: Forms;
 }) {
   switch (item.kind) {
     case "user":
@@ -206,8 +218,21 @@ function One({
           ) : null}
         </div>
       );
-    case "tool_call":
-      return <ToolStep key={item.seq} call={item} result={result} />;
+    case "tool_call": {
+      const step = <ToolStep key={item.seq} call={item} result={result} />;
+      // A form the local end refused to show stays a tool step (m4_design_a2ui.md 1.5).
+      return item.name === UI_SHOW && (result === undefined || result.status === "done") ? (
+        <UiForm
+          key={item.seq}
+          call={item}
+          sent={forms.sent.has(item.callId)}
+          hooks={forms.hooks}
+          step={step}
+        />
+      ) : (
+        step
+      );
+    }
     case "usage":
       return <UsageLine key={item.seq} item={item} />;
     case "error":
@@ -464,6 +489,8 @@ export function Thread(props: {
   /** Opens the effort control; absent when the page offers none. */
   onEffort?: () => void;
   origin?: Origin;
+  /** What a form in the thread can do; absent where forms cannot be sent. */
+  forms?: FormHooks;
 }) {
   const { items, running, turn, more, notices, conv } = props.state;
   const sorts = useRef(new Map<string, Sort>()).current;
@@ -492,6 +519,13 @@ export function Thread(props: {
       </div>
     );
   const all = groups(items);
+  // A message a form sent names it: that form is drawn as sent, after a reload too.
+  const forms: Forms = {
+    hooks: props.forms,
+    sent: new Set(
+      items.flatMap((i) => (i.kind === "user" && i.uiCall !== undefined ? [i.uiCall] : [])),
+    ),
+  };
   const { compactions, latest, faded } = placed(all, items);
   const dividers = compactions.map((c) => (
     <Compaction key={c.seq} item={c} merged={c !== latest} />
@@ -528,7 +562,13 @@ export function Thread(props: {
             )}
             <div className="msg-assistant">
               {g.user === undefined ? null : props.after(g.user.seq)}
-              <Rest items={g.rest} after={props.after} provider={provider} origin={props.origin} />
+              <Rest
+                items={g.rest}
+                after={props.after}
+                provider={provider}
+                origin={props.origin}
+                forms={forms}
+              />
               {i === all.length - 1 ? streaming : null}
             </div>
           </div>

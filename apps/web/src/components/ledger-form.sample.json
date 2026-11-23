@@ -1,0 +1,109 @@
+{
+  "components": [
+    {
+      "id": "root",
+      "component": "Column",
+      "children": ["title", "date", "amount", "target", "source", "narration", "payee", "submit"]
+    },
+    { "id": "title", "component": "Text", "text": "記一筆帳" },
+    {
+      "id": "date",
+      "component": "DateTimeInput",
+      "label": "日期",
+      "enableDate": true,
+      "value": { "@path": "/date" }
+    },
+    {
+      "id": "amount",
+      "component": "TextField",
+      "label": "金額",
+      "variant": "number",
+      "value": { "@path": "/amount" },
+      "checks": [
+        {
+          "condition": { "@call": "required", "args": { "value": { "@path": "/amount" } } },
+          "message": "請填金額"
+        }
+      ]
+    },
+    {
+      "id": "target",
+      "component": "ChoicePicker",
+      "label": "借方帳戶（錢去哪）",
+      "variant": "mutuallyExclusive",
+      "filterable": true,
+      "value": { "@path": "/target" },
+      "options": [
+        { "label": "Expenses:Food:Dinner", "value": "Expenses:Food:Dinner" },
+        { "label": "Expenses:Transport", "value": "Expenses:Transport" }
+      ]
+    },
+    {
+      "id": "source",
+      "component": "ChoicePicker",
+      "label": "貸方帳戶（錢從哪來）",
+      "variant": "mutuallyExclusive",
+      "filterable": true,
+      "value": { "@path": "/source" },
+      "options": [
+        { "label": "Assets:Cash:Wallet", "value": "Assets:Cash:Wallet" },
+        { "label": "Liabilities:CreditCard", "value": "Liabilities:CreditCard" }
+      ]
+    },
+    {
+      "id": "narration",
+      "component": "TextField",
+      "label": "摘要",
+      "value": { "@path": "/narration" }
+    },
+    {
+      "id": "payee",
+      "component": "TextField",
+      "label": "付款對象",
+      "value": { "@path": "/payee" }
+    },
+    {
+      "id": "submit",
+      "component": "Button",
+      "variant": "primary",
+      "child": "submit_label",
+      "checks": [
+        {
+          "condition": {
+            "@call": "and",
+            "args": {
+              "values": [
+                { "@call": "required", "args": { "value": { "@path": "/date" } } },
+                { "@call": "required", "args": { "value": { "@path": "/amount" } } },
+                { "@call": "required", "args": { "value": { "@path": "/narration" } } }
+              ]
+            }
+          },
+          "message": "日期、金額、摘要要填"
+        }
+      ],
+      "action": {
+        "event": {
+          "name": "ledger_submit",
+          "context": {
+            "date": { "@path": "/date" },
+            "amount": { "@path": "/amount" },
+            "target": { "@path": "/target" },
+            "source": { "@path": "/source" },
+            "narration": { "@path": "/narration" },
+            "payee": { "@path": "/payee" }
+          }
+        }
+      }
+    },
+    { "id": "submit_label", "component": "Text", "text": "送出" }
+  ],
+  "dataModel": {
+    "date": "2026-11-23",
+    "amount": "",
+    "target": [],
+    "source": ["Assets:Cash:Wallet"],
+    "narration": "",
+    "payee": ""
+  }
+}

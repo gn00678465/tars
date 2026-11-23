@@ -9,6 +9,8 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@a2ui/react": "0.15.0",
+    "@a2ui/web_core": "0.15.0",
     "@tars/protocol": "workspace:*",
     "jose": "6.2.17",
     "react": "19.3.1",

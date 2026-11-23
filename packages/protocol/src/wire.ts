@@ -45,6 +45,12 @@ export const wireItem = z.discriminatedUnion("kind", [
     kind: z.literal("user"),
     text: z.string().max(ITEM_TEXT_BYTES),
     truncated: z.boolean(),
+    /**
+     * The ui_show call whose form this message sent: the page draws that form as sent. Optional:
+     * absent from a local end older than it and from any other message. A page older than it
+     * refuses an item that has it (strictObject), so the page is deployed first, as callId was.
+     */
+    uiCall: id.optional(),
   }),
   /** The text carried over from an earlier conversation, as a marker: `from` is that one's id. */
   z.strictObject({ ...base, kind: z.literal("carried"), from: id }),

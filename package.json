@@ -33,6 +33,7 @@
   },
   "trustedDependencies": [],
   "overrides": {
+    "dompurify": "3.4.17",
     "vite": "npm:@voidzero-dev/vite-plus-core@1.6.0",
     "vitest": "5.1.0"
   }
