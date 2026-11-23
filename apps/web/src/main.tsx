@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { browserSocket } from "./socket.ts";
+import "./index.css";
 import "./styles.css";
 import "./app.css";
 

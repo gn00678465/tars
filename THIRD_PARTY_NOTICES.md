@@ -97,3 +97,34 @@ SOFTWARE.
 - 位置：`tars-skills/serenity-skill/`
 - 來源：https://github.com/muxuuu/serenity-skill/tree/193e409c6ec6acad8e52c29c0570470ed83e3eae
 - 授權：MIT，全文在 `tars-skills/serenity-skill/LICENSE`。
+
+## shadcn/ui
+
+- 位置：`apps/web/src/vendor/shadcn-tailwind.css`
+- 版本：`shadcn` 套件 4.23.0 的 `dist/tailwind.css`，原樣複製，sha256 `4c371f7a1ff5d219ae2f7ff28bd256b4346fd546fe46fbae22092e57db2f0fae`。`shadcn` 是 CLI，不裝進 repo。
+- 來源：https://github.com/shadcn-ui/ui
+- 授權：MIT
+
+```
+MIT License
+
+Copyright (c) 2023 shadcn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

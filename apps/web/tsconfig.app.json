@@ -12,7 +12,8 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
-    "types": ["vite-plus/client"]
+    "types": ["vite-plus/client"],
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src", "vite.config.ts", "headers.ts", "headers.test.ts", "public.test.ts"]
 }

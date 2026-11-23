@@ -1,5 +1,12 @@
 /* The owner's signed-off prototype (M3/prototype/styles.css, sha256 57ebbd77a8287932), copied as is.
  * S4 renders its markup with the same classes; the prototype-only scene switcher (.proto-*) is unused. */
+/* Four changes since, so shadcn's components keep their size and borders beside it (M4-P0,
+ * m4_web_stack_design.md 5.3, the owner's decision 6). Tailwind's sizes are rem: font-size 14px
+ * moved from html to body (no rule here uses rem). The element rules for button, input and
+ * textarea are in @layer base, under a component's classes: unlayered, they took a shadcn
+ * button's border, background and padding. The disabled button's look stays out of the layer
+ * and skips shadcn's components (the rule says why). Nothing else here is in a layer: the
+ * rest wins over Tailwind's rules, and the screens keep their look. */
 /*
  * TARS Web Console Prototype v2 — Solid Glass Dark-First Instrument Aesthetic
  * Audited via Impeccable Dual-Agent Critique & Technical Audit:
@@ -125,10 +132,13 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
-  font-size: 14px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+body {
+  font-size: 14px;
 }
 
 ::selection {
@@ -146,26 +156,31 @@ body {
   outline-offset: 2px;
 }
 
-button,
-input,
-textarea {
-  font: inherit;
-  color: inherit;
+@layer base {
+  button,
+  input,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  button {
+    cursor: pointer;
+    background: transparent;
+    border: 0;
+    padding: 0;
+  }
+
+  button:disabled,
+  button[aria-disabled="true"] {
+    cursor: not-allowed;
+  }
 }
 
-button {
-  cursor: pointer;
-  background: transparent;
-  border: 0;
-  padding: 0;
-}
-
-button:disabled,
-button[aria-disabled="true"] {
-  cursor: not-allowed;
-}
-
-button:disabled {
+/* Out of the layer: it outranks a button's class rules here, as before (0,1,1); in the layer it
+ * lost to them, and a disabled .sg-btn-ghost dropped its fill and edge. :where keeps the
+ * specificity while leaving shadcn's components (data-slot) to their own classes. */
+button:disabled:not(:where([data-slot])) {
   background: var(--surface-sub);
   border-color: var(--glass-edge);
   color: var(--subtle-foreground);
