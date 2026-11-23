@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
+import { act } from "react";
 import { afterEach, expect, test } from "vite-plus/test";
 import { render } from "../render.ts";
-import { Markdown } from "./Markdown.tsx";
+import { Markdown, sortOrder } from "./Markdown.tsx";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -55,6 +56,80 @@ test("a simple table", async () => {
     "Cash-120",
     "Food120",
   ]);
+});
+
+/** The column's cells after sorting by it. */
+const sorted = (cells: string[], dir: 1 | -1) =>
+  sortOrder(
+    cells.map((c) => [c]),
+    { col: 0, dir },
+  ).map((k) => cells[k]);
+
+test("a column of numbers sorts by value: thousands commas, percents and negatives", () => {
+  expect(sorted(["1,200", "-3", "15%", "9", "-0.5"], 1)).toEqual([
+    "-3",
+    "-0.5",
+    "9",
+    "15%",
+    "1,200",
+  ]);
+  expect(sorted(["1,200", "-3", "15%", "9"], -1)).toEqual(["1,200", "15%", "9", "-3"]);
+});
+
+test("a column with any text sorts as zh-Hant text, A9 before A10", () => {
+  expect(sorted(["A10", "A9", "B1", "12"], 1)).toEqual(["12", "A9", "A10", "B1"]);
+  expect(sorted(["2026-11-03", "2026-01-20", "2025-12-31"], 1)).toEqual([
+    "2025-12-31",
+    "2026-01-20",
+    "2026-11-03",
+  ]);
+});
+
+test("empty cells go last both ways; equal ones keep their order", () => {
+  expect(sorted(["3", "", "-", "1", "—"], 1)).toEqual(["1", "3", "", "-", "—"]);
+  expect(sorted(["3", "", "-", "1", "—"], -1)).toEqual(["3", "1", "", "-", "—"]);
+  const rows = [
+    ["a", "2"],
+    ["b", "1"],
+    ["c", "2"],
+    ["d", "1"],
+  ];
+  expect(sortOrder(rows, { col: 1, dir: 1 })).toEqual([1, 3, 0, 2]);
+  expect(sortOrder(rows, { col: 1, dir: -1 })).toEqual([0, 2, 1, 3]);
+});
+
+test("a heading sorts its column: ascending first, then it alternates; aria-sort is on that one only", async () => {
+  const { root } = await md(
+    "| 代號 | 漲跌 |\n|---|---:|\n| 2330 | 1.5% |\n| 0050 | -0.8% |\n| 2317 | 12% |",
+  );
+  const heads = [...root.querySelectorAll("th")];
+  const sortButton = (j: number) => heads[j]?.querySelector("button") as HTMLButtonElement;
+  const firsts = () => [...root.querySelectorAll("tbody tr")].map((r) => r.firstChild?.textContent);
+  const sorts = () => heads.map((h) => h.getAttribute("aria-sort"));
+  for (const h of heads) {
+    expect(h.getAttribute("scope")).toBe("col");
+    // A native button: Tab reaches it, and Enter and Space press it.
+    expect(sortButton(heads.indexOf(h)).type).toBe("button");
+    expect(sortButton(heads.indexOf(h)).querySelector("[aria-hidden='true']")).not.toBeNull();
+  }
+  expect(sorts()).toEqual([null, null]);
+  expect(firsts()).toEqual(["2330", "0050", "2317"]);
+  await act(async () => sortButton(1).click());
+  expect(sorts()).toEqual([null, "ascending"]);
+  expect(firsts()).toEqual(["0050", "2330", "2317"]);
+  await act(async () => sortButton(1).click());
+  expect(sorts()).toEqual([null, "descending"]);
+  expect(firsts()).toEqual(["2317", "2330", "0050"]);
+  await act(async () => sortButton(0).click());
+  expect(sorts()).toEqual(["ascending", null]);
+  expect(firsts()).toEqual(["0050", "2317", "2330"]);
+  expect(root.querySelector("[style], style")).toBeNull();
+});
+
+test("a table whose heading row is empty has nothing to sort by", async () => {
+  const { root } = await md("| | |\n|---|---|\n| b | 2 |\n| a | 1 |");
+  expect(root.querySelector("th button")).toBeNull();
+  expect(root.querySelector("[aria-sort]")).toBeNull();
 });
 
 test("links open only for http and https, in a new tab without opener or referrer", async () => {

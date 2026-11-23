@@ -343,3 +343,46 @@
     background-position: 0 0;
   }
 }
+
+/*
+ * A Markdown table's headings are buttons that sort it (components/Markdown.tsx): they read as
+ * the heading text. The mark for the order is drawn from aria-sort, so the heading's text stays
+ * the reply's and a screen reader hears the order once, from aria-sort.
+ */
+.md-table th:has(> .md-sort) {
+  padding: 0;
+}
+.md-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.md-sort:focus-visible {
+  outline: 2px solid var(--focus-line);
+  outline-offset: -2px;
+}
+.md-sort-mark {
+  font-size: 12px;
+  color: var(--subtle-foreground);
+}
+.md-sort-mark::after {
+  content: "↕";
+}
+th[aria-sort] .md-sort-mark {
+  color: var(--muted-foreground);
+}
+th[aria-sort="ascending"] .md-sort-mark::after {
+  content: "↑";
+}
+th[aria-sort="descending"] .md-sort-mark::after {
+  content: "↓";
+}

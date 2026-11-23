@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 
 /**
  * The model's Markdown as React nodes: headings, emphasis, code, lists, quotes, links, simple
@@ -99,28 +99,7 @@ function blocks(lines: readonly string[]): ReactNode[] {
       i += 2;
       while (i < lines.length && (lines[i] as string).includes("|") && (lines[i] as string).trim())
         rows.push(cells(lines[i++] as string));
-      out.push(
-        <div key={key} className="md-table">
-          <table>
-            <thead>
-              <tr>
-                {head.map((c, j) => (
-                  <th key={j}>{inline(c)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, k) => (
-                <tr key={k}>
-                  {head.map((_, j) => (
-                    <td key={j}>{inline(r[j] ?? "")}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>,
-      );
+      out.push(<Table key={key} head={head} rows={rows} />);
       continue;
     }
     const para: string[] = [];
@@ -133,6 +112,93 @@ function blocks(lines: readonly string[]): ReactNode[] {
     out.push(<p key={key}>{inline(para.join("\n"))}</p>);
   }
   return out;
+}
+
+const EMPTY = new Set(["", "-", "—"]);
+const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)$/;
+const collator = new Intl.Collator("zh-Hant", { numeric: true });
+
+/** A cell as a number: thousands commas and a percent sign dropped; anything else is not one. */
+function numeric(cell: string): number | undefined {
+  const t = cell.replaceAll(",", "").replace(/%$/, "").replace(/^−/, "-");
+  return NUMBER.test(t) ? Number(t) : undefined;
+}
+
+type Sort = { col: number; dir: 1 | -1 };
+
+/**
+ * The rows' indexes in the order of one column, its type guessed from the cells' text without
+ * emphasis marks: a column whose filled cells are all numbers sorts by value, any other by the
+ * zh-Hant collator. Empty cells go last either way; equal ones keep their order (the index is
+ * the last key, not the engine's sort).
+ */
+export function sortOrder(rows: readonly string[][], sort: Sort): number[] {
+  const text = rows.map((r) => (r[sort.col] ?? "").replace(/[*_`~]/g, "").trim());
+  const filled = text.filter((t) => !EMPTY.has(t));
+  const byValue = filled.length > 0 && filled.every((t) => numeric(t) !== undefined);
+  const order = rows.map((_, k) => k);
+  order.sort((a, b) => {
+    const ea = EMPTY.has(text[a] as string);
+    const eb = EMPTY.has(text[b] as string);
+    if (ea !== eb) return ea ? 1 : -1;
+    const c = ea
+      ? 0
+      : byValue
+        ? (numeric(text[a] as string) as number) - (numeric(text[b] as string) as number)
+        : collator.compare(text[a] as string, text[b] as string);
+    return c * sort.dir || a - b;
+  });
+  return order;
+}
+
+/**
+ * A Markdown table whose headings sort it, on this page only: nothing is kept or sent, so a
+ * reload shows the reply's order. A table whose heading row is all empty has nothing to click.
+ */
+function Table({ head, rows }: { head: readonly string[]; rows: readonly string[][] }) {
+  const [sort, setSort] = useState<Sort>();
+  const sortable = head.some((c) => c !== "");
+  const order = sort === undefined ? rows.map((_, k) => k) : sortOrder(rows, sort);
+  const click = (col: number) =>
+    setSort(sort?.col === col ? { col, dir: sort.dir === 1 ? -1 : 1 } : { col, dir: 1 });
+  return (
+    <div className="md-table">
+      <table>
+        <thead>
+          <tr>
+            {head.map((c, j) => {
+              const dir = sort?.col === j ? sort.dir : undefined;
+              return !sortable ? (
+                <th key={j}>{inline(c)}</th>
+              ) : (
+                <th
+                  key={j}
+                  scope="col"
+                  {...(dir === undefined
+                    ? {}
+                    : { "aria-sort": dir === 1 ? "ascending" : "descending" })}
+                >
+                  <button type="button" className="md-sort" onClick={() => click(j)}>
+                    {inline(c)}
+                    <span className="md-sort-mark" aria-hidden="true" />
+                  </button>
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {order.map((k) => (
+            <tr key={k}>
+              {head.map((_, j) => (
+                <td key={j}>{inline(rows[k]?.[j] ?? "")}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 /** A list from line `start`: its items, each with the lines indented under it (nested lists). */
