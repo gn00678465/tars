@@ -162,12 +162,13 @@ rsvg-convert -w 192 -h 192 <ASSETS>/tars-icon-idle-pwa.svg -o public/icons/icon-
 rsvg-convert -w 32 -h 32 <ASSETS>/tars-icon-idle-transparent.svg -o public/favicon-32.png
 rsvg-convert -w 16 -h 16 <ASSETS>/tars-icon-idle-transparent.svg -o public/favicon-16.png
 rsvg-convert -w 168 -h 168 <ASSETS>/tars-icon-idle-pwa.svg -o touch-168.png
-magick touch-168.png -background none -gravity center -extent 180x180 PNG32:public/apple-touch-icon.png
+magick -size 180x180 xc:'#0d9488' touch-168.png -gravity center -composite PNG24:public/apple-touch-icon.png
 rm touch-168.png
 cp <ASSETS>/tars-sprite-wheel.svg <ASSETS>/tars-sprite-idle.svg src/assets/
 ```
 
-- 180 是 ×7 加 6px 的邊，保留原圖的圓角與透明（RGBA）。iOS 會把透明處顯示成黑色，要不要填色由擁有者看過再決定。
+- 180 是 ×7 的圖疊在滿版青綠（`#0d9488`）上，不透明（PNG 色彩類型 2）。iOS 把透明處顯示成白色，自己裁圓角，所以這張不留透明的邊與圓角。`public.test.ts` 檢查它。
+- `icons/` 的 192 與 512 仍有透明圓角。iOS 用 `apple-touch-icon`，不用它們；Android 與桌面安裝會用。
 - 32 與 16 不是 24 的整數倍，像素寬窄會不一，換圖後要用眼睛看過。
 
 ## 憑證輪替
