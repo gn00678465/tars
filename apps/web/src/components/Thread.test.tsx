@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import type { WireItem } from "@tars/protocol";
+import { act } from "react";
 import { afterEach, expect, test } from "vite-plus/test";
 import { render } from "../render.ts";
 import { initial, type State } from "../state.ts";
@@ -282,6 +283,37 @@ test("the sprites: the wheel while thinking, idle on the empty page; neither vie
   expect(empty.root.querySelector(".empty-state .tars-sprite")?.className).toBe("tars-sprite idle");
   expect(empty.root.querySelector("[style], style")).toBeNull();
   empty.unmount();
+});
+
+test("a table's order picked while the reply streams stays once the reply is an item", async () => {
+  const table = "| 代號 | 價 |\n|---|---|\n| 2330 | 2 |\n| 0050 | 1 |";
+  const user: WireItem = { seq: 1, turn: T, kind: "user", text: "列表", truncated: false };
+  const before: WireItem = {
+    seq: 2,
+    turn: T,
+    kind: "assistant",
+    text: "先查一下。",
+    truncated: false,
+    state: "complete",
+  };
+  const view = (state: State) => (
+    <Thread state={state} onOlder={() => undefined} after={() => null} />
+  );
+  const streaming: State = {
+    ...turnState({ state: "started", turn: T }, [user, before]),
+    running: { turn: T, text: table },
+  };
+  const { root, rerender } = await render(view(streaming));
+  const price = () => root.querySelectorAll(".md-table th")[1] as HTMLElement;
+  await act(async () => (price().querySelector("button") as HTMLButtonElement).click());
+  expect(price().getAttribute("aria-sort")).toBe("ascending");
+  const done: WireItem = { ...before, seq: 3, text: table };
+  await rerender(view(turnState({ state: "completed", turn: T }, [user, before, done])));
+  expect(root.querySelector(".streaming")).toBeNull();
+  expect(price().getAttribute("aria-sort")).toBe("ascending");
+  expect(
+    [...root.querySelectorAll(".md-table tbody tr")].map((r) => r.firstChild?.textContent),
+  ).toEqual(["0050", "2330"]);
 });
 
 test("C3: an interrupted turn is a warn card, from its error item or, without one, from the turn", async () => {

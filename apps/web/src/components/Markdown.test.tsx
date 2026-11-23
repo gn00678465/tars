@@ -98,6 +98,27 @@ test("empty cells go last both ways; equal ones keep their order", () => {
   expect(sortOrder(rows, { col: 1, dir: -1 })).toEqual([0, 2, 1, 3]);
 });
 
+test("a cell sorts by the text it shows: a link's label, **12** as 12, a_b and 1_2 as written", () => {
+  expect(sorted(["**12**", "3", "[9](https://example.com/n)", "`7`"], 1)).toEqual([
+    "3",
+    "`7`",
+    "[9](https://example.com/n)",
+    "**12**",
+  ]);
+  // 1_2 is text, not 12: the column sorts as text, where 1_2 comes before 3.
+  expect(sorted(["3", "1_2"], 1)).toEqual(["1_2", "3"]);
+  // a_b and ab are two values, not equal ones kept in order.
+  expect(sorted(["ab", "a_b"], 1)).toEqual(["a_b", "ab"]);
+});
+
+test("only plain decimals are numbers: an exponent or a value past Infinity makes the column text", () => {
+  // As numbers these would be 5, 1000; as text 1e3 comes first.
+  expect(sorted(["5", "1e3"], 1)).toEqual(["1e3", "5"]);
+  const huge = "9".repeat(400);
+  // As numbers: 999, 1,000, huge. As text, 1,000 is read as 1.
+  expect(sorted([huge, "999", "1,000"], 1)).toEqual(["1,000", "999", huge]);
+});
+
 test("a heading sorts its column: ascending first, then it alternates; aria-sort is on that one only", async () => {
   const { root } = await md(
     "| 代號 | 漲跌 |\n|---|---:|\n| 2330 | 1.5% |\n| 0050 | -0.8% |\n| 2317 | 12% |",
@@ -124,6 +145,32 @@ test("a heading sorts its column: ascending first, then it alternates; aria-sort
   expect(sorts()).toEqual(["ascending", null]);
   expect(firsts()).toEqual(["0050", "2317", "2330"]);
   expect(root.querySelector("[style], style")).toBeNull();
+});
+
+test("a heading with a link: the link is outside the button, and pressing it does not sort", async () => {
+  const { root } = await md(
+    "| [代號](https://example.com/c) | 價 |\n|---|---|\n| 2330 | 2 |\n| 0050 | 1 |",
+  );
+  const th = root.querySelector("th") as HTMLElement;
+  const link = th.querySelector("a") as HTMLAnchorElement;
+  const sortButton = th.querySelector("button") as HTMLButtonElement;
+  expect(link.textContent).toBe("代號");
+  expect(link.closest("button")).toBeNull();
+  expect(sortButton.querySelector("a")).toBeNull();
+  expect(sortButton.getAttribute("aria-label")).toBe("代號");
+  link.addEventListener("click", (e) => e.preventDefault());
+  await act(async () => link.click());
+  expect(th.getAttribute("aria-sort")).toBeNull();
+  await act(async () => sortButton.click());
+  expect(th.getAttribute("aria-sort")).toBe("ascending");
+});
+
+test("an empty heading beside named ones: its button is named for its column", async () => {
+  const { root } = await md("| 名稱 | |\n|---|---|\n| b | 2 |\n| a | 1 |");
+  const named = [...root.querySelectorAll("th button")].map(
+    (b) => b.getAttribute("aria-label") ?? b.textContent,
+  );
+  expect(named).toEqual(["名稱", "第 2 欄"]);
 });
 
 test("a table whose heading row is empty has nothing to sort by", async () => {

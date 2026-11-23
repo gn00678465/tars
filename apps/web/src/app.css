@@ -366,6 +366,15 @@
   white-space: nowrap;
   cursor: pointer;
 }
+/* A heading with a link: the link, then a button with only the mark. */
+.md-table th.md-sort-linked {
+  padding-left: 8px;
+  white-space: nowrap;
+}
+.md-sort-linked .md-sort {
+  display: inline-flex;
+  width: auto;
+}
 .md-sort:focus-visible {
   outline: 2px solid var(--focus-line);
   outline-offset: -2px;

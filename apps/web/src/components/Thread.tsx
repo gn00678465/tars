@@ -1,10 +1,10 @@
 import type { WireItem } from "@tars/protocol";
-import { Fragment, type ReactNode, useState } from "react";
+import { Fragment, type ReactNode, useRef, useState } from "react";
 import type { State } from "../state.ts";
 import { Icon } from "./Icon.tsx";
 import { ErrorCard } from "./ErrorCard.tsx";
 import { NoticeCard } from "./Notices.tsx";
-import { Markdown } from "./Markdown.tsx";
+import { Markdown, type Sort, TableSorts } from "./Markdown.tsx";
 import { CompactEndCard } from "./CompactEndCard.tsx";
 import { effortName } from "./RunSetup.tsx";
 import { clock, shortId } from "./time.ts";
@@ -149,6 +149,7 @@ function Rest({
     <Fragment key={item.seq}>
       <One
         item={item}
+        reply={item.kind === "assistant" ? replyId(items, item.turn, item.seq) : undefined}
         result={item.kind === "tool_call" ? results.get(item.callId) : undefined}
         provider={provider}
         origin={origin}
@@ -158,13 +159,23 @@ function Rest({
   ));
 }
 
+/**
+ * A reply's id for its tables' order: its turn and how many replies that turn wrote before it,
+ * which the streaming text (no seq: before = Infinity) and the item it becomes share. A turn's
+ * items all follow its user item, so they are in one group.
+ */
+const replyId = (items: readonly WireItem[], turn: string, before = Infinity) =>
+  `${turn}:${items.filter((x) => x.kind === "assistant" && x.turn === turn && x.seq < before).length}`;
+
 function One({
   item,
+  reply,
   result,
   provider,
   origin,
 }: {
   item: WireItem;
+  reply: string | undefined;
   result: ToolResult | undefined;
   provider: string | undefined;
   origin: Origin | undefined;
@@ -189,7 +200,7 @@ function One({
     case "assistant":
       return (
         <div key={item.seq} className="msg-assistant-text">
-          <Markdown text={item.text} />
+          <Markdown text={item.text} {...(reply === undefined ? {} : { id: reply })} />
           {item.truncated || item.state in ASSISTANT_STATE ? (
             <p>{`${cut(item.truncated)}${ASSISTANT_STATE[item.state] ?? ""}`}</p>
           ) : null}
@@ -455,6 +466,7 @@ export function Thread(props: {
   origin?: Origin;
 }) {
   const { items, running, turn, more, notices, conv } = props.state;
+  const sorts = useRef(new Map<string, Sort>()).current;
   if (conv === undefined && items.length === 0)
     return (
       <div className="empty-state">
@@ -486,8 +498,14 @@ export function Thread(props: {
   ));
   const here = props.state.convs.find((c) => c.id === conv);
   const provider = here?.provider;
+  const streaming =
+    running === undefined ? undefined : (
+      <div className="msg-assistant-text streaming">
+        <Markdown text={running.text} id={replyId(items, running.turn)} />
+      </div>
+    );
   return (
-    <>
+    <TableSorts.Provider value={sorts}>
       {more ? (
         <div className="btn-chip-row">
           <button className="sg-btn sg-btn-sm" type="button" onClick={props.onOlder}>
@@ -511,21 +529,13 @@ export function Thread(props: {
             <div className="msg-assistant">
               {g.user === undefined ? null : props.after(g.user.seq)}
               <Rest items={g.rest} after={props.after} provider={provider} origin={props.origin} />
-              {i === all.length - 1 && running !== undefined ? (
-                <div className="msg-assistant-text streaming">
-                  <Markdown text={running.text} />
-                </div>
-              ) : null}
+              {i === all.length - 1 ? streaming : null}
             </div>
           </div>
         </Fragment>
       ))}
       {latest !== undefined && faded === all.length ? dividers : null}
-      {all.length === 0 && running !== undefined ? (
-        <div className="msg-assistant-text streaming">
-          <Markdown text={running.text} />
-        </div>
-      ) : null}
+      {all.length === 0 ? streaming : null}
       <TurnEnd
         turn={turn}
         items={items}
@@ -543,6 +553,6 @@ export function Thread(props: {
           {...(props.onEffort === undefined ? {} : { onEffort: props.onEffort })}
         />
       ))}
-    </>
+    </TableSorts.Provider>
   );
 }
