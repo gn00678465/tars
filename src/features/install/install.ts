@@ -129,8 +129,8 @@ export const SHIPPED_LIST = "shipped.json";
 
 /**
  * Writes files into a sibling temp dir, then swaps it in, so stale skill files never survive.
- * Top-level dirs the user added (absent from the last shipped list) are copied into the temp dir
- * first; a dir that shares a shipped name is replaced by the shipped one.
+ * Top-level entries the user added (absent from the last shipped list) are copied into the temp
+ * dir first; one that shares a shipped name is replaced by the shipped one.
  */
 export async function replaceSkills(
   dir: string,
@@ -148,6 +148,7 @@ export async function replaceSkills(
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, file.bytes);
     }
+    const kept: string[] = [];
     for (const name of await userSkills(dir)) {
       if (shipped.includes(name)) {
         io.err(`skills/${name} is not one tars shipped; replaced it with the shipped ${name}`);
@@ -161,41 +162,75 @@ export async function replaceSkills(
           );
         },
       );
+      kept.push(name);
     }
     await writeFile(join(tmp, SHIPPED_LIST), `${JSON.stringify(shipped, null, 2)}\n`);
     // rename() cannot replace a non-empty directory, so the old tree moves aside first.
-    await rename(dir, old).catch((err: NodeJS.ErrnoException) => {
-      if (err.code !== "ENOENT") throw err;
-    });
-    await rename(tmp, dir).catch((err: NodeJS.ErrnoException) => {
-      throw err.code === "ENOTEMPTY" || err.code === "EEXIST" ? concurrentInstall(dir) : err;
-    });
+    const moved = await rename(dir, old).then(
+      () => true,
+      (err: NodeJS.ErrnoException) => {
+        if (err.code !== "ENOENT") throw err;
+        return false;
+      },
+    );
+    try {
+      await rename(tmp, dir);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const cause = code === "ENOTEMPTY" || code === "EEXIST" ? concurrentInstall(dir) : err;
+      // The old tree now holds the only copy of the user's skills, so it is put back or kept.
+      const restored =
+        !moved ||
+        (await rename(old, dir).then(
+          () => true,
+          () => false,
+        ));
+      if (!restored && kept.length > 0) {
+        throw new TarsError(
+          `${cause instanceof Error ? cause.message : String(cause)}; ` +
+            `your skills ${kept.join(", ")} are in ${old}, move them back into ${dir}`,
+        );
+      }
+      if (!restored) await rm(old, { recursive: true, force: true });
+      throw cause;
+    }
+    await rm(old, { recursive: true, force: true });
   } finally {
     await rm(tmp, { recursive: true, force: true });
-    await rm(old, { recursive: true, force: true });
   }
 }
 
-/** Top-level dirs the last install did not ship. Without a list, every dir counts as shipped. */
+/**
+ * Top-level dirs and links the last install did not ship. Without a list, every entry counts as
+ * shipped: before the list existed, tars shipped everything in the skills dir.
+ */
 async function userSkills(dir: string): Promise<string[]> {
-  const text = await readFile(join(dir, SHIPPED_LIST), "utf8").catch(
-    (err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT") return undefined;
-      throw err;
-    },
-  );
+  const list = join(dir, SHIPPED_LIST);
+  const text = await readFile(list, "utf8").catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") return undefined;
+    throw err;
+  });
   if (text === undefined) return [];
   let last: unknown;
   try {
     last = JSON.parse(text);
   } catch {}
   if (!Array.isArray(last)) {
+    // Deleting the list would make the next install treat every dir as shipped and drop the user's.
     throw new TarsError(
-      `${join(dir, SHIPPED_LIST)} is not a JSON array; delete it and run tars install again`,
+      `${list} is not a JSON array of the skill names tars shipped; skills are unchanged. ` +
+        `Back up the skill dirs you added under ${dir}, then fix ${SHIPPED_LIST} or restore it from a backup`,
     );
   }
-  const entries = await readdir(dir, { withFileTypes: true });
-  return entries.filter((e) => e.isDirectory() && !last.includes(e.name)).map((e) => e.name);
+  // The list was there a moment ago, so a missing dir means another install moved it aside.
+  const entries = await readdir(dir, { withFileTypes: true }).catch(
+    (err: NodeJS.ErrnoException) => {
+      throw err.code === "ENOENT" ? concurrentInstall(dir) : err;
+    },
+  );
+  return entries
+    .filter((e) => (e.isDirectory() || e.isSymbolicLink()) && !last.includes(e.name))
+    .map((e) => e.name);
 }
 
 /** The target appeared between our check and our rename or link: another install got there first. */

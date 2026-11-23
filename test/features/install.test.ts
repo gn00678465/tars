@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -10,6 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import * as fsp from "node:fs/promises";
 import { join } from "node:path";
 import { resolvePaths } from "../../src/core/paths.ts";
 import { skillsFromBundle, type EmbeddedFile } from "../../src/features/install/embedded.ts";
@@ -31,6 +32,11 @@ function setup(skills: readonly EmbeddedFile[] = fixture) {
   const seedArgs = ["--soul", join(home, "soul.src"), "--memory", join(home, "memory.src")];
   return { home, deps, paths: resolvePaths({ HOME: home }), seedArgs };
 }
+
+const realRename = fsp.rename;
+afterEach(() => {
+  (fsp.rename as unknown as { mockRestore?: () => void }).mockRestore?.();
+});
 
 describe("tars install", () => {
   test("writes the embedded skills, seeds SOUL.md and MEMORY.md, and creates the workspace", async () => {
@@ -136,6 +142,85 @@ describe("tars install", () => {
     expect(readdirSync(paths.skills).sort()).toEqual(before);
     expect(readFileSync(join(paths.skills, "mine/SKILL.md"), "utf8")).toBe("my skill");
     expect(readdirSync(paths.data).sort()).toEqual(dataBefore);
+  });
+
+  test("keeps a top-level link the user added as the link itself, without following it", async () => {
+    const { home, deps, paths, seedArgs } = setup();
+    expect(await run(["install", ...seedArgs], deps)).toBe(0);
+    mkdirSync(join(home, "elsewhere"));
+    writeFileSync(join(home, "elsewhere/SKILL.md"), "linked skill");
+    symlinkSync(join(home, "elsewhere"), join(paths.skills, "linked"));
+
+    expect(await run(["install"], deps)).toBe(0);
+    expect(lstatSync(join(paths.skills, "linked")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(paths.skills, "linked"))).toBe(join(home, "elsewhere"));
+    expect(readFileSync(join(home, "elsewhere/SKILL.md"), "utf8")).toBe("linked skill");
+  });
+
+  test("a broken shipped list stops install, leaves skills as they were, and never says to delete it", async () => {
+    const { deps, paths, seedArgs } = setup();
+    expect(await run(["install", ...seedArgs], deps)).toBe(0);
+    mkdirSync(join(paths.skills, "mine"));
+    writeFileSync(join(paths.skills, "mine/SKILL.md"), "my skill");
+    writeFileSync(join(paths.skills, "shipped.json"), "{not json");
+    const before = readdirSync(paths.skills).sort();
+    const dataBefore = readdirSync(paths.data).sort();
+
+    expect(await run(["install"], deps)).toBe(1);
+    const err = deps.io.stderr.join("\n");
+    expect(err).toContain("Back up");
+    expect(err).not.toContain("delete");
+    expect(readdirSync(paths.skills).sort()).toEqual(before);
+    expect(readFileSync(join(paths.skills, "shipped.json"), "utf8")).toBe("{not json");
+    expect(readFileSync(join(paths.skills, "mine/SKILL.md"), "utf8")).toBe("my skill");
+    expect(readdirSync(paths.data).sort()).toEqual(dataBefore);
+  });
+
+  test("when the new dir cannot be swapped in, the old one with the user's skills is put back", async () => {
+    const { deps, paths, seedArgs } = setup();
+    expect(await run(["install", ...seedArgs], deps)).toBe(0);
+    mkdirSync(join(paths.skills, "mine"));
+    writeFileSync(join(paths.skills, "mine/SKILL.md"), "my skill");
+    const dataBefore = readdirSync(paths.data).sort();
+    let failed = false;
+    spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+      // The first rename onto skills is the temp dir's; it fails, and moving the old tree back works.
+      if (!failed && to === paths.skills) {
+        failed = true;
+        throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" });
+      }
+      return realRename(from, to);
+    });
+
+    await expect(run(["install"], deps)).rejects.toThrow("EIO");
+    expect(failed).toBe(true);
+    expect(readFileSync(join(paths.skills, "mine/SKILL.md"), "utf8")).toBe("my skill");
+    expect(readdirSync(paths.data).sort()).toEqual(dataBefore);
+  });
+
+  test("losing the swap to a concurrent install keeps the user's skills in the old tree and names it", async () => {
+    const { deps, paths, seedArgs } = setup();
+    expect(await run(["install", ...seedArgs], deps)).toBe(0);
+    mkdirSync(join(paths.skills, "mine"));
+    writeFileSync(join(paths.skills, "mine/SKILL.md"), "my skill");
+    let raced = false;
+    spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+      // Another install puts its skills dir in place between our two renames.
+      if (!raced && to === paths.skills) {
+        raced = true;
+        mkdirSync(join(paths.skills, "alpha"), { recursive: true });
+        writeFileSync(join(paths.skills, "alpha/SKILL.md"), "other install");
+      }
+      return realRename(from, to);
+    });
+
+    expect(await run(["install"], deps)).toBe(1);
+    const err = deps.io.stderr.join("\n");
+    expect(err).toContain("another tars install");
+    const aside = readdirSync(paths.data).filter((n) => n.startsWith(".skills.tmp-"));
+    expect(aside).toHaveLength(1);
+    expect(err).toContain(join(paths.data, aside[0]!));
+    expect(readFileSync(join(paths.data, aside[0]!, "mine/SKILL.md"), "utf8")).toBe("my skill");
   });
 
   test("concurrent installs never leave the data dir without skills, a mixed seed, or temp files", async () => {
