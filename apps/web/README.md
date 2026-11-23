@@ -250,9 +250,11 @@ node tools/visual/run.ts --control     # 基準和自己比，看雜訊有多少
 
 - 要 Node 24 以上與 Chromium（預設 `/usr/bin/chromium`，可用 `CHROMIUM` 換）。需要瀏覽器，所以不在 `bun run check` 裡。
 - 場景頁只在這個工具的建置裡：`tools/visual/fake.ts` 是假的本機端，插在 `main.tsx` 之前，App 本身照常載入。資料與步驟在 `tools/visual/scenes.ts`，都是虛構的。
-- 頁面用 `headers.ts` 的 CSP 提供。基準沒有的 CSP 違規與頁面錯誤算失敗，基準也有的另列（例如 zod 4 用 `Function("")` 試探能不能 eval，`main` 就有）。場景的步驟做不到，一律算失敗。
-- 雜訊：`--control` 量到的最大差異約 0.04%（狀態列的延遲毫秒數）。
-- 結果在 `.visual/report.md`，截圖在 `.visual/shots/base/` 與 `.visual/shots/head/`。任一張差異超過 0.5% 就失敗，要人看兩張截圖。
+- 頁面用 `headers.ts` 的 CSP 提供。基準沒有的 CSP 違規與頁面錯誤算失敗，基準也有的另列（例如 zod 4 用 `Function("")` 試探能不能 eval，`main` 就有）。
+- 場景的步驟做不到，不論是基準還是這棵樹，一律算失敗：那張截圖畫的不是該場景，比對沒有意義。報表列出場景、哪一邊與哪個步驟。
+- 不是逐位元組比對：一個像素的 R、G、B 差值加起來超過 6 才算不同。同一頁畫兩次，文字與半透明層的混色會差一兩階，看不出來；這個容忍度吸收它。設計稿的工具驗過：同一頁比自己 0.00%，只加一條字距規則 15%–23%。
+- 雜訊：`--control` 兩次實測的最大差異是 0.04% 與 0.01%，來自狀態列的延遲毫秒數。
+- 結果在 `.visual/report.md`，開頭寫兩邊的 commit。截圖在 `.visual/shots/base/` 與 `.visual/shots/head/`。任一張差異超過 0.5% 就失敗，要人看兩張截圖。`--only` 給了不存在的場景時報錯，退出碼 2。
 
 ## 手動驗收
 

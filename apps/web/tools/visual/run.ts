@@ -1,6 +1,7 @@
 // Screenshots the scenes of ui_spec.md 7 at two widths, before (a git ref, main by default) and
 // after (this tree), and counts the pixels that differ (m4_web_stack_design.md 5.2). Each page
-// is served with the app's CSP; a violation fails the run, as does a scene over the threshold.
+// is served with the app's CSP. A new violation fails the run, as does a step not taken on
+// either side or a scene over the threshold.
 //   node tools/visual/run.ts [--base <ref>] [--only <scene>] [--control]
 // --control compares the base with itself: the noise floor.
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/.
@@ -17,6 +18,13 @@ import { NOW, SCENES, type Step } from "./scenes.ts";
 
 /** Over this share of differing pixels, a person looks (5.2). */
 const THRESHOLD = 0.5;
+/**
+ * A pixel counts as different when its R, G and B differ by more than this in all: not byte for
+ * byte. The same page drawn twice can land a channel a step or two apart where text and
+ * translucent layers are blended; no visible change is that small. Kept from the design's tool,
+ * which read 0.00% for a page against itself and 15–23% for one letter-spacing rule.
+ */
+const TOLERANCE = 6;
 const WIDTHS = {
   desktop: { viewport: { width: 1280, height: 800 } },
   phone: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
@@ -35,6 +43,16 @@ const out = join(web, ".visual");
 const scenes = SCENES.map((s, i) => ({ ...s, n: i + 1 })).filter(
   (s) => args.only === undefined || String(s.n) === args.only,
 );
+if (scenes.length === 0) {
+  console.error(`no scene ${args.only}; scenes are 1 to ${SCENES.length}`);
+  process.exit(2);
+}
+const short = (ref: string) =>
+  execFileSync("git", ["-C", repo, "rev-parse", "--short", ref], { encoding: "utf8" }).trim();
+const dirty =
+  execFileSync("git", ["-C", repo, "status", "--porcelain", "--", web], { encoding: "utf8" }) !==
+  "";
+const commits = `base ${args.base} (${short(args.base)}), head ${args.control ? "the base again (--control)" : `this tree (${short("HEAD")}${dirty ? " with uncommitted changes" : ""})`}`;
 
 /** The scene page's local end goes before main.tsx; the app itself is the tree's own. */
 const scenePage = (): Plugin => ({
@@ -138,7 +156,7 @@ async function take(page: Page, steps: readonly Step[], problems: string[]) {
 async function differ(browser: Browser, a: Buffer, b: Buffer): Promise<number> {
   const page = await browser.newPage();
   const share = await page.evaluate(
-    async ([a, b]) => {
+    async ([a, b, tolerance]) => {
       const load = async (s: string) => {
         const i = new Image();
         i.src = `data:image/png;base64,${s}`;
@@ -156,11 +174,11 @@ async function differ(browser: Browser, a: Buffer, b: Buffer): Promise<number> {
           Math.abs((p.data[i] ?? 0) - (q.data[i] ?? 0)) +
           Math.abs((p.data[i + 1] ?? 0) - (q.data[i + 1] ?? 0)) +
           Math.abs((p.data[i + 2] ?? 0) - (q.data[i + 2] ?? 0));
-        if (d > 6) n++;
+        if (d > tolerance) n++;
       }
       return (n / (p.width * p.height)) * 100;
     },
-    [a.toString("base64"), b.toString("base64")] as const,
+    [a.toString("base64"), b.toString("base64"), TOLERANCE] as const,
   );
   await page.close();
   return share;
@@ -250,17 +268,19 @@ await browser.close();
 for (const { server } of [...Object.values(servers), app]) server.close();
 
 const over = rows.filter((r) => r.pct > THRESHOLD);
+// A step not taken leaves a shot of some other state, on either side: the comparison is void.
+const step = (p: { text: string }) => p.text.startsWith("step failed");
+const failed = problems.filter(step);
 // A violation or error the base has too, on any page, is not this change's.
-const before = new Set(problems.filter((p) => p.tree === "base").map((p) => same(p.text)));
-// A step that cannot be taken is the scene's fault, whichever tree.
-const fresh = problems.filter(
-  (p) => p.tree === "head" && (p.text.startsWith("step failed") || !before.has(same(p.text))),
-);
+const others = problems.filter((p) => !step(p));
+const before = new Set(others.filter((p) => p.tree === "base").map((p) => same(p.text)));
+const fresh = others.filter((p) => p.tree === "head" && !before.has(same(p.text)));
 const listed = (ps: typeof problems) => [
   ...new Set(ps.map((p) => `- ${p.tree} ${p.where}: ${p.text}`)),
 ];
 const table = [
-  `base ${args.base}, head this tree; threshold ${THRESHOLD}%`,
+  commits,
+  `threshold ${THRESHOLD}% of pixels; a pixel differs when R, G and B differ by more than ${TOLERANCE} in all (not byte for byte)`,
   "",
   "| 場景 | 寬度 | 差異 |",
   "|---|---|---|",
@@ -268,11 +288,13 @@ const table = [
   "",
   `max ${Math.max(0, ...rows.map((r) => r.pct)).toFixed(2)}%; over the threshold: ${over.length}`,
   ...over.map((r) => `- ${r.width}-${r.scene}: .visual/shots/base/ and .visual/shots/head/`),
-  `CSP violations, page errors and failed steps new in head: ${fresh.length}`,
+  `steps not taken, on either side: ${failed.length}`,
+  ...listed(failed),
+  `CSP violations and page errors new in head: ${fresh.length}`,
   ...listed(fresh),
-  `the base has them too (not this change's): ${problems.length - fresh.length}`,
+  `the base has them too (not this change's): ${others.length - fresh.length}`,
   ...[...before].map((t) => `- ${t}`),
 ].join("\n");
 writeFileSync(join(out, "report.md"), `${table}\n`);
 console.log(table);
-process.exitCode = over.length > 0 || fresh.length > 0 ? 1 : 0;
+process.exitCode = over.length > 0 || failed.length > 0 || fresh.length > 0 ? 1 : 0;
