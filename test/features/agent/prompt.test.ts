@@ -47,7 +47,7 @@ describe("loadSkillIndex", () => {
       { name: "alpha", description: "first one", localOnly: false },
       { name: "beancount-ledger", description: "ledger", localOnly: true },
       { name: "memory", description: "writes memory", localOnly: true },
-      { name: "serenity-skill", description: "research", localOnly: true },
+      { name: "serenity-skill", description: "research", localOnly: false },
       { name: "zeta", description: "last one", localOnly: false },
     ]);
     expect(warnings).toEqual([]);
@@ -98,11 +98,7 @@ describe("PREAMBLE", () => {
 
   test("names each local-only skill and points to tars claude", () => {
     for (const name of Object.keys(LOCAL_ONLY_SKILLS)) expect(PREAMBLE).toContain(`- ${name}（`);
-    expect(Object.keys(LOCAL_ONLY_SKILLS).toSorted()).toEqual([
-      "beancount-ledger",
-      "memory",
-      "serenity-skill",
-    ]);
+    expect(Object.keys(LOCAL_ONLY_SKILLS).toSorted()).toEqual(["beancount-ledger", "memory"]);
     expect(PREAMBLE).toContain("tars claude");
   });
 
@@ -128,8 +124,9 @@ describe("PREAMBLE", () => {
   test("bookkeeping is offered here through fava-ledger; the other local-only flows are not", () => {
     const sentence = PREAMBLE.split("\n").find((l) => l.startsWith("這個入口不提供")) as string;
     expect(sentence).not.toContain("記帳");
-    for (const flow of ["寫入記憶", "學習教材", "投資研究", "寫或送審腳本"])
-      expect(sentence).toContain(flow);
+    for (const flow of ["寫入記憶", "學習教材", "寫或送審腳本"]) expect(sentence).toContain(flow);
+    // Investment research runs here since M4: its playbooks fetch through approved scripts.
+    expect(sentence).not.toContain("投資研究");
     expect(PREAMBLE).toContain("記帳與查帳在這裡用入庫的 fava-ledger 腳本");
     expect(PREAMBLE).toContain("script show fava-ledger");
     expect(PREAMBLE).toContain("--dry-run");

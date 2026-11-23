@@ -13,7 +13,6 @@ import type { CacheTtl, Effort, SystemBlock, ToolSpec } from "./types.ts";
 export const LOCAL_ONLY_SKILLS: Readonly<Record<string, string>> = {
   memory: "要寫入記憶",
   "beancount-ledger": "要 shell 與環境變數裡的憑證；記帳與查帳改用 fava-ledger 腳本",
-  "serenity-skill": "要網路搜尋",
 };
 
 export interface SkillEntry {
@@ -88,8 +87,8 @@ export const PREAMBLE = `你在 tars 自己的入口裡（終端的 tars chat，
 
 skill_load 與 file_read 一次最多回 400 行（limit 最多 2000）。結果第一行寫著第幾行到第幾行、共幾行；還有後續時會寫「下一頁 offset=N」，用那個 offset 再讀一次。
 
-這個入口不提供下面這些流程：寫入記憶、學習教材、投資研究、寫或送審腳本。遇到時告訴擁有者改用 tars claude。
-下面三個 skill 只能在 tars claude 裡用，不要自己 skill_load 它們：
+這個入口不提供下面這些流程：寫入記憶、學習教材、寫或送審腳本。遇到時告訴擁有者改用 tars claude。
+下面的 skill 只能在 tars claude 裡用，不要自己 skill_load 它們：
 ${Object.entries(LOCAL_ONLY_SKILLS)
   .map(([name, why]) => `- ${name}（${why}）`)
   .join("\n")}

@@ -455,7 +455,7 @@ describe("interactive", () => {
     const h = await setup();
     for (const name of Object.keys(LOCAL_ONLY_SKILLS)) addSkill(h, name);
     const { deps } = chatDeps(h, {
-      answers: ["/memory 記住這個", "/beancount-ledger", "/serenity-skill x", "/nope", undefined],
+      answers: ["/memory 記住這個", "/beancount-ledger", "/nope", undefined],
     });
     expect(await run(["chat"], deps)).toBe(0);
     expect(h.fake.messages()).toHaveLength(0);
