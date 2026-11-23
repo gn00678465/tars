@@ -15,7 +15,7 @@
 ## 步驟
 
 1. 確認公司（台股代號或美股 ticker）與要檢驗的說法。缺一個時問一次，最多一題。研究日期照 `reference/serenity-data.md`；不知道今天的日期時，併進這一題問。
-2. 照 `reference/serenity-data.md` 定研究名稱（`<類型>` 是 `claim-challenge`），找抓網頁的腳本與取市場資料的腳本。找不到抓網頁的腳本時，照同一頁問使用者一次要不要繼續。
+2. 照 `reference/serenity-data.md` 定研究名稱（`<類型>` 是 `claim-challenge`），並確認原文目錄不存在，再找抓網頁的腳本與取市場資料的腳本。找不到抓網頁的腳本時，照同一頁問使用者一次要不要繼續；繼續就交降級的報告（`reference/serenity-method.md` 的「原文不足時」）。
 3. 把說法拆成五個子主張，`id` 是 `C1` 到 `C5`，各自找證據，同一個證據不能同時證明五件事。以「某某是 CPO 的核心供應商」為例：
    - C1 `product_layer`：它賣的零件確實用在說法所說的那一層。
    - C2 `commercial_stage`：走到哪裡，是通過客戶驗證，還是已經量產。
@@ -61,7 +61,8 @@
 ## 驗證
 
 - 「tars 查 3680 是不是真的是 EUV 光罩盒的核心供應商」→ 對話裡有摘要與完整報告，五個子主張各一個 `dimension`；沒有寫檔，執行的指令只有 `tars script`
-- 開一份原文 → 一次 `tars script run <抓網頁的腳本> --out out/serenity-claim-challenge-<日期>-<代號>/<來源 id> -- <網址>`，網頁出一張核准卡；報告最後一行寫原文目錄
+- 開一份原文 → 一次 `tars script run <抓網頁的腳本> --out out/serenity-claim-challenge-<代號>-<碼>/<來源 id> -- <網址>`，網頁出一張核准卡；接著讀腳本回報的絕對路徑；報告最後一行寫原文目錄
+- 腳本庫沒有抓網頁的腳本，使用者說繼續 → 報告第一行是「降級：…」，沒有 `Pass`，也沒有提前終止
 - 開得到財報原文，且營收占比的子主張被它推翻 → 提前終止，其餘子主張是 `not_investigated`
 - 開不到財報原文，或擁有者拒絕那張核准卡 → 營收占比的子主張是 `Unresolved`，沒有提前終止，報告有 `not_accessible` 的缺口
 - 只有媒體說「已量產」→ `stage` 不是 `production`

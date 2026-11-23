@@ -6,6 +6,7 @@
 
 ## 報告的寫法
 
+- 原文不足時，報告第一行是「降級：<原因>」，規則見 `serenity-method.md` 的「原文不足時」。
 - Markdown。每個欄位一個小標題或一行「欄位：內容」，照下面表格的順序，不跳過必填的欄位，沒有內容的選填欄位省略。
 - 一筆證據一行：`- [<等級>] <陳述>（<來源 id>）`，有數字時接在後面，有 `does_not_establish` 時寫「不能證明：…」，缺口寫「缺口 <種類>：<原因>；查過 <來源 id>」。
 - 數字照 `serenity-method.md` 的寫法：「<指標> <值> <單位>（<期間或日期>，<來源 id>）」。
@@ -113,6 +114,8 @@
 
 逐項對一次，對不上的先改再交：
 
+- 有任何該開而沒開到的原文時，第一行是「降級：…」，那些地方有 `not_accessible` 缺口，沒有寫成開過。
+
 - 每個數字都有期間或日期與來源 id；`period` 是已經結束的期間，日期不晚於研究日期。
 - 每筆證據的等級不高過它最好的來源能支持的上限。只有 `media`、`company_site`、`social` 或 FinMind 的證據時，不寫已在賣的階段（`production`、`orders`、`recognized_revenue`）、`High` 或 `Pass`。
 - 每個缺口有種類與原因；`not_found_in_sources_checked` 列出查過的來源；`confirmed_nonexistent` 有 `filing`、`transcript` 或 `finmind` 的來源。
@@ -120,6 +123,6 @@
 - 估值寫 `resolved` 時有價格與獲利兩個數字，都來自非缺口的證據。
 - 範圍只有 `TW`、`US`；A 股與港股只在 `counterargument.alternatives`。6 位數字且不是 00 開頭的代號是上海或深圳的，不在範圍。
 - 沒有 score、總分、評分、綜合這類欄位，沒有目標價。
-- `theme-scan`：八層各一次，`rank` 1 到 8 各一次；`not_investigated` 的層不在前三；`pilot.layer` 在前三；只有整間公司數字的 pilot 不是 `confirmed`；`next_checks` 至少 3 項；候選少於 3 檔時有 `shortlist_note`。
+- `theme-scan`：八層各一次，`rank` 1 到 8 各一次；前三層都有開啟過原文的證據，否則開頭有「降級」那一行並列出缺的層；`not_investigated` 的層不在前三；`pilot.layer` 在前三；只有整間公司數字的 pilot 不是 `confirmed`；`next_checks` 至少 3 項；候選少於 3 檔時有 `shortlist_note`。
 - `claim-challenge`：五個子主張各一個 `dimension`；有 `strong` 的 `Contradiction` 就提前終止；`assessment` 的 `stage` 與 `role` 符合上面的限制；沒提前終止時有 `chips`；降級觸發至少一項。
 - `arena`：`basis.month` 和市場一致；封包的數字只用 `basis` 的期間；`blind`、`title`、`question`、`rubric` 沒有代號、名稱或別名；五份 `ranking` 各一個面向，`order` 與 `priorities` 不矛盾；`synthesis.changed_after_reveal` 和兩個順序一致。
