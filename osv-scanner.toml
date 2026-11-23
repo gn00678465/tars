@@ -1,8 +1,13 @@
-# zod 3 comes in through @anthropic-ai/sandbox-runtime, which requires ^3.25; only zod 4.6.6 has
-# the fix. tars uses sandbox-runtime as a library, where zod parses no outside input: only the
-# `srt` CLI config loader and the external-decider mode call it, and tars uses neither (r54).
-# Re-check when this expires or when sandbox-runtime is upgraded.
+# zod 3 comes in by two paths; only zod 4.6.6 has the fix, and neither path takes zod 4 yet.
+# (1) @anthropic-ai/sandbox-runtime requires ^3.25. tars uses it as a library, where zod parses
+#     no outside input: only the `srt` CLI config loader and the external-decider mode call it,
+#     and tars uses neither (r54).
+# (2) @a2ui/web_core and @a2ui/react nest zod 3.25.76 (A2UI 0.15.0 requires zod 3 and breaks on
+#     zod 4). It is only in the page's lazily loaded A2UI chunk, where it parses the ui_show
+#     forms the owner's own agent sends through the authenticated relay; a tool_call's input is
+#     at most 16 KiB (TOOL_TEXT_BYTES), too small for an array large enough to exhaust memory.
+# Re-check when this expires: does A2UI take zod 4, is sandbox-runtime upgraded.
 [[IgnoredVulns]]
 id = "GHSA-mrhx-c7xc-m3w5"
-ignoreUntil = 2026-12-16
-reason = "zod parses no outside input in the sandbox-runtime library path tars uses (r54)"
+ignoreUntil = 2027-02-23
+reason = "zod 3 parses no outside input in sandbox-runtime's library path (r54), and in the page's A2UI chunk only ui_show input capped at 16 KiB from the owner's agent"

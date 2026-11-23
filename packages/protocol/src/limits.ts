@@ -63,6 +63,13 @@ export const WIKI_EXAMPLES = 3;
 export const WIKI_QUOTE = 200;
 /** An error's or a failure's data: at most this many keys. */
 export const DATA_KEYS = 16;
+/**
+ * ui.submit's context (m4_design_a2ui.md 1.6, 5.3): a field's name, a value, and the values a
+ * multiple choice sends. The local end checks every value again; these only bound the message.
+ */
+export const UI_KEY = 32;
+export const UI_VALUE = 200;
+export const UI_CHOICES = 4;
 /** conv.compact's focus, in characters: the local end's summary prompt takes no more. */
 export const COMPACT_FOCUS_CHARS = 500;
 /** status's models whose prices need confirming. */

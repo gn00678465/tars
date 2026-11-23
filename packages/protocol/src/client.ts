@@ -1,10 +1,32 @@
 import { z } from "zod";
 import { envelope, id, inConv } from "./envelope.ts";
-import { COMPACT_FOCUS_CHARS, KEEP_LAST, TEXT_BYTES } from "./limits.ts";
+import {
+  COMPACT_FOCUS_CHARS,
+  DATA_KEYS,
+  KEEP_LAST,
+  TEXT_BYTES,
+  UI_CHOICES,
+  UI_KEY,
+  UI_VALUE,
+} from "./limits.ts";
 import { wireEffort, wireModelRef } from "./wire.ts";
 import { WIKI_PATH, wikiSearchRequest, wikiSourceRequest } from "./wiki.ts";
 
 const empty = z.strictObject({});
+
+/**
+ * What an A2UI form's button sends back: its action's context, each value bound to a field. Only
+ * strings and lists of them, as the basic catalog's inputs give; the local end checks each one
+ * again, so this only keeps the message small.
+ */
+export const uiContext = z
+  .record(
+    z.string().min(1).max(UI_KEY),
+    z.union([z.string().max(UI_VALUE), z.array(z.string().max(UI_VALUE)).max(UI_CHOICES)]),
+  )
+  .refine((c) => Object.keys(c).length <= DATA_KEYS, "too many keys");
+
+export type UiContext = z.infer<typeof uiContext>;
 
 /** What a browser sends. */
 export const clientMessage = z.discriminatedUnion("kind", [
@@ -40,6 +62,13 @@ export const clientMessage = z.discriminatedUnion("kind", [
       .refine((p) => p.keepLast === undefined || p.from !== undefined, "keepLast needs from"),
   ),
   inConv("turn.abort", empty),
+  /**
+   * An A2UI form sent from the page: callId is its ui_show tool_call. Only the context goes: the
+   * action's name and the form are what the local end stored, not what the browser says. Taken
+   * as turn.submit is, with the same requestId resending. A local end older than it answers
+   * bad_message, and none sends ui_show before it takes this.
+   */
+  inConv("ui.submit", z.strictObject({ requestId: id, callId: id, context: uiContext })),
   /**
    * Archives the conversation, or with archived false takes back the one this connection archived
    * last: the local end refuses any other (not_allowed). A local end older than it answers

@@ -20,6 +20,9 @@ import {
   skillInvocationText,
   SNAPSHOT_ITEMS,
   TEXT_BYTES,
+  UI_CHOICES,
+  UI_KEY,
+  UI_VALUE,
   type Parsed,
 } from "../src/index.ts";
 import { CLIENT, CONN, context, ID, ITEMS, msg, SERVER, status } from "./fixtures.ts";
@@ -82,6 +85,42 @@ describe("an approval's tool call", () => {
     expect(reason(parseServer(withCall({ ...req.p.approval, callId: "x".repeat(65) })))).toBe(
       "bad_message",
     );
+  });
+});
+
+describe("an A2UI form: ui.submit and the user item's uiCall", () => {
+  const form = CLIENT["ui.submit"] as { conv: string; p: Record<string, unknown> };
+  const withContext = (context: unknown) =>
+    parseClient(JSON.stringify({ ...form, p: { ...form.p, context } }));
+
+  test("ui.submit needs conv: a form is in a conversation", () => {
+    const { conv: _, ...noConv } = form;
+    expect(reason(parseClient(JSON.stringify(noConv)))).toBe("bad_message");
+  });
+
+  test("context: strings and short lists of them, within the limits", () => {
+    expect(reason(withContext({}))).toBe("ok");
+    expect(reason(withContext({ a: "x".repeat(UI_VALUE) }))).toBe("ok");
+    expect(reason(withContext({ a: Array(UI_CHOICES).fill("x") }))).toBe("ok");
+    for (const bad of [
+      { a: "x".repeat(UI_VALUE + 1) },
+      { a: Array(UI_CHOICES + 1).fill("x") },
+      { ["k".repeat(UI_KEY + 1)]: "x" },
+      { "": "x" },
+      { a: 1 },
+      { a: { "@path": "/a" } },
+      Object.fromEntries(Array.from({ length: DATA_KEYS + 1 }, (_, i) => [`k${i}`, "x"])),
+    ])
+      expect(reason(withContext(bad))).toBe("bad_message");
+  });
+
+  test("uiCall is optional on a user item and only there", () => {
+    const item = (body: Record<string, unknown>) =>
+      parseServer(JSON.stringify(msg("item", { item: body }, { conv: ID })));
+    expect(reason(item(ITEMS.user))).toBe("ok");
+    expect(reason(item({ ...ITEMS.user, uiCall: ID }))).toBe("ok");
+    expect(reason(item({ ...ITEMS.user, uiCall: "x".repeat(65) }))).toBe("bad_message");
+    expect(reason(item({ ...ITEMS.assistant, uiCall: ID }))).toBe("bad_message");
   });
 });
 

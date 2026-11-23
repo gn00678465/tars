@@ -125,6 +125,10 @@ export interface State {
   };
   /** Sent, not yet started or refused. */
   readonly submitting?: string;
+  /** The submitting one is a form's ui.submit: the ui_show call it came from. */
+  readonly form?: { readonly callId: string; readonly requestId: string };
+  /** Why the last form sent was refused, shown under that form until it is sent again. */
+  readonly formError?: { readonly callId: string; readonly text: string };
   /** A conversation followed without its items: the page asks for its snapshot. */
   readonly load?: string;
   readonly cards: readonly Card[];
@@ -186,7 +190,8 @@ export type Event =
     }
   | { readonly type: "message"; readonly m: ServerMessage; readonly at: number }
   | { readonly type: "open_conv"; readonly conv: string | undefined }
-  | { readonly type: "submitted"; readonly requestId: string }
+  /** form: a form's ui.submit, by its ui_show call. */
+  | { readonly type: "submitted"; readonly requestId: string; readonly form?: string }
   /** conv.compact went (its id), or could not be sent at all (no id). */
   | { readonly type: "compact_sent"; readonly id?: string }
   | { readonly type: "pinged"; readonly id: string; readonly at: number }
@@ -265,6 +270,19 @@ export const NACK_TEXT: Record<NackReason, string> = {
 
 const nackText = (reason: NackReason | undefined) =>
   reason === undefined ? "送出失敗" : NACK_TEXT[reason];
+
+/**
+ * A form's refusals in its own words (m4_design_a2ui.md 1.6): the local end checks the values
+ * again and names only the reason.
+ */
+const FORM_NACK: Partial<Record<NackReason, string>> = {
+  bad_message: "本機端不接受這些值，請檢查後再送出",
+  not_found: "本機端找不到這張表單",
+  already_decided: "這張表單已經送出過",
+};
+
+const formNackText = (reason: NackReason | undefined) =>
+  (reason === undefined ? undefined : FORM_NACK[reason]) ?? nackText(reason);
 
 /** Another epoch: the local end's store was replaced, so nothing held here is valid. */
 const fresh = (s: State, epoch: string): State => ({
@@ -440,13 +458,18 @@ function message(s: State, m: ServerMessage, at: number): State {
       // database has (named) is worth loading, and only in the conversation the page is on.
       const missed = ours && m.p.state !== "started" && m.p.turn !== undefined && (follow || here);
       // A turn's own compaction runs before the turn starts: it is over by now.
+      const rejected = ours && m.p.state === "rejected";
+      // A form's turn that did not start says so under the form, which stays open.
+      const form = ours ? s.form : undefined;
+      const why = `沒有開始：${reasonText(m.p.reason ?? "")}`;
       const next: State = {
-        ...compactOver(ours ? withoutKeys(s, "submitting") : s),
+        ...compactOver(ours ? withoutKeys(s, "submitting", "form") : s),
         ...(follow ? { conv: m.conv as string } : {}),
         ...(missed ? { load: m.conv as string } : {}),
         turn,
-        ...(ours && m.p.state === "rejected"
-          ? { error: `沒有開始：${reasonText(m.p.reason ?? "")}` }
+        ...(rejected && form === undefined ? { error: why } : {}),
+        ...(rejected && form !== undefined
+          ? { formError: { callId: form.callId, text: why } }
           : {}),
       };
       return m.p.state === "started" ? next : withoutKeys(next, "running");
@@ -671,8 +694,15 @@ export function reduce(s: State, e: Event): State {
       const chat = { ...base, wiki: wikiReduce(s.wiki, { type: "view", view: "chat" }) };
       return e.conv === undefined ? chat : { ...chat, conv: e.conv };
     }
-    case "submitted":
-      return { ...withoutKeys(s, "error", "compactEnd"), submitting: e.requestId };
+    case "submitted": {
+      const sent = { ...withoutKeys(s, "error", "compactEnd", "form"), submitting: e.requestId };
+      return e.form === undefined
+        ? sent
+        : {
+            ...withoutKeys(sent, "formError"),
+            form: { callId: e.form, requestId: e.requestId },
+          };
+    }
     case "archive_sent":
       return e.id === undefined
         ? { ...s, archiveNote: note(s, { undo: false, text: nackText("offline") }) }
@@ -687,6 +717,12 @@ export function reduce(s: State, e: Event): State {
         : { ...withoutKeys(s, "compactEnd"), compactReq: e.id };
     case "submit_result": {
       if (s.submitting !== e.requestId) return s;
+      // A form's refusal is said under the form, which stays open to be sent again.
+      if (!e.ok && s.form?.requestId === e.requestId)
+        return {
+          ...withoutKeys(s, "submitting", "form"),
+          formError: { callId: s.form.callId, text: formNackText(e.reason) },
+        };
       if (!e.ok) return { ...withoutKeys(s, "submitting"), error: nackText(e.reason) };
       // A plain ack: the turn may not exist yet, and the turn message finishes it.
       if (e.turn === undefined) return s;
@@ -696,7 +732,7 @@ export function reduce(s: State, e: Event): State {
       const follow = s.conv === undefined && e.conv !== undefined;
       const here = e.conv !== undefined && (follow || e.conv === s.conv);
       return {
-        ...withoutKeys(s, "submitting"),
+        ...withoutKeys(s, "submitting", "form"),
         ...(follow ? { conv: e.conv as string } : {}),
         ...(here ? { load: e.conv as string } : {}),
       };

@@ -598,6 +598,16 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                       ? {}
                       : { onEffort: () => setEffortOpen(true) })}
                     after={(seq) => anchored.get(seq)?.map(card)}
+                    forms={{
+                      // A form sends as a message does: nothing while a turn runs or offline.
+                      submit: (callId, context) => {
+                        if (state.conv !== undefined)
+                          socket.submitForm(state.conv, callId, context);
+                      },
+                      blocked: composerBlocked(state) ?? sendBusy(state),
+                      sending: state.form?.callId,
+                      error: state.formError,
+                    }}
                     onOlder={() => {
                       if (state.conv !== undefined && oldest !== undefined)
                         socket.send("conv.open", { before: oldest }, state.conv);

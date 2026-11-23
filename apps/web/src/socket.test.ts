@@ -326,6 +326,34 @@ describe("Socket: heartbeat and resend", () => {
     });
   });
 
+  test("a form goes as ui.submit, resent with its requestId, and settles as a message does", async () => {
+    const h = await opened();
+    const context = { amount: "190", source: ["Assets:Cash"] };
+    const requestId = h.socket.submitForm("conv-1", "call-1", context);
+    expect(h.events).toContainEqual({ type: "submitted", requestId, form: "call-1" });
+    await h.advance(10_000);
+    const subs = h
+      .last()
+      .messages()
+      .filter((m) => m.kind === "ui.submit");
+    expect(subs.map((m) => [m.conv, m.p])).toEqual([
+      ["conv-1", { requestId, callId: "call-1", context }],
+      ["conv-1", { requestId, callId: "call-1", context }],
+    ]);
+    h.last().receive({
+      v: PROTOCOL_VERSION,
+      id: "s-n",
+      kind: "nack",
+      re: subs[0]?.id,
+      p: { reason: "bad_message" },
+    });
+    expect(h.events.find((e) => e.type === "submit_result")).toMatchObject({
+      requestId,
+      ok: false,
+      reason: "bad_message",
+    });
+  });
+
   test("malformed messages are dropped; a stale socket's events are ignored", async () => {
     const h = await opened();
     const old = h.last();

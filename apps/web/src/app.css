@@ -343,3 +343,85 @@
     background-position: 0 0;
   }
 }
+
+/*
+ * An A2UI form (UiForm.tsx): a frame the model cannot draw, unlike an approval card's (no
+ * waiting color), around what A2UI draws. A2UI's look comes from its own adopted sheet; only its
+ * --a2ui-* tokens are pointed at this page's colors and font (m4_design_a2ui.md 4.2). Its inputs
+ * keep 16px, under which iOS Safari zooms the page on focus.
+ */
+.ui-form {
+  border-radius: var(--radius-card);
+  border: 1px solid var(--glass-edge);
+  background: var(--panel-solid);
+  box-shadow: inset 0 1px 0 var(--glass-rim);
+  overflow: hidden;
+}
+
+.ui-form-head {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--glass-edge);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+
+.ui-form-body {
+  padding: 12px 14px;
+  --a2ui-color-background: var(--panel-solid);
+  --a2ui-color-on-background: var(--foreground);
+  --a2ui-color-surface: var(--card-solid);
+  --a2ui-color-on-surface: var(--foreground);
+  --a2ui-color-primary: var(--primary);
+  --a2ui-color-on-primary: var(--primary-foreground);
+  --a2ui-color-secondary: var(--glass-control);
+  --a2ui-color-on-secondary: var(--foreground);
+  --a2ui-color-input: var(--field);
+  --a2ui-color-on-input: var(--foreground);
+  --a2ui-color-border: var(--field-edge);
+  --a2ui-border-radius: var(--radius-control);
+  --a2ui-textfield-color-border-focus: var(--focus-line);
+  --a2ui-textfield-color-error: var(--status-error);
+  --a2ui-checkbox-color-error: var(--status-error);
+  --a2ui-text-caption-color: var(--muted-foreground);
+  --a2ui-font-family-title: var(--font-sans);
+  --a2ui-font-size: 16px;
+  font-family: var(--font-sans);
+  color: var(--foreground);
+}
+
+/* Sent, or on its way: inert, and faded so it does not look like it still takes input. */
+.ui-form-body[inert] {
+  opacity: 0.6;
+}
+
+.ui-form-foot,
+.ui-form-note,
+.ui-form-loading,
+.ui-form-fallback {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--subtle-foreground);
+}
+
+.ui-form-foot {
+  padding: 8px 14px;
+  border-top: 1px solid var(--glass-edge);
+}
+
+.ui-form-note {
+  padding: 0 14px 10px;
+  color: var(--muted-foreground);
+}
+
+.ui-form-note.error {
+  color: var(--status-error);
+}
+
+.ui-form.state-sent .ui-form-note {
+  color: var(--status-ok);
+}
+
+.ui-form-fallback {
+  margin-bottom: 6px;
+}
