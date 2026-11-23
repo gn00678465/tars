@@ -63,6 +63,7 @@ import {
 import * as store from "./store.ts";
 import { classify, REFUSAL_TEXT, runSelf, toolText, type Classified } from "./tars-tool.ts";
 import { runTool, type ToolOutcome } from "./tools.ts";
+import { uiShow } from "./ui-form.ts";
 import {
   ZERO_USAGE,
   type ApprovalState,
@@ -120,6 +121,8 @@ export interface TurnInput {
   readonly keepLast?: number;
   /** A browser's turn.submit id, unique over agent.db: a resent one finds this turn. */
   readonly requestId?: string;
+  /** The text is a sent form: that ui_show call's, taken once. Only with convId. */
+  readonly uiCall?: string;
 }
 
 /** conv_too_long when continuing: none of them sends the owner back to /compact (S2-13). */
@@ -446,6 +449,9 @@ export function createEngine(deps: EngineDeps) {
     let usageId = 0;
     let written: Item[] = [];
     db.transaction(() => {
+      // Checked where the message is written, so two sends of one form cannot both be taken.
+      if (input.uiCall !== undefined && store.uiCallSent(db, convId, input.uiCall))
+        throw new Error(`the form of ${input.uiCall} was already sent`);
       if (conv === undefined)
         store.createConversation(db, {
           id: convId,
@@ -470,7 +476,14 @@ export function createEngine(deps: EngineDeps) {
           ? [{ kind: "user" as const, step: 0, body: carry.body }]
           : []),
         ...(fresh === undefined ? [] : [{ kind: "wiki_index" as const, step: 0, body: fresh }]),
-        { kind: "user", step: 0, body: { text: input.text } },
+        {
+          kind: "user",
+          step: 0,
+          body: {
+            text: input.text,
+            ...(input.uiCall === undefined ? {} : { uiCall: input.uiCall }),
+          },
+        },
       ]);
       usageId = insertRequest(s, { turnId, convId, step: 1, attempt: 1 }, first);
     })();
@@ -770,6 +783,10 @@ export function createEngine(deps: EngineDeps) {
         toolResultBytes: t.s.limits.tool_result_bytes,
       };
       finish(t, call, await runTool(name, input, ctx));
+      return undefined;
+    }
+    if (name === "ui_show") {
+      finish(t, call, uiShow(input, t.frontend.via));
       return undefined;
     }
     if (name !== "tars") {

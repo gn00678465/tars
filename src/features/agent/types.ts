@@ -6,7 +6,7 @@ import type { Price } from "./catalog.ts";
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 
-export const TOOL_NAMES = ["skill_load", "file_read", "tars"] as const;
+export const TOOL_NAMES = ["skill_load", "file_read", "tars", "ui_show"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
 export interface SystemBlock {
@@ -142,6 +142,8 @@ export interface UserBody {
   readonly text: string;
   /** Set: this item is the text carried over from that earlier conversation (its id). */
   readonly carriedFrom?: string;
+  /** Set: the ui_show call (its callId) whose form the owner sent as this message. */
+  readonly uiCall?: string;
 }
 export interface AssistantBody {
   readonly text: string;

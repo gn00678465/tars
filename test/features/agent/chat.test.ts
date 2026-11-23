@@ -771,7 +771,7 @@ describe("continuing with another model", () => {
   test("text that cannot be carried: no pending continuation, the next message stays put", async () => {
     const h = await withB({ config: configWith({ max_input_tokens: 10000 }) });
     h.fake.reply(text("ok"));
-    expect(await run(["chat", "--message", "x".repeat(9000)], chatDeps(h).deps)).toBe(0);
+    expect(await run(["chat", "--message", "x".repeat(8000)], chatDeps(h).deps)).toBe(0);
     const old = convs(h)[0]?.id as string;
     h.fake.reply(text("same"));
     const { deps } = chatDeps(h, { answers: [`/model ${B}`, "next", undefined] });

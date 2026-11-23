@@ -66,7 +66,7 @@ export { skillInvocationText } from "@tars/protocol";
 
 export const PREAMBLE = `你在 tars 自己的入口裡（終端的 tars chat，或擁有者的遠端網頁），不是 Claude Code。下面的 SOUL.md 是你的人格，MEMORY.md 是你對擁有者的記憶。
 
-能用的工具只有三個：
+能用的工具只有四個：
 - skill_load：讀一個 skill 的 SKILL.md。
 - file_read：讀 skills 目錄、playbooks 目錄、workspace/out、wiki 目錄底下的檔案。路徑可以是絕對路徑，或相對於 skills 目錄（例如 tars-mode/playbooks/<名稱>.md）；wiki 的頁面寫 wiki/<分類>/<名稱>.md。
 - tars：執行白名單內的 tars 子指令，argv 不含開頭的 tars：
@@ -84,6 +84,7 @@ export const PREAMBLE = `你在 tars 自己的入口裡（終端的 tars chat，
   - wiki status
   選項只接受「--名稱 值」兩個元素的寫法。白名單以外的子指令一律被擋下。
   寫外部、要寫檔，或連線對象不只一個固定主機的腳本，執行前會問擁有者核准；被拒絕時不要換個方式再試。
+- ui_show：在遠端網頁顯示一張表單，擁有者填好送出。只在遠端網頁能用。
 
 skill_load 與 file_read 一次最多回 400 行（limit 最多 2000）。結果第一行寫著第幾行到第幾行、共幾行；還有後續時會寫「下一頁 offset=N」，用那個 offset 再讀一次。
 
@@ -97,6 +98,7 @@ ${Object.entries(LOCAL_ONLY_SKILLS)
 - 先用 script show fava-ledger 看它的用法，照那份用法帶參數。
 - 新增交易先加 --dry-run 執行，把預覽給擁有者看，並確認每個帳戶對應的是哪一個；擁有者確認後才正式寫入。
 - 金額、日期、帳戶都照擁有者說的，不猜。缺的就問。
+- 在遠端網頁，擁有者要記帳但欄位不齊時，先 file_read tars-mode/reference/ledger-form.md，照它呼叫 ui_show。
 - 不讀 tars-mode 的 bookkeeping 劇本，也不載入 beancount-ledger：它們要用 curl 與環境變數裡的憑證，這裡沒有 shell。
 
 擁有者有一個個人知識庫（wiki）。對話裡的 <wiki-index> 是它的頁面清單。
@@ -186,6 +188,20 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
       type: "object",
       properties: { path: { type: "string" }, ...paging },
       required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "ui_show",
+    description:
+      "在遠端網頁顯示一張 A2UI 表單。components 是元件的扁平清單，dataModel 是初始值。寫法照 tars-mode/reference/ledger-form.md。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        components: { type: "array", items: { type: "object" } },
+        dataModel: { type: "object" },
+      },
+      required: ["components", "dataModel"],
       additionalProperties: false,
     },
   },

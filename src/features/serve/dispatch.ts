@@ -30,6 +30,7 @@ import type { Engine, TurnInput } from "../agent/engine.ts";
 import type { Log } from "../agent/log.ts";
 import { loadSkillIndex } from "../agent/prompt.ts";
 import * as store from "../agent/store.ts";
+import { formMessage } from "../agent/ui-form.ts";
 import type { AccessVerifier, Registry } from "./access.ts";
 import { alreadyDecided, broadcast, message, RemoteFrontend, type Hub } from "./remote-frontend.ts";
 import { answerWiki, type WikiRequest } from "./wiki.ts";
@@ -84,6 +85,15 @@ interface Current {
 }
 
 type Of<K extends ClientMessage["kind"]> = Extract<ClientMessage, { kind: K }>;
+
+/** How a turn starts besides its text; uiCall only with a conversation (a sent form). */
+interface Start {
+  readonly model: { readonly provider: string; readonly id: string } | undefined;
+  readonly parent: store.Conversation | undefined;
+  readonly keepLast: number | undefined;
+  readonly effort: string | undefined;
+  readonly uiCall: string | undefined;
+}
 
 /**
  * One connection's frames waiting their turn. A cancelled queue never runs again: its frames
@@ -307,10 +317,7 @@ export class Dispatch {
           this.current.controller.abort();
         return this.d.hub.send(conn, message(this.d.hub, "ack", {}, { re: m.id }));
       case "ui.submit":
-        // Forms are not handled yet (B2): refused outright, so the page stops resending and
-        // says so under the form instead of showing it as sending forever.
-        if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
-        return this.reply(conn, "nack", "bad_message", m.id);
+        return this.uiSubmit(conn, m);
       case "approval.decide":
         if (this.current === undefined) {
           if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
@@ -654,7 +661,25 @@ export class Dispatch {
         : this.reply(conn, "nack", "bad_message", m.id);
     }
     if (this.current !== undefined) return this.reply(conn, "nack", "busy", m.id);
+    this.start(conn, m.id, requestId, hash, conv, text, {
+      model: m.p.model,
+      parent,
+      keepLast: m.p.keepLast,
+      effort: m.p.effort,
+      uiCall: undefined,
+    });
+  }
 
+  /** Takes the turn: acked now, run in the background (an approval, an abort must not wait). */
+  private start(
+    conn: string,
+    re: string,
+    requestId: string,
+    hash: string,
+    conv: store.Conversation | undefined,
+    text: string,
+    start: Start,
+  ): void {
     this.pending.set(requestId, hash);
     const controller = new AbortController();
     const frontend = new RemoteFrontend(this.d.hub, conn, requestId, () =>
@@ -666,16 +691,64 @@ export class Dispatch {
     const current: Current = { requestId, convId: conv?.id, frontend, controller };
     this.current = current;
     this.d.changed();
-    this.ack(conn, m.id);
-    // In the background: the next message (an approval, an abort) must not wait for this turn.
-    const start = { model: m.p.model, parent, keepLast: m.p.keepLast, effort: m.p.effort };
+    this.ack(conn, re);
     this.running = this.run(conn, current, text, conv, start).catch((err) =>
       this.d.log.log("warning", {
         connId: store.shortId(conn),
-        kind: "turn.submit",
+        kind: start.uiCall === undefined ? "turn.submit" : "ui.submit",
         ...errorName(err),
       }),
     );
+  }
+
+  /**
+   * A form the owner sent: its values become one message and a turn, as turn.submit's text does.
+   * Taken once per form; the accounts are checked against the form as stored, not the browser's.
+   * No approval is read or written here: a write still asks for its own.
+   */
+  private uiSubmit(conn: string, m: Of<"ui.submit">): void {
+    if (!this.registry.valid(conn)) return this.reply(conn, "nack", "auth_expired", m.id);
+    let conv: store.Conversation;
+    try {
+      conv = store.getConversation(this.d.db, m.conv);
+    } catch {
+      return this.reply(conn, "nack", "not_found", m.id);
+    }
+    if (conv.archivedAt !== undefined) return this.reply(conn, "nack", "conv_archived", m.id);
+    const { requestId, callId, context } = m.p;
+    const items = store.readItems(this.d.db, conv.id);
+    const call = items.find(
+      (i) => i.kind === "tool_call" && i.body.callId === callId && i.body.name === "ui_show",
+    );
+    const shown = items.some(
+      (i) => i.kind === "tool_result" && i.body.callId === callId && i.body.status === "done",
+    );
+    if (call?.kind !== "tool_call" || !shown) return this.reply(conn, "nack", "not_found", m.id);
+    const form = formMessage(call.body.input, context);
+    if (!form.ok) return this.reply(conn, "nack", "bad_message", m.id);
+    const hash = sha256(JSON.stringify(["ui.submit", callId, form.text]));
+    const held = this.pending.get(requestId);
+    if (held !== undefined)
+      return held === hash ? this.ack(conn, m.id) : this.reply(conn, "nack", "bad_message", m.id);
+    const turn = store.findTurnByRequest(this.d.db, requestId);
+    if (turn !== undefined) {
+      const sent = store
+        .readItems(this.d.db, turn.convId)
+        .find((i) => i.turnId === turn.id && i.kind === "user");
+      return sent?.kind === "user" && sent.body.uiCall === callId && sent.body.text === form.text
+        ? this.ack(conn, m.id, turn)
+        : this.reply(conn, "nack", "bad_message", m.id);
+    }
+    if (store.uiCallSent(this.d.db, conv.id, callId))
+      return this.reply(conn, "nack", "already_decided", m.id);
+    if (this.current !== undefined) return this.reply(conn, "nack", "busy", m.id);
+    this.start(conn, m.id, requestId, hash, conv, form.text, {
+      model: undefined,
+      parent: undefined,
+      keepLast: undefined,
+      effort: undefined,
+      uiCall: callId,
+    });
   }
 
   private async run(
@@ -683,12 +756,7 @@ export class Dispatch {
     current: Current,
     text: string,
     conv: store.Conversation | undefined,
-    start: {
-      readonly model: { readonly provider: string; readonly id: string } | undefined;
-      readonly parent: store.Conversation | undefined;
-      readonly keepLast: number | undefined;
-      readonly effort: string | undefined;
-    },
+    start: Start,
   ): Promise<void> {
     const { requestId, frontend, controller } = current;
     try {
@@ -703,6 +771,7 @@ export class Dispatch {
           effort: conv.effort,
           text,
           requestId,
+          ...(start.uiCall === undefined ? {} : { uiCall: start.uiCall }),
         };
       else if (start.model !== undefined) {
         // The engine checks the model as for any turn; only a name no provider has stops here.

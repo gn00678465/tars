@@ -19,7 +19,8 @@ import * as store from "../../../src/features/agent/store.ts";
 import { Dispatch, DROP } from "../../../src/features/serve/dispatch.ts";
 import { wireLookup } from "../../../src/features/serve/wire.ts";
 import type { Verdict } from "../../../src/features/serve/access.ts";
-import { tarsCall, text } from "../../fakes/anthropic.ts";
+import { tarsCall, text, toolUse } from "../../fakes/anthropic.ts";
+import sample from "../../../apps/web/src/components/ledger-form.sample.json";
 import { seedTurn } from "../agent/db-fixture.ts";
 import { tempHome } from "../../helpers.ts";
 import {
@@ -686,24 +687,6 @@ describe("Dispatch: approvals while a turn runs", () => {
       via: "abort",
     });
     expect(s.hub.to(CONN_A, "turn").at(-1)?.p).toMatchObject({ state: "aborted" });
-  });
-
-  test("ui.submit is refused as bad_message until forms are handled (B2), with no turn", async () => {
-    const s = await setup();
-    await s.ready(CONN_A);
-    const id = await s.msg(
-      CONN_A,
-      "ui.submit",
-      {
-        requestId: "11111111-1111-4111-8111-111111111111",
-        callId: "call-1",
-        context: { amount: "190" },
-      },
-      { conv: "22222222-2222-4222-8222-222222222222" },
-    );
-    expect(reply(s, CONN_A, id)?.kind).toBe("nack");
-    expect(reason(reply(s, CONN_A, id))).toBe("bad_message");
-    expect(s.d.current).toBeUndefined();
   });
 
   test("a decision with no turn running is already_decided", async () => {
@@ -1509,5 +1492,213 @@ describe("conv.archive: putting a conversation away from a page", () => {
     const dup = await s.msg(CONN_B, "conv.archive", { archived: true }, { conv });
     expect(reply(s, CONN_B, dup)?.kind).toBe("ack");
     expect(store.getConversation(s.db, conv).archivedAt).toBe(at);
+  });
+});
+
+describe("ui.submit: a form shown by ui_show, sent from a page", () => {
+  const values = {
+    date: "2026-11-23",
+    amount: "190",
+    target: ["Expenses:Food:Dinner"],
+    source: ["Assets:Cash:Wallet"],
+    narration: "晚餐",
+    payee: "",
+  };
+  const TEMPLATE = [
+    "〔表單送出〕記帳",
+    "日期：2026-11-23",
+    "金額：190",
+    "借方帳戶：Expenses:Food:Dinner",
+    "貸方帳戶：Assets:Cash:Wallet",
+    "摘要：晚餐",
+    "付款對象：（空）",
+  ].join("\n");
+  /** Every approval row, to show a form never reads or writes one. */
+  const approvalRows = (s: Setup) => s.db.query("SELECT * FROM approvals ORDER BY id").all();
+
+  /** A conversation whose model showed the sample form: its id and the call's. */
+  async function shown(input: unknown = sample) {
+    const s = await setup();
+    await s.ready(CONN_A);
+    s.h.fake.reply(toolUse("tu1", "ui_show", input), text("請填表"));
+    await s.msg(CONN_A, "turn.submit", { requestId: "r-1", text: "記帳" });
+    await until(() => ended(s, CONN_A));
+    await s.d.running;
+    const conv = store.findTurnByRequest(s.db, "r-1")!.convId;
+    const call = store.readItems(s.db, conv).find((i) => i.kind === "tool_call");
+    if (call?.kind !== "tool_call") throw new Error("no ui_show call");
+    return { s, conv, callId: call.body.callId };
+  }
+  const submit = (s: Setup, conv: string, p: Record<string, unknown>) =>
+    s.msg(CONN_A, "ui.submit", p, { conv });
+
+  test("taken: the template as the owner's message, marked with the call, and a turn on it", async () => {
+    const { s, conv, callId } = await shown();
+    const result = store.readItems(s.db, conv).find((i) => i.kind === "tool_result");
+    expect(result?.kind === "tool_result" && result.body.status).toBe("done");
+    const before = approvalRows(s);
+    s.h.fake.reply(text("先預覽"));
+    const id = await submit(s, conv, { requestId: "r-2", callId, context: values });
+    expect(reply(s, CONN_A, id)?.kind).toBe("ack");
+    await until(() => s.d.current === undefined);
+    await s.d.running;
+    const user = store
+      .readItems(s.db, conv)
+      .findLast((i) => i.kind === "user" && i.turnId === store.findTurnByRequest(s.db, "r-2")?.id);
+    expect(user?.body).toEqual({ text: TEMPLATE, uiCall: callId });
+    const wired = s.hub
+      .to(CONN_A, "item")
+      .map((m) => (m.p as { item: { kind: string; uiCall?: string; text?: string } }).item)
+      .findLast((i) => i.kind === "user");
+    expect(wired).toMatchObject({ text: TEMPLATE, uiCall: callId });
+    expect(JSON.stringify(s.h.fake.messages().at(-1))).toContain(
+      JSON.stringify(TEMPLATE).slice(1, -1),
+    );
+    expect(approvalRows(s)).toEqual(before);
+    allValid(s);
+  });
+
+  test("the same requestId again is acked with its turn and not run again; other values are refused", async () => {
+    const { s, conv, callId } = await shown();
+    s.h.fake.reply(text("先預覽"));
+    await submit(s, conv, { requestId: "r-2", callId, context: values });
+    await until(() => s.d.current === undefined);
+    await s.d.running;
+    const asked = s.h.fake.messages().length;
+    const turnId = store.findTurnByRequest(s.db, "r-2")?.id;
+    const again = await submit(s, conv, { requestId: "r-2", callId, context: values });
+    expect(reply(s, CONN_A, again)).toMatchObject({ kind: "ack", p: { turn: turnId } });
+    const other = await submit(s, conv, {
+      requestId: "r-2",
+      callId,
+      context: { ...values, amount: "200" },
+    });
+    expect(reason(reply(s, CONN_A, other))).toBe("bad_message");
+    expect(s.h.fake.messages()).toHaveLength(asked);
+  });
+
+  test("a form is taken once: another send of it is already_decided", async () => {
+    const { s, conv, callId } = await shown();
+    s.h.fake.reply(text("先預覽"));
+    await submit(s, conv, { requestId: "r-2", callId, context: values });
+    await until(() => s.d.current === undefined);
+    await s.d.running;
+    const id = await submit(s, conv, { requestId: "r-3", callId, context: values });
+    expect(reason(reply(s, CONN_A, id))).toBe("already_decided");
+    expect(store.findTurnByRequest(s.db, "r-3")).toBeUndefined();
+  });
+
+  test("the engine checks it again where it writes the message: a second take fails, nothing written", async () => {
+    const { s, conv, callId } = await shown();
+    s.h.fake.reply(text("先預覽"));
+    await submit(s, conv, { requestId: "r-2", callId, context: values });
+    await until(() => s.d.current === undefined);
+    await s.d.running;
+    const items = store.readItems(s.db, conv).length;
+    const run = s.h.engine.runTurn(
+      {
+        convId: conv,
+        provider: "anthropic",
+        model: "model-a",
+        effort: "medium",
+        text: TEMPLATE,
+        uiCall: callId,
+      },
+      s.h.frontend,
+      new AbortController().signal,
+    );
+    expect(run).rejects.toThrow("already sent");
+    await run.catch(() => undefined);
+    expect(store.readItems(s.db, conv)).toHaveLength(items);
+  });
+
+  test("not_found: no such conversation, no such call, or a ui_show that failed", async () => {
+    const { s, conv, callId } = await shown();
+    const nowhere = await s.msg(
+      CONN_A,
+      "ui.submit",
+      { requestId: "r-2", callId, context: values },
+      { conv: "22222222-2222-4222-8222-222222222222" },
+    );
+    expect(reason(reply(s, CONN_A, nowhere))).toBe("not_found");
+    const other = await submit(s, conv, { requestId: "r-3", callId: "call-0", context: values });
+    expect(reason(reply(s, CONN_A, other))).toBe("not_found");
+    const twoButtons = {
+      ...sample,
+      components: [...sample.components, { ...sample.components.at(-2), id: "b2" }],
+    };
+    const failed = await shown(twoButtons);
+    const result = store.readItems(failed.s.db, failed.conv).find((i) => i.kind === "tool_result");
+    expect(result?.kind === "tool_result" && result.body.status).toBe("failed");
+    const id = await submit(failed.s, failed.conv, {
+      requestId: "r-4",
+      callId: failed.callId,
+      context: values,
+    });
+    expect(reason(reply(failed.s, CONN_A, id))).toBe("not_found");
+  });
+
+  test("bad_message: an account the stored form does not offer, the same account twice, a bad amount", async () => {
+    const { s, conv, callId } = await shown();
+    for (const change of [
+      { target: ["Expenses:Unlisted"] },
+      { source: ["Expenses:Food:Dinner"], target: ["Expenses:Food:Dinner"] },
+      { amount: "0" },
+    ]) {
+      const id = await submit(s, conv, {
+        requestId: "r-9",
+        callId,
+        context: { ...values, ...change },
+      });
+      expect(reason(reply(s, CONN_A, id))).toBe("bad_message");
+    }
+    expect(store.findTurnByRequest(s.db, "r-9")).toBeUndefined();
+    expect(s.d.current).toBeUndefined();
+  });
+
+  test("an archived conversation's form is refused: conv_archived", async () => {
+    const { s, conv, callId } = await shown();
+    await s.msg(CONN_A, "conv.archive", { archived: true }, { conv });
+    const id = await submit(s, conv, { requestId: "r-2", callId, context: values });
+    expect(reason(reply(s, CONN_A, id))).toBe("conv_archived");
+  });
+
+  test("busy while another turn runs; an expired login is dropped", async () => {
+    const { s, conv, callId } = await shown();
+    installSample(
+      s.h.paths.scripts,
+      "push",
+      sampleScript({
+        name: "push",
+        tarsLines: [
+          'name = "push"',
+          'summary = "推播"',
+          'domains = ["api.example.com"]',
+          'effects = "external-write"',
+          'args = "--city <名稱>"',
+          'outputs = "一行"',
+          'exit = { 0 = "成功" }',
+        ],
+      }),
+      VERSION,
+    );
+    s.h.fake.reply(
+      tarsCall("tu2", ["script", "run", "push", "--", "--city", "Taipei"]),
+      text("好"),
+    );
+    await s.msg(CONN_A, "turn.submit", { requestId: "r-2", text: "推播" });
+    await until(() => s.hub.to(CONN_A, "approval.request").length === 1);
+    const id = await submit(s, conv, { requestId: "r-3", callId, context: values });
+    expect(reason(reply(s, CONN_A, id))).toBe("busy");
+    await s.msg(CONN_A, "turn.abort", {}, { conv: s.d.current!.frontend.convId });
+    await until(() => s.d.current === undefined);
+    await s.d.running;
+    await s.open(CONN_B, "short");
+    await s.msg(CONN_B, "hello", {});
+    s.timers.advance(1000);
+    // Gone from the registry: dropped, and no turn.
+    await s.msg(CONN_B, "ui.submit", { requestId: "r-4", callId, context: values }, { conv });
+    expect(s.frames.at(-1)).toEqual({ t: "drop", conn: CONN_B, code: DROP.auth });
+    expect(store.findTurnByRequest(s.db, "r-4")).toBeUndefined();
   });
 });

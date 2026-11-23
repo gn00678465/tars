@@ -137,7 +137,12 @@ export function toWire(item: Item, lookup: WireLookup): WireItem | undefined {
     case "user":
       // The carried text can be 40% of a model's window: only where it came from goes out.
       return item.body.carriedFrom === undefined
-        ? { ...base, kind: "user", ...cut(item.body.text, ITEM_TEXT_BYTES) }
+        ? {
+            ...base,
+            kind: "user",
+            ...cut(item.body.text, ITEM_TEXT_BYTES),
+            ...(item.body.uiCall === undefined ? {} : { uiCall: item.body.uiCall }),
+          }
         : { ...base, kind: "carried", from: item.body.carriedFrom };
     case "assistant":
       return {

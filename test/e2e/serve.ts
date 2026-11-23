@@ -5,7 +5,8 @@ import { exportJWK, generateKeyPair, SignJWT, type JWK } from "jose";
 import { PROTOCOL_VERSION } from "@tars/protocol";
 import { E2E_BASE_URL_VAR } from "../../src/features/agent/provider.ts";
 import { E2E_ACCESS_CERTS_URL_VAR, E2E_LINK_URL_VAR } from "../../src/features/serve/command.ts";
-import { capabilities, startFakeAnthropic, tarsCall, text } from "../fakes/anthropic.ts";
+import { capabilities, startFakeAnthropic, tarsCall, text, toolUse } from "../fakes/anthropic.ts";
+import sample from "../../apps/web/src/components/ledger-form.sample.json";
 import { startFakeRelay } from "../fakes/relay.ts";
 import { runDialog } from "./pty.ts";
 import {
@@ -375,6 +376,72 @@ async function inner(): Promise<number> {
         decided.decided_via === "remote",
       `${ok.kind}; ${JSON.stringify(resolvedB.p)}; ${JSON.stringify(late.p)}; ${JSON.stringify(decided)}`,
     );
+
+    // --- 6b. A form: ui_show reaches the page as a tool_call; ui.submit starts a turn on the
+    // template, whose dry run of an external-write script still asks for an approval.
+    const fromUi = relay.frames.length;
+    fake.reply(toolUse("u1", "ui_show", sample), text("請填表"));
+    send(A, "turn.submit", { requestId: "req-ui1", text: "記帳" }, { conv });
+    await turnEnd(A, "req-ui1");
+    const shown = msgsTo(A, fromUi)
+      .map((m) => m.p.item as { kind?: string; name?: string; callId?: string; input?: string })
+      .find((i) => i?.kind === "tool_call" && i.name === "ui_show");
+    const template = [
+      "〔表單送出〕記帳",
+      "日期：2026-11-23",
+      "金額：190",
+      "借方帳戶：Expenses:Food:Dinner",
+      "貸方帳戶：Assets:Cash:Wallet",
+      "摘要：晚餐",
+      "付款對象：（空）",
+    ].join("\n");
+    const fromSubmit = relay.frames.length;
+    fake.reply(tarsCall("p2", ["script", "run", "pusher", "--", "--dry-run"]), text("預覽好了"));
+    const sent = send(
+      A,
+      "ui.submit",
+      {
+        requestId: "req-ui2",
+        callId: shown?.callId ?? "",
+        context: {
+          date: "2026-11-23",
+          amount: "190",
+          target: ["Expenses:Food:Dinner"],
+          source: ["Assets:Cash:Wallet"],
+          narration: "晚餐",
+          payee: "",
+        },
+      },
+      { conv },
+    );
+    const sentAck = await reply(A, sent);
+    const dry = await waitMsg(A, (m) => m.kind === "approval.request", 30_000, fromSubmit);
+    const userItem = msgsTo(A, fromSubmit)
+      .map((m) => m.p.item as { kind?: string; text?: string; uiCall?: string } | undefined)
+      .find((i) => i?.kind === "user");
+    const asked = JSON.stringify(fake.messages().at(-1)?.body ?? {});
+    const dryApproval = dry.p.approval as { approvalId: string; hash: string; argv?: string[] };
+    check(
+      "ui-form",
+      "ui_show reaches the page as a tool_call; ui.submit is acked, its turn's user text is the template with uiCall, and the model's --dry-run of an external-write script brings an approval.request",
+      shown !== undefined &&
+        JSON.parse(shown.input ?? "null")?.components?.length === sample.components.length &&
+        sentAck.kind === "ack" &&
+        userItem?.text === template &&
+        userItem.uiCall === shown.callId &&
+        asked.includes(JSON.stringify(template).slice(1, -1)) &&
+        JSON.stringify(dry.p).includes("--dry-run"),
+      `${JSON.stringify(shown).slice(0, 120)}; ${sentAck.kind}; ${JSON.stringify(userItem)}; ${JSON.stringify(dry.p).slice(0, 200)}`,
+    );
+    await reply(
+      A,
+      send(A, "approval.decide", {
+        approvalId: dryApproval.approvalId,
+        decision: "denied",
+        hash: dryApproval.hash,
+      }),
+    );
+    await turnEnd(A, "req-ui2");
 
     // --- 7. Logins that fail: dropped 4003, and nothing more reaches them.
     const E = conn(4);

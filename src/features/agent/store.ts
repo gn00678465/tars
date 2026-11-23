@@ -375,6 +375,17 @@ export function readItemsPage(
   return { items: rows.slice(0, page.limit).reverse().map(toItem), more: rows.length > page.limit };
 }
 
+/** Whether an owner's message already sent the form of that ui_show call. */
+export function uiCallSent(db: Database, convId: string, callId: string): boolean {
+  return (
+    db
+      .query(
+        "SELECT 1 FROM items WHERE conv_id = ? AND kind = 'user' AND json_extract(body, '$.uiCall') = ?",
+      )
+      .get(convId, callId) !== null
+  );
+}
+
 /** The items a request can need: from the latest compaction's first kept item on. */
 export function readActiveItems(db: Database, convId: string): Item[] {
   return (
