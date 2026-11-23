@@ -227,6 +227,33 @@ systemctl --user enable --now tars-serve.service
 
 `tars serve` 和 `tars chat` 用同一把鎖，不能同時執行。要在終端用 `tars chat` 時先停掉這個服務。
 
+## 樣式
+
+網頁正在換成 Tailwind 4 加 shadcn/ui 的 Base UI 版（`base-nova`），分階段進行。P0 只接上工具鏈與樣式，還沒有任何元件。並存期間：
+
+- `src/index.css` 先載入 Tailwind 與 shadcn 的樣式，全部在 CSS layer 裡。`src/styles.css`（簽核原型的樣式）與 `src/app.css` 後載入，不在 layer 裡，所以既有畫面不變。不要把 `styles.css` 包進 layer，畫面會走樣。
+- Tailwind 不掃既有的標記（`source(none)`），否則 `hidden` 這類普通的類別名稱會變成 utility。加元件的階段在 `index.css` 為它們的目錄加 `@source`。
+- 顏色沿用原型：`index.css` 的 `@theme inline` 把 shadcn 的變數名對到 `styles.css` 的變數。
+- `shadcn` 套件不裝進 repo（它會帶進 `osv-scanner` 擋的漏洞）。`src/vendor/shadcn-tailwind.css` 是它的樣式檔原樣複製，版本記在 `THIRD_PARTY_NOTICES.md`；`vendor/` 不重排格式，才能和上游逐位元組比對。
+
+### 畫面比對
+
+換樣式的階段要證明畫面沒變時，跑 `tools/visual/`。它對 `ui_spec.md` 第 7 節的 15 個場景，在桌面 1280 px 與手機 390 px 兩種寬度下截圖，和基準（預設 `main`）逐像素比對：
+
+```
+cd apps/web
+node tools/visual/run.ts               # 基準是 main
+node tools/visual/run.ts --base <ref>  # 換基準
+node tools/visual/run.ts --only 7      # 只跑場景 7
+node tools/visual/run.ts --control     # 基準和自己比，看雜訊有多少
+```
+
+- 要 Node 24 以上與 Chromium（預設 `/usr/bin/chromium`，可用 `CHROMIUM` 換）。需要瀏覽器，所以不在 `bun run check` 裡。
+- 場景頁只在這個工具的建置裡：`tools/visual/fake.ts` 是假的本機端，插在 `main.tsx` 之前，App 本身照常載入。資料與步驟在 `tools/visual/scenes.ts`，都是虛構的。
+- 頁面用 `headers.ts` 的 CSP 提供。基準沒有的 CSP 違規與頁面錯誤算失敗，基準也有的另列（例如 zod 4 用 `Function("")` 試探能不能 eval，`main` 就有）。場景的步驟做不到，一律算失敗。
+- 雜訊：`--control` 量到的最大差異約 0.04%（狀態列的延遲毫秒數）。
+- 結果在 `.visual/report.md`，截圖在 `.visual/shots/base/` 與 `.visual/shots/head/`。任一張差異超過 0.5% 就失敗，要人看兩張截圖。
+
 ## 手動驗收
 
 這些項目自動測試涵蓋不到，由擁有者在自己的 Cloudflare 與手機上做。結果寫回 `research/cloudflare-tunnel-mtls.md`。行為和設計不同時，記下請求與回應的形狀（不含 JWT、cookie、email、憑證內容）。

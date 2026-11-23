@@ -1,0 +1,40 @@
+// The scene page's local end: a WebSocket that answers the page from scenes.ts. run.ts puts it
+// before main.tsx in a build of its own; the app's build never has it.
+import { PROTOCOL_VERSION } from "@tars/protocol";
+import { EPOCH, SCENES, type Push } from "./scenes.ts";
+
+const n = Number(new URLSearchParams(location.search).get("scene") ?? "1");
+const scene = SCENES[n - 1];
+if (scene === undefined) throw new Error(`no scene ${n}`);
+
+let seq = 0;
+const envelope = (m: Push, re?: string) => ({ v: PROTOCOL_VERSION, id: `s-${++seq}`, re, ...m });
+
+class SceneSocket {
+  onopen: (() => void) | null = null;
+  onmessage: ((e: { data: string }) => void) | null = null;
+  onclose: ((e: { code: number }) => void) | null = null;
+  constructor() {
+    setTimeout(() => this.onopen?.(), 0);
+  }
+  close() {}
+  // A microtask, not a timer: the status line's round trip then reads the same in every run.
+  private reply(m: Push, re?: string) {
+    queueMicrotask(() => this.onmessage?.({ data: JSON.stringify(envelope(m, re)) }));
+  }
+  send(data: string) {
+    if (data === "ping" || scene === undefined) return;
+    const m = JSON.parse(data) as { id: string; kind: string; conv?: string; p: { path?: string } };
+    if (m.kind === "hello") {
+      this.reply({ kind: "hello", p: { epoch: EPOCH, tars: "0.0.1" } }, m.id);
+      this.reply({ kind: "relay.status", p: scene.relay });
+      for (const p of scene.pushes ?? []) this.reply(p);
+      return;
+    }
+    const answer = scene.answers[m.kind];
+    if (typeof answer === "function") for (const r of answer(m)) this.reply(r, m.id);
+    else if (answer !== undefined) for (const r of answer) this.reply(r, m.id);
+  }
+}
+
+(globalThis as { WebSocket: unknown }).WebSocket = SceneSocket;
