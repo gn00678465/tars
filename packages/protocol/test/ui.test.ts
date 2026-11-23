@@ -40,6 +40,59 @@ describe("uiFormProblem: what a ui_show form may hold", () => {
   });
 });
 
+describe("uiFormProblem: account options and catalogs", () => {
+  const options = (id: string, list: unknown) => replace(id, { options: list });
+
+  test("an empty or non-string account value is refused, in AccountSelect and ChoicePicker", () => {
+    for (const component of ["AccountSelect", "ChoicePicker"])
+      for (const bad of [
+        { label: "請選擇", value: "" },
+        { label: "空白", value: "  " },
+        { label: "數字", value: 3 },
+        { label: "沒有值" },
+      ]) {
+        const parts2 = options("target", [bad]).map((c) =>
+          c.id === "target" ? { ...c, component } : c,
+        );
+        expect(uiFormProblem(parts2), JSON.stringify(bad)).toContain("is not an account name");
+      }
+    expect(uiFormProblem(options("target", "Expenses:Food"))).toContain("options is not a list");
+  });
+
+  test("a label must be its value, or a name then （value）: a mismatched pair is refused", () => {
+    const ok = [
+      { label: "Expenses:Transport", value: "Expenses:Transport" },
+      { label: "晚餐（Expenses:Food:Dinner）", value: "Expenses:Food:Dinner" },
+    ];
+    expect(uiFormProblem(options("target", ok))).toBeUndefined();
+    for (const label of [
+      "晚餐（Expenses:Transport）",
+      "Expenses:Transport",
+      "晚餐(Expenses:Food:Dinner)",
+      "晚餐（Expenses:Food:Dinner）補充",
+    ])
+      expect(
+        uiFormProblem(options("target", [{ label, value: "Expenses:Food:Dinner" }])),
+        label,
+      ).toContain("the label of Expenses:Food:Dinner");
+    expect(
+      uiFormProblem(options("target", [{ label: { "@path": "/x" }, value: "Expenses:Food" }])),
+    ).toContain("the label of");
+  });
+
+  test("a catalogId from the model is refused at any level of the components", () => {
+    expect(uiFormProblem(replace("target", { catalogId: "urn:tars:a2ui:catalog:v1" }))).toBe(
+      "key catalogId",
+    );
+    expect(uiFormProblem(replace("title", { catalogId: "x" }))).toBe("key catalogId");
+    expect(uiFormProblem(replace("title", { extra: [{ deep: { catalogId: "x" } }] }))).toBe(
+      "key catalogId",
+    );
+    // Data may hold any key: it is only data.
+    expect(uiFormProblem(parts, { catalogId: "x" })).toBeUndefined();
+  });
+});
+
 describe("uiFormProblem: bounded, whatever the input", () => {
   /** Arrays n deep, as JSON.parse would give them. */
   const nest = (n: number) => JSON.parse("[".repeat(n) + "]".repeat(n)) as unknown;

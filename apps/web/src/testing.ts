@@ -155,15 +155,16 @@ export async function typeInto(input: HTMLInputElement, text: string) {
   await settle();
 }
 
-/** The options an open combobox lists, by their text. Its popup is under document.body. */
-export const listed = () =>
-  [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.trim() ?? "");
+/** An option's label: AccountSelect marks it, as its row shows the value under it too. */
+const labelOf = (o: Element) =>
+  (o.querySelector('[data-part="label"]') ?? o).textContent?.trim() ?? "";
 
-/** Picks a listed option by its text. */
+/** The options an open combobox lists, by their labels. Its popup is under document.body. */
+export const listed = () => [...document.querySelectorAll('[role="option"]')].map(labelOf);
+
+/** Picks a listed option by its label. */
 export async function choose(text: string) {
-  const option = [...document.querySelectorAll('[role="option"]')].find(
-    (o) => o.textContent?.trim() === text,
-  );
+  const option = [...document.querySelectorAll('[role="option"]')].find((o) => labelOf(o) === text);
   if (option === undefined) throw new Error(`no option ${text}; listed: ${listed().join(", ")}`);
   await press(option);
 }

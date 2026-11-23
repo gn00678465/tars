@@ -7,8 +7,8 @@
  * component's checks has no @ (research/a2ui_proto_result.md). Markdown is not wired, so Text is
  * plain text.
  *
- * Two catalogs: the basic one is the surface's default, and the page's own (AccountSelect) is
- * named on each of its components by catalogId, which the page sets so the model never writes it.
+ * Two catalogs: the basic one is the surface's default, and the page's own (AccountSelect). The
+ * page names the catalog on every component by catalogId; the model never writes it.
  */
 import { A2uiSurface, type ReactCatalogComponent } from "@a2ui/react";
 import {
@@ -47,11 +47,17 @@ export function buildSurface(
     onAction,
     { validationConfig: { ...STRICT_VALIDATION, targetVersion: "1.0" } },
   );
+  // Every component's catalog is the page's to say, whatever the form holds: AccountSelect is
+  // the page's own, the rest are basic. uiFormProblem refuses a catalogId the model wrote.
   const components = spec.components.map((c) =>
-    typeof c === "object" &&
-    c !== null &&
-    (c as { component?: unknown }).component === ACCOUNT_SELECT
-      ? { ...c, catalogId: TARS_CATALOG_ID }
+    typeof c === "object" && c !== null
+      ? {
+          ...c,
+          catalogId:
+            (c as { component?: unknown }).component === ACCOUNT_SELECT
+              ? TARS_CATALOG_ID
+              : basicCatalog.id,
+        }
       : c,
   );
   try {

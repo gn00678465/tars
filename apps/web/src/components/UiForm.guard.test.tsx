@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { WireItem } from "@tars/protocol";
 import { act } from "react";
-import { afterEach, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeAll, expect, test, vi } from "vite-plus/test";
 import { render } from "../render.ts";
 import { initial, type State } from "../state.ts";
 import sample from "./ledger-form.sample.json";
@@ -31,6 +31,14 @@ vi.mock("./A2uiCard.tsx", async (real) => {
     },
   };
 });
+
+/**
+ * The form's lazy chunk (A2UI, Base UI) loads here once, with time to spare: its first import()
+ * takes seconds on a busy machine, more than a test's 5 s.
+ */
+beforeAll(async () => {
+  await import("./A2uiCard.tsx");
+}, 60_000);
 
 afterEach(() => {
   document.body.innerHTML = "";

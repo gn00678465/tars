@@ -1,13 +1,21 @@
 // @vitest-environment jsdom
 import type { UiContext, WireItem } from "@tars/protocol";
 import { act, useEffect, useState } from "react";
-import { afterEach, expect, test } from "vite-plus/test";
+import { afterEach, beforeAll, expect, test } from "vite-plus/test";
 import { render } from "../render.ts";
 import { initial, type State } from "../state.ts";
 import { choose, typeInto } from "../testing.ts";
 import sample from "./ledger-form.sample.json";
 import { Thread } from "./Thread.tsx";
 import { type FormHooks, toContext } from "./UiForm.tsx";
+
+/**
+ * The form's lazy chunk (A2UI, Base UI) loads here once, with time to spare: its first import()
+ * takes seconds on a busy machine, more than a test's 5 s.
+ */
+beforeAll(async () => {
+  await import("./A2uiCard.tsx");
+}, 60_000);
 
 /** Unmounted before the body is cleared: an open combobox's popup is a portal under body. */
 const mounted: (() => void)[] = [];
@@ -300,6 +308,30 @@ test("what cannot be drawn is a line and the plain tool step, with no frame", as
         }),
       },
       "表單的格式不對，無法顯示。",
+    ],
+    [
+      {
+        input: JSON.stringify({
+          ...sample,
+          components: sample.components.map((c) =>
+            c.id === "target"
+              ? { ...c, options: [{ label: "晚餐（Expenses:Transport）", value: "Expenses:Food" }] }
+              : c,
+          ),
+        }),
+      },
+      "表單含有不允許的元件或動作，不顯示。",
+    ],
+    [
+      {
+        input: JSON.stringify({
+          ...sample,
+          components: sample.components.map((c) =>
+            c.id === "title" ? { ...c, catalogId: "urn:tars:a2ui:catalog:v1" } : c,
+          ),
+        }),
+      },
+      "表單含有不允許的元件或動作，不顯示。",
     ],
   ] as const) {
     const root = await draw(thread(over), hooks().h);

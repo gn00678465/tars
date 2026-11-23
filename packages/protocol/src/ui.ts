@@ -39,8 +39,14 @@ export const UI_EVENT = "ledger_submit";
 export const UI_MAX_DEPTH = 16;
 export const UI_MAX_NODES = 2_000;
 
-/** Keys refused at any level, so nothing A2UI does with the form can reach a prototype. */
+/**
+ * Keys refused at any level, so nothing A2UI does with the form can reach a prototype. In
+ * components, catalogId too: the page decides each component's catalog, never the model.
+ */
 const UI_BAD_KEYS = ["__proto__", "constructor", "prototype"];
+
+/** Components whose options are accounts: AccountSelect, and ChoicePicker in forms before it. */
+const UI_ACCOUNT_PICKERS: readonly string[] = ["AccountSelect", "ChoicePicker"];
 
 /** Why the form may not be drawn, or undefined when it may. */
 export function uiFormProblem(
@@ -56,6 +62,10 @@ export function uiFormProblem(
     const { component, action } = c as { component?: unknown; action?: unknown };
     if (typeof component !== "string" || !UI_COMPONENTS.includes(component))
       return `component ${String(component)} is not allowed`;
+    if (UI_ACCOUNT_PICKERS.includes(component)) {
+      const p = accountOptionsProblem((c as { options?: unknown }).options);
+      if (p !== undefined) return `${component}: ${p}`;
+    }
     if (component !== "Button") {
       if (action !== undefined) return `${component} has an action`;
       continue;
@@ -66,6 +76,26 @@ export function uiFormProblem(
       return `the button's action is not the ${UI_EVENT} event`;
   }
   if (buttons !== 1) return `${buttons} buttons, not one`;
+  return undefined;
+}
+
+/**
+ * An account picker's options. The owner reads the label and the local end gets the value, so
+ * the two must name the same account: the label is the value, or a name then the value in
+ * full-width brackets, 中文名（英文帳戶名）. An empty value would be a blank account.
+ */
+function accountOptionsProblem(options: unknown): string | undefined {
+  if (!Array.isArray(options)) return "options is not a list";
+  for (const o of options) {
+    const { label, value } = (typeof o === "object" && o !== null ? o : {}) as {
+      label?: unknown;
+      value?: unknown;
+    };
+    if (typeof value !== "string" || value.trim() === "")
+      return "an option's value is not an account name";
+    if (typeof label !== "string" || (label !== value && !label.endsWith(`（${value}）`)))
+      return `the label of ${value} is not ${value} or a name then （${value}）`;
+  }
   return undefined;
 }
 
@@ -81,7 +111,7 @@ function deepProblem(
   if (depth > UI_MAX_DEPTH) return `nested deeper than ${UI_MAX_DEPTH}`;
   const entries = Array.isArray(v) ? v.map((x) => ["", x] as const) : Object.entries(v);
   for (const [k, x] of entries) {
-    if (UI_BAD_KEYS.includes(k)) return `key ${k}`;
+    if (UI_BAD_KEYS.includes(k) || (components && k === "catalogId")) return `key ${k}`;
     if (components && k === "functionCall") return "a functionCall action";
     if (components && k === "@call" && (typeof x !== "string" || !UI_CALLS.includes(x)))
       return `call ${String(x)} is not allowed`;

@@ -76,7 +76,15 @@ const AccountSelect = createComponentImplementation(
             <ComboboxList>
               {(o: Option) => (
                 <ComboboxItem key={o.value} value={o}>
-                  {o.label}
+                  {/* The value is what is sent, so it shows whatever the label says. */}
+                  <span className="flex min-w-0 flex-col">
+                    <span data-part="label">{o.label}</span>
+                    {o.label === o.value ? null : (
+                      <span data-part="value" className="text-xs text-muted-foreground">
+                        {o.value}
+                      </span>
+                    )}
+                  </span>
                 </ComboboxItem>
               )}
             </ComboboxList>

@@ -203,6 +203,39 @@ describe("ledger_submit: a sent form's values, checked again here", () => {
     expect(formMessage(other, ok).ok).toBe(false);
   });
 
+  test("an empty account is refused, even when a stored form offered an empty option", () => {
+    // A form stored before ui_show refused empty options.
+    for (const component of ["AccountSelect", "ChoicePicker"]) {
+      const f = form();
+      const target = f.components.find((c) => c.id === "target") as Record<string, unknown>;
+      target.component = component;
+      target.options = [
+        { label: "請選擇", value: "" },
+        { label: "空白", value: " " },
+        { label: "Expenses:Food:Dinner", value: "Expenses:Food:Dinner" },
+      ];
+      expect(formMessage(f, { ...ok, target: "" })).toEqual({
+        ok: false,
+        reason: "target is empty",
+      });
+      expect(formMessage(f, { ...ok, target: " " })).toEqual({
+        ok: false,
+        reason: "target is empty",
+      });
+      expect(formMessage(f, { ...ok, target: [""] }).ok).toBe(false);
+      expect(formMessage(f, ok).ok).toBe(true);
+    }
+  });
+
+  test("ui_show refuses a form whose account label names another account", () => {
+    const f = form();
+    const target = f.components.find((c) => c.id === "target") as Record<string, unknown>;
+    target.options = [{ label: "晚餐（Expenses:Transport）", value: "Expenses:Food:Dinner" }];
+    const r = uiShow(f, "remote");
+    expect(r.status).toBe("failed");
+    expect(r.text).toContain("the label of Expenses:Food:Dinner");
+  });
+
   test("a ChoicePicker form shown before AccountSelect is still accepted, a list of one each", () => {
     const old = form();
     for (const id of ["target", "source"]) {

@@ -173,6 +173,12 @@ test("an account field lists every option, narrowed by typing Chinese or English
   expect(target.getAttribute("role")).toBe("combobox");
   await press(target);
   expect(listed()).toEqual(["晚餐（Expenses:Food:Dinner）", "Expenses:Transport"]);
+  // Each row shows the value that is sent, under a label that is not just the value.
+  expect(
+    [...document.querySelectorAll('[role="option"]')].map(
+      (o) => o.querySelector('[data-part="value"]')?.textContent ?? null,
+    ),
+  ).toEqual(["Expenses:Food:Dinner", null]);
   await typeInto(target, "晚餐");
   expect(listed()).toEqual(["晚餐（Expenses:Food:Dinner）"]);
   await typeInto(target, "transport");
@@ -215,4 +221,19 @@ test("the account field writes no style; the styles there are Base UI's and A2UI
   const styled = [...document.querySelectorAll("[style]")];
   expect(styled.length).toBeGreaterThan(0);
   expect(styled.filter((e) => !theirs(e)).map((e) => e.outerHTML)).toEqual([]);
+});
+
+test("the page names every component's catalog, over any catalogId the form holds", () => {
+  // uiFormProblem refuses a model's catalogId first; this is the page's own guard behind it.
+  const wrong = {
+    ...spec,
+    components: spec.components.map((c) => {
+      const id = (c as { id: string }).id;
+      if (id === "title") return { ...(c as object), catalogId: "urn:tars:a2ui:catalog:v1" };
+      if (id === "target") return { ...(c as object), catalogId: "urn:other" };
+      return c;
+    }),
+  };
+  const built = buildSurface(CALL, wrong, () => undefined);
+  expect(built.ok ? "ok" : built.problem).toBe("ok");
 });

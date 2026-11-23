@@ -67,6 +67,8 @@ export function formMessage(
     const v = Array.isArray(raw) ? (raw.length === 1 ? raw[0] : undefined) : raw;
     if (v === undefined || (Array.isArray(raw) && !account)) return bad(`${key} is not one value`);
     if (CONTROL.test(v) || v.startsWith("-")) return bad(`${key} has a control character or a -`);
+    // ui_show refuses an empty option, and this holds for a form stored before it did.
+    if (account && v.trim() === "") return bad(`${key} is empty`);
     values[key] = v;
   }
   const { date, amount, target, source, narration, payee } = values as Record<

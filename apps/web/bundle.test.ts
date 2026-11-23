@@ -9,7 +9,7 @@ import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 /**
- * The most JS a first visit may load, gzipped: M4-P0's 137,922 bytes plus 5 kB through M4-P1,
+ * Under this much JS a first visit loads, gzipped: M4-P0's 137,922 bytes plus 5 kB through M4-P1,
  * whose components load only with a form (m4_web_stack_design.md 7 raises it phase by phase).
  * Measured by this file's own build, which leaves out the Cloudflare and _headers plugins: they
  * do not change the page's chunks.
@@ -107,7 +107,7 @@ test("a first visit loads no zod 3 and about as much JS as before A2UI", () => {
   expect(first.some((src) => js.get(src)?.includes(ZOD4))).toBe(true);
   const gzip = first.reduce((n, src) => n + gzipSync(js.get(src) as string).length, 0);
   console.log(`first load: ${first.join(", ")} = ${gzip} bytes gzip`);
-  expect(gzip).toBeLessThanOrEqual(FIRST_LOAD_LIMIT);
+  expect(gzip).toBeLessThan(FIRST_LOAD_LIMIT);
   // The stylesheets, to compare phase by phase; no limit yet (m4_web_stack_design.md 7).
   const styles = [...css.values()];
   console.log(

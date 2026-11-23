@@ -25,6 +25,7 @@
 - 兩個 `AccountSelect` 的 `options`：
   - `value` 寫帳戶全名，例如 `Assets:Cash:Wallet`。送出的是 `value`。
   - `label` 寫「中文名（帳戶全名）」，例如 `錢包（Assets:Cash:Wallet）`。查詢的 `zh` 是空的，`label` 就只寫帳戶全名。
+  - `label` 只能是帳戶全名本身，或「中文名」接全形括號包住的同一個 `value`。括號裡的帳戶和 `value` 不同、用半形括號、括號後面還有字，`ui_show` 都會拒絕。`value` 不能是空字串，不要加「請選擇」之類的空選項。
 - `dataModel` 的預填值：
   - `date` 是 `YYYY-MM-DD`，預設今天。
   - `amount`、`narration`、`payee` 是字串，不知道時給空字串。
@@ -40,6 +41,7 @@
 - 元件只能用 `Column`、`Row`、`Text`、`Divider`、`TextField`、`DateTimeInput`、`AccountSelect`、`Button`。帳戶用 `AccountSelect`，不用 `ChoicePicker`。不用 `Icon`，`Text` 不加 `weight`。
 - 只能有一個 `Button`，它的 `action` 是 `event`，`name` 是 `ledger_submit`。不用 `functionCall`。
 - `ui_show` 的輸入不超過 16,384 位元組。
+- 元件不寫 `catalogId`，網頁會自己決定。寫了 `ui_show` 會拒絕。
 - 本機端只接受選項裡的帳戶，借方與貸方不能相同，金額要大於 0。
 
 ## 範例

@@ -2,12 +2,13 @@
 // csp-test, cut down to this). Chromium opens the form scene at both widths, types Chinese and
 // English into the two account fields, picks, fills the rest and sends. It fails on any CSP
 // violation or page error, or when ui.submit does not carry the English account names.
-// zod 4's eval probe is left out: it tries Function("") once per load, which main has too.
+// zod 4's eval probe is left out, and only it (ZOD_PROBE below): main has it on every load.
 //   node tools/visual/csp.ts
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/csp/.
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { chromium, type Page } from "playwright-core";
-import { buildTree, CSP_LISTENER, serve, watch } from "./page.ts";
+import { buildTree, serve } from "./page.ts";
 import { NOW, SCENES } from "./scenes.ts";
 
 const web = resolve(import.meta.dirname, "../..");
@@ -15,11 +16,55 @@ const dir = join(web, ".visual", "csp");
 const scene = SCENES.findIndex((s) => s.name.startsWith("記帳表單")) + 1;
 if (scene === 0) throw new Error("no ledger form scene in scenes.ts");
 
-/** zod 4's probe: script-src without 'unsafe-eval' refuses it, and zod falls back. */
-const ZOD_PROBE = /eval/;
-
 await buildTree(web, dir, true);
 const { url, server } = await serve(dir);
+
+/**
+ * zod 4's eval probe (zod/v4/core/util.js allowsEval, 4.6.7): `try { return Function(""), true }`
+ * in the first-load entry, once per load (cached). A violation is it only when it is script-src
+ * refusing eval, raised in the entry chunk, on that code. Anything else counts, eval or not.
+ */
+const PROBE_CODE = "try{return Function(``),!0}catch{return!1}";
+const entry = /<script type="module"[^>]*src="(\/assets\/index-[\w-]+\.js)"/.exec(
+  readFileSync(join(dir, "index.html"), "utf8"),
+)?.[1];
+if (entry === undefined) throw new Error("no entry script in index.html");
+const code = readFileSync(join(dir, entry), "utf8");
+const at = code.indexOf(PROBE_CODE);
+if (at < 0 || code.indexOf(PROBE_CODE, at + 1) >= 0)
+  throw new Error(`zod's probe is not once in ${entry}: update PROBE_CODE`);
+const line = code.slice(0, at).split("\n").length;
+const column = at - code.lastIndexOf("\n", at - 1);
+interface Violation {
+  directive: string;
+  blocked: string;
+  source: string;
+  line: number;
+  column: number;
+}
+const isProbe = (v: Violation) =>
+  v.directive === "script-src" &&
+  v.blocked === "eval" &&
+  new URL(v.source, url).pathname === entry &&
+  v.line === line &&
+  v.column >= column &&
+  v.column < column + PROBE_CODE.length;
+
+/** Every violation the page raises, as data: read back before the page closes. */
+const COLLECT = () => {
+  const seen: unknown[] = [];
+  (globalThis as { cspSeen?: unknown[] }).cspSeen = seen;
+  document.addEventListener("securitypolicyviolation", (e) =>
+    seen.push({
+      directive: e.effectiveDirective,
+      blocked: e.blockedURI,
+      source: e.sourceFile,
+      line: e.lineNumber,
+      column: e.columnNumber,
+    }),
+  );
+};
+
 const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM ?? "/usr/bin/chromium",
   headless: true,
@@ -30,10 +75,11 @@ async function pick(page: Page, nth: number, typed: string, option: string) {
   const input = page.locator('input[role="combobox"]').nth(nth);
   await input.click();
   await input.fill(typed);
-  const listed = await page.getByRole("option").allTextContents();
+  // The labels of the options shown; a closed popup can stay in the DOM, hidden.
+  const listed = await page.getByRole("option").locator('[data-part="label"]').allTextContents();
   if (listed.length !== 1 || listed[0] !== option)
     throw new Error(`typed ${typed}: listed ${JSON.stringify(listed)}, not only ${option}`);
-  await page.getByRole("option", { name: option }).click();
+  await page.getByRole("option").filter({ hasText: option }).click();
   const shown = await input.inputValue();
   if (shown !== option) throw new Error(`picked ${option}: the field shows ${shown}`);
 }
@@ -47,10 +93,10 @@ for (const [width, options] of Object.entries({
   phone: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
 })) {
   const context = await browser.newContext({ ...options, locale: "zh-TW" });
-  await context.addInitScript(CSP_LISTENER);
+  await context.addInitScript(COLLECT);
   const page = await context.newPage();
-  const seen: string[] = [];
-  watch(page, seen);
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(`page error: ${e.message}`));
   try {
     await page.clock.setFixedTime(NOW);
     await page.goto(`${url}/?scene=${scene}`, { waitUntil: "load" });
@@ -78,9 +124,15 @@ for (const [width, options] of Object.entries({
     failures.push(`${width}: ${(e as Error).message.split("\n")[0]}`);
   }
   await page.screenshot({ path: join(dir, `${width}.png`) });
-  failures.push(...seen.filter((t) => !ZOD_PROBE.test(t)).map((t) => `${width}: ${t}`));
-  const probes = seen.filter((t) => ZOD_PROBE.test(t)).length;
-  console.log(`${width}: done; zod's eval probe ${probes} time(s), left out`);
+  const seen = await page.evaluate(() => (globalThis as { cspSeen?: unknown[] }).cspSeen ?? []);
+  const violations = seen as Violation[];
+  const probes = violations.filter(isProbe);
+  failures.push(
+    ...errors.map((t) => `${width}: ${t}`),
+    ...violations.filter((v) => !isProbe(v)).map((v) => `${width}: CSP ${JSON.stringify(v)}`),
+    ...(probes.length > 1 ? [`${width}: zod's probe ${probes.length} times, not once`] : []),
+  );
+  console.log(`${width}: done; zod's eval probe ${probes.length} time(s), left out`);
   await context.close();
 }
 
