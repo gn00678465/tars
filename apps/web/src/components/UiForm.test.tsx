@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { UiContext, WireItem } from "@tars/protocol";
-import { act } from "react";
+import { act, useEffect, useState } from "react";
 import { afterEach, expect, test } from "vite-plus/test";
 import { render } from "../render.ts";
 import { initial, type State } from "../state.ts";
@@ -101,6 +101,43 @@ const type = async (input: HTMLInputElement, value: string) => {
   await act(async () => new Promise((r) => setTimeout(r, 0)));
 };
 
+/** Picks an option of a ChoicePicker by its value, as a click would. */
+const pick = async (root: HTMLElement, value: string) => {
+  const radio = root.querySelector<HTMLInputElement>(`input[type="radio"][value="${value}"]`);
+  if (radio === null) throw new Error(`no option ${value}`);
+  await act(async () => radio.click());
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
+};
+
+/** What the user has put in: the amount, and the picked accounts. */
+const filled = (root: HTMLElement) => ({
+  amount: field(root, "金額").value,
+  picked: [...root.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
+    .filter((r) => r.checked)
+    .map((r) => r.value),
+});
+
+/**
+ * Thread redrawn every second, as App's approval countdown does, each time with new item
+ * objects (a snapshot after a reconnect brings those).
+ */
+function Ticking({ state, forms }: { state: State; forms: FormHooks }) {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setN((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const items = state.items.map((i) => ({ ...i }));
+  return (
+    <Thread
+      state={{ ...state, items }}
+      onOlder={() => undefined}
+      after={() => <span className="tick">{n}</span>}
+      forms={forms}
+    />
+  );
+}
+
 const submitButton = (root: HTMLElement) =>
   [...root.querySelectorAll<HTMLButtonElement>(".ui-form-body button")].find(
     (b) => b.textContent?.trim() === "送出",
@@ -139,6 +176,42 @@ test("the button sends the form's values as ui.submit's context, for this call",
   ]);
 });
 
+test("what was typed and picked stays through a second's redraw and new item objects", async () => {
+  const { h } = hooks();
+  const { root } = await render(<Ticking state={thread({})} forms={h} />);
+  await drawn(root);
+  await type(field(root, "金額"), "190");
+  await pick(root, "Expenses:Food:Dinner");
+  const before = filled(root);
+  expect(before).toEqual({ amount: "190", picked: ["Expenses:Food:Dinner", "Assets:Cash:Wallet"] });
+  await act(async () => new Promise((r) => setTimeout(r, 1100)));
+  expect(root.querySelector(".tick")?.textContent).not.toBe("0");
+  expect(filled(root)).toEqual(before);
+});
+
+test("sending, then refused: what was typed stays, the form opens again, the reason under it", async () => {
+  const state = thread({});
+  const sending = hooks({ sending: CALL }).h;
+  const { root, rerender } = await render(<Ticking state={state} forms={hooks().h} />);
+  await drawn(root);
+  await type(field(root, "金額"), "190");
+  await pick(root, "Expenses:Food:Dinner");
+  const before = filled(root);
+  await rerender(<Ticking state={state} forms={sending} />);
+  expect(root.querySelector(".ui-form-body")?.hasAttribute("inert")).toBe(true);
+  const why = "本機端沒有接受這張表單：值不對，或本機端還不支援表單";
+  await rerender(<Ticking state={state} forms={hooks({ error: { callId: CALL, text: why } }).h} />);
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
+  expect(filled(root)).toEqual(before);
+  expect(root.querySelector(".ui-form-body")?.hasAttribute("inert")).toBe(false);
+  const note = root.querySelector(".ui-form-note.error");
+  expect(note?.textContent).toBe(why);
+  // Under the card: after the frame's footer.
+  expect(root.querySelector(".ui-form-foot")?.compareDocumentPosition(note as Node)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+});
+
 test("nothing is sent while the page cannot send; the reason is under the form", async () => {
   const { h, sent } = hooks({ blocked: "回合進行中" });
   const root = await draw(thread({}), h);
@@ -163,11 +236,12 @@ test("on its way: locked; refused: the reason under it, open again", async () =>
   document.body.innerHTML = "";
   const refused = await draw(
     thread({}),
-    hooks({ error: { callId: CALL, text: "本機端不接受這些值，請檢查後再送出" } }).h,
+    hooks({ error: { callId: CALL, text: "本機端沒有接受這張表單：值不對，或本機端還不支援表單" } })
+      .h,
   );
   expect(refused.querySelector(".ui-form-body")?.hasAttribute("inert")).toBe(false);
   expect(refused.querySelector(".ui-form-note.error")?.textContent).toBe(
-    "本機端不接受這些值，請檢查後再送出",
+    "本機端沒有接受這張表單：值不對，或本機端還不支援表單",
   );
 });
 
@@ -176,7 +250,36 @@ test("what cannot be drawn is a line and the plain tool step, with no frame", as
     [{ truncated: true }, "表單內容不完整，無法顯示。"],
     [{ input: "{not json" }, "表單內容不完整，無法顯示。"],
     [
-      { input: JSON.stringify({ components: [{ id: "root", component: "Modal" }] }) },
+      { input: JSON.stringify({ components: [{ id: "root", component: "Columnx" }] }) },
+      "表單含有不允許的元件或動作，不顯示。",
+    ],
+    [
+      {
+        input: JSON.stringify({
+          ...sample,
+          components: sample.components.map((c) =>
+            c.id === "submit"
+              ? { ...c, action: { functionCall: { call: "openUrl", args: { url: "https://x" } } } }
+              : c,
+          ),
+        }),
+      },
+      "表單含有不允許的元件或動作，不顯示。",
+    ],
+    [
+      {
+        input: JSON.stringify({
+          components: [
+            { id: "root", component: "Column", children: ["b"] },
+            {
+              id: "b",
+              component: "Button",
+              child: "root",
+              action: { event: { name: "ledger_submit" } },
+            },
+          ],
+        }),
+      },
       "表單的格式不對，無法顯示。",
     ],
   ] as const) {

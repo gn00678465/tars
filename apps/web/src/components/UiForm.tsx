@@ -1,5 +1,5 @@
-import { uiContext, type UiContext, type WireItem } from "@tars/protocol";
-import { Component, lazy, type ReactNode, Suspense, useState } from "react";
+import { uiContext, type UiContext, uiFormProblem, type WireItem } from "@tars/protocol";
+import { Component, lazy, type ReactNode, Suspense, useMemo, useState } from "react";
 
 /** The A2UI half, in its own chunk: fetched the first time a form is drawn (m4_design_a2ui.md 1.5). */
 const A2uiCard = lazy(() => import("./A2uiCard.tsx"));
@@ -21,15 +21,19 @@ export interface FormHooks {
   readonly error: { readonly callId: string; readonly text: string } | undefined;
 }
 
+type Read =
+  | { readonly ok: true; readonly spec: NonNullable<ReturnType<typeof formSpec>> }
+  | { readonly ok: false; readonly line: string };
+
 /**
  * ui_show's input as the page reads it, or undefined when it cannot be drawn: cut short by the
  * protocol's limit, not JSON, or not components and data. A2UI validates the rest.
  */
-export function formSpec(call: ToolCall) {
-  if (call.truncated) return undefined;
+export function formSpec(text: string, truncated: boolean) {
+  if (truncated) return undefined;
   let input: unknown;
   try {
-    input = JSON.parse(call.input);
+    input = JSON.parse(text);
   } catch {
     return undefined;
   }
@@ -42,6 +46,15 @@ export function formSpec(call: ToolCall) {
     components: components as unknown[],
     ...(dataModel === undefined ? {} : { dataModel: dataModel as Record<string, unknown> }),
   };
+}
+
+/** The form to draw, or the line said instead: unreadable, or holding what a form may not. */
+function readForm(text: string, truncated: boolean): Read {
+  const spec = formSpec(text, truncated);
+  if (spec === undefined) return { ok: false, line: "表單內容不完整，無法顯示。" };
+  if (uiFormProblem(spec.components) !== undefined)
+    return { ok: false, line: "表單含有不允許的元件或動作，不顯示。" };
+  return { ok: true, spec };
 }
 
 /**
@@ -87,15 +100,18 @@ export function UiForm({
   hooks: FormHooks | undefined;
   step: ReactNode;
 }) {
-  const spec = formSpec(call);
+  // Read once per call's content: the page redraws every second (approval countdowns) and a
+  // snapshot after a reconnect brings new item objects; a new spec object would make A2uiCard
+  // build a new surface and drop what was typed.
+  const read = useMemo(() => readForm(call.input, call.truncated), [call.input, call.truncated]);
   const fallback = (line: string) => (
     <>
       <p className="ui-form-fallback">{line}</p>
       {step}
     </>
   );
-  if (spec === undefined) return fallback("表單內容不完整，無法顯示。");
-  return <Drawn call={call} spec={spec} sent={sent} hooks={hooks} fallback={fallback} />;
+  if (!read.ok) return fallback(read.line);
+  return <Drawn call={call} spec={read.spec} sent={sent} hooks={hooks} fallback={fallback} />;
 }
 
 function Drawn({

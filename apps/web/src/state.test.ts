@@ -929,7 +929,10 @@ describe("an A2UI form's ui.submit", () => {
     expect(s.error).toBeUndefined();
     expect(s.form).toBeUndefined();
     expect(s.submitting).toBeUndefined();
-    expect(s.formError).toEqual({ callId: "call-1", text: "本機端不接受這些值，請檢查後再送出" });
+    expect(s.formError).toEqual({
+      callId: "call-1",
+      text: "本機端沒有接受這張表單：值不對，或本機端還不支援表單",
+    });
     // Sent again: the old reason goes.
     expect(
       run([{ type: "submitted", requestId: "f2", form: "call-1" }], s).formError,

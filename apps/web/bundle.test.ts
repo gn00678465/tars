@@ -44,29 +44,69 @@ beforeAll(async () => {
 
 afterAll(() => rmSync(out, { recursive: true, force: true }));
 
-/** The scripts index.html loads or preloads: what a first visit fetches before any import(). */
-const firstLoad = () =>
+/** The scripts index.html loads or preloads. */
+const entries = () =>
   [...html.matchAll(/<(?:script[^>]*\ssrc|link[^>]*rel="modulepreload"[^>]*\shref)="([^"]+)"/g)]
     .map((m) => m[1] as string)
     .filter((src) => js.has(src));
 
+/**
+ * A chunk's imports, as paths like the HTML's: static ones are `import"./x.js"` and
+ * `from"./x.js"`, dynamic ones `import(`./x.js`)` (vite's minified output). A chunk's imports
+ * are relative to /assets/.
+ */
+const imports = (src: string, dynamic: boolean) => {
+  const code = js.get(src) as string;
+  const re = dynamic
+    ? /\bimport\(\s*["'`]\.\/([^"'`]+\.js)["'`]\s*\)/g
+    : /(?:\bfrom|\bimport)\s*["'`]\.\/([^"'`]+\.js)["'`]/g;
+  return [...code.matchAll(re)].map((m) => `/assets/${m[1] as string}`);
+};
+
+/** Every chunk reachable from the entries, following static imports and, if asked, dynamic. */
+const reach = (dynamic: boolean) => {
+  const seen = new Set<string>();
+  const next = entries();
+  for (let src = next.pop(); src !== undefined; src = next.pop()) {
+    if (seen.has(src)) continue;
+    seen.add(src);
+    next.push(...imports(src, false), ...(dynamic ? imports(src, true) : []));
+  }
+  return seen;
+};
+
+/** What a first visit fetches before any import(): the entries and what they import, transitively. */
+const firstLoad = () => [...reach(false)];
+
+/** Chunks only an import() reaches: fetched when a form is first drawn. */
+const later = () => {
+  const first = reach(false);
+  return [...reach(true)].filter((src) => !first.has(src));
+};
+
+test("every chunk is reached from index.html, so none escapes the checks below", () => {
+  expect([...reach(true)].sort()).toEqual([...js.keys()].sort());
+});
+
 test("a first visit loads no zod 3 and about as much JS as before A2UI", () => {
   const first = firstLoad();
   expect(first.length).toBeGreaterThan(0);
-  for (const src of first) expect(js.get(src)).not.toContain(ZOD3);
+  for (const src of first) expect(js.get(src), src).not.toContain(ZOD3);
+  // The marker is real: @tars/protocol's zod 4 is on the first load.
+  expect(first.some((src) => js.get(src)?.includes(ZOD4))).toBe(true);
   const gzip = first.reduce((n, src) => n + gzipSync(js.get(src) as string).length, 0);
   console.log(`first load: ${first.join(", ")} = ${gzip} bytes gzip`);
   expect(gzip).toBeLessThan(FIRST_LOAD_GZIP + FIRST_LOAD_SLACK);
 });
 
-test("A2UI comes in a chunk of its own, loaded later, with zod 3 and no zod 4", () => {
-  const first = new Set(firstLoad());
-  const a2ui = [...js].filter(([, code]) => code.includes("a2ui-basic"));
-  expect(a2ui.length).toBe(1);
-  const [src, code] = a2ui[0] as [string, string];
-  expect(first.has(src)).toBe(false);
-  expect(code).toContain(ZOD3);
-  // A2uiCard and what it imports must not pull @tars/protocol's zod 4 in (m4_design_a2ui.md 6.2).
-  expect(code).not.toContain(ZOD4);
-  console.log(`a2ui chunk: ${src} = ${gzipSync(code).length} bytes gzip`);
+test("A2UI and its zod 3 come only by import(), and nothing so loaded has zod 4", () => {
+  const late = later();
+  expect(late.some((src) => js.get(src)?.includes("a2ui-basic"))).toBe(true);
+  expect(late.some((src) => js.get(src)?.includes(ZOD3))).toBe(true);
+  // A2uiCard and what it imports must not pull @tars/protocol's zod 4 in (m4_design_a2ui.md 6.2),
+  // whether into its own chunk or a shared one only it loads.
+  for (const src of late) expect(js.get(src), src).not.toContain(ZOD4);
+  console.log(
+    `later: ${late.map((src) => `${src} = ${gzipSync(js.get(src) as string).length}`).join(", ")} bytes gzip`,
+  );
 });

@@ -276,7 +276,7 @@ const nackText = (reason: NackReason | undefined) =>
  * again and names only the reason.
  */
 const FORM_NACK: Partial<Record<NackReason, string>> = {
-  bad_message: "本機端不接受這些值，請檢查後再送出",
+  bad_message: "本機端沒有接受這張表單：值不對，或本機端還不支援表單",
   not_found: "本機端找不到這張表單",
   already_decided: "這張表單已經送出過",
 };

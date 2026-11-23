@@ -352,6 +352,14 @@ describe("Socket: heartbeat and resend", () => {
       ok: false,
       reason: "bad_message",
     });
+    // A local end that refuses forms (before B2) ends it: no more resends.
+    await h.advance(30_000);
+    expect(
+      h
+        .last()
+        .messages()
+        .filter((m) => m.kind === "ui.submit"),
+    ).toHaveLength(2);
   });
 
   test("malformed messages are dropped; a stale socket's events are ignored", async () => {
