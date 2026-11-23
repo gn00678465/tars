@@ -15,8 +15,9 @@ const refused = (why: string): ToolOutcome => ({
 /**
  * ui_show's checks before the page draws the form. The page validates the A2UI structure; this
  * checks what the local end trusts later: where it shows, that it reaches the page whole (the
- * tool_call input is cut at TOOL_TEXT_BYTES), and the components and the one action, with the
- * protocol's own uiFormProblem so both ends hold the same list.
+ * tool_call input is cut at TOOL_TEXT_BYTES), and the components, the one action and the data's
+ * bounds, with the protocol's own uiFormProblem: a form the page would refuse is not reported as
+ * shown, or the model would end its turn on a form the owner never sees.
  */
 export function uiShow(input: unknown, via: "tty" | "remote"): ToolOutcome {
   if (via !== "remote") return refused("這個入口不能顯示表單，改用文字問");
@@ -29,7 +30,7 @@ export function uiShow(input: unknown, via: "tty" | "remote"): ToolOutcome {
     Object.keys(input).length !== 2
   )
     return refused("輸入只能有 components（陣列）與 dataModel（物件）");
-  const problem = uiFormProblem(input.components);
+  const problem = uiFormProblem(input.components, input.dataModel);
   return problem === undefined
     ? { status: "done", text: UI_SHOW_DONE, truncated: false }
     : refused(problem);

@@ -88,6 +88,29 @@ describe("ui_show: what the local end checks before the page draws the form", ()
       );
   });
 
+  test("dataModel is checked as the page checks it: depth, how many values, a refused key", () => {
+    let deep: unknown = "x";
+    for (let i = 0; i < 17; i++) deep = { a: deep };
+    // Under the byte limit, over the count: the components and this list together.
+    const many = { list: Array.from({ length: 2000 }, () => 0) };
+    const cases: [string, unknown][] = [
+      ["nested deeper than 16", deep],
+      ["more than 2000 values", many],
+      ["key __proto__", JSON.parse('{"date": "", "__proto__": {"polluted": true}}')],
+      ["key constructor", { date: "", constructor: "x" }],
+    ];
+    for (const [why, dataModel] of cases) {
+      const out = uiShow({ ...form(), dataModel }, "remote");
+      expect([why, out.status]).toEqual([why, "failed"]);
+      expect(out.text).toContain(why);
+    }
+    let fine: unknown = "x";
+    for (let i = 0; i < 14; i++) fine = { a: fine };
+    expect(
+      uiShow({ ...form(), dataModel: { ...form().dataModel, extra: fine } }, "remote").status,
+    ).toBe("done");
+  });
+
   test("ledger-form.md's example is B1's sample, byte for byte as JSON", () => {
     const doc = readFileSync(join(REPO, "tars-skills/tars-mode/reference/ledger-form.md"), "utf8");
     const json = /```json\n([\s\S]*?)\n```/.exec(doc)?.[1];

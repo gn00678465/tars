@@ -1588,6 +1588,37 @@ describe("ui.submit: a form shown by ui_show, sent from a page", () => {
     expect(store.findTurnByRequest(s.db, "r-3")).toBeUndefined();
   });
 
+  test("two pages send the same form at once: one turn, the other busy, then already_decided", async () => {
+    const { s, conv, callId } = await shown();
+    await s.ready(CONN_B);
+    s.h.fake.reply(text("先預覽"));
+    // uiSubmit runs from its checks to setting current with no await in between, so the second
+    // finds the first's turn running (busy) and never reaches the engine; once that turn wrote
+    // its message, a resend finds it (already_decided). The engine's own check covers the rest.
+    const [a, b] = await Promise.all([
+      submit(s, conv, { requestId: "r-a", callId, context: values }),
+      s.msg(CONN_B, "ui.submit", { requestId: "r-b", callId, context: values }, { conv }),
+    ]);
+    const answers = [
+      reply(s, CONN_A, a)?.kind,
+      reason(reply(s, CONN_B, b)) ?? reply(s, CONN_B, b)?.kind,
+    ];
+    expect(answers).toEqual(["ack", "busy"]);
+    await until(() => s.d.current === undefined);
+    await s.d.running;
+    const again = await s.msg(
+      CONN_B,
+      "ui.submit",
+      { requestId: "r-b", callId, context: values },
+      { conv },
+    );
+    expect(reason(reply(s, CONN_B, again))).toBe("already_decided");
+    const sent = store
+      .readItems(s.db, conv)
+      .filter((i) => i.kind === "user" && i.body.uiCall === callId);
+    expect(sent).toHaveLength(1);
+  });
+
   test("the engine checks it again where it writes the message: a second take fails, nothing written", async () => {
     const { s, conv, callId } = await shown();
     s.h.fake.reply(text("先預覽"));
