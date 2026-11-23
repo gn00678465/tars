@@ -17,6 +17,7 @@ export function headersFile(appHost: string | undefined): string {
     "style-src 'self'",
     `connect-src 'self' wss://${appHost}`,
     "img-src 'self' data:",
+    "manifest-src 'self'",
     "frame-ancestors 'none'",
     "base-uri 'none'",
   ].join("; ");

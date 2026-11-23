@@ -295,3 +295,51 @@
   gap: 8px;
   flex-shrink: 0;
 }
+
+/* black-translucent (index.html) puts the page under the iOS status bar; this keeps it clear. */
+.app-viewport {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/*
+ * The 4-frame sprites (src/assets, 96x24 SVG). A background, not an <img>, so React only switches
+ * the class; crispEdges keeps the pixels sharp at any size.
+ */
+.tars-sprite {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  background-repeat: no-repeat;
+  background-size: 128px 32px;
+  animation: tars-sprite-play 0.667s steps(4) infinite;
+}
+.tars-sprite.wheel {
+  background-image: url("./assets/tars-sprite-wheel.svg");
+}
+.tars-sprite.idle {
+  background-image: url("./assets/tars-sprite-idle.svg");
+  animation-duration: 1.333s;
+}
+.empty-state .tars-sprite {
+  width: 64px;
+  height: 64px;
+  background-size: 256px 64px;
+  animation-name: tars-sprite-play-lg;
+}
+@keyframes tars-sprite-play {
+  to {
+    background-position: -128px 0;
+  }
+}
+@keyframes tars-sprite-play-lg {
+  to {
+    background-position: -256px 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tars-sprite {
+    animation: none;
+    background-position: 0 0;
+  }
+}

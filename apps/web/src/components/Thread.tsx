@@ -1,7 +1,7 @@
 import type { WireItem } from "@tars/protocol";
 import { Fragment, type ReactNode, useState } from "react";
 import type { State } from "../state.ts";
-import { Icon, Monolith } from "./Icon.tsx";
+import { Icon } from "./Icon.tsx";
 import { ErrorCard } from "./ErrorCard.tsx";
 import { NoticeCard } from "./Notices.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -380,11 +380,15 @@ function TurnEnd({
   if (turn.state === "started")
     return (
       <div className="turn-status" role="status">
-        <span className="status-glyph" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </span>
+        {turn.phase === "thinking" ? (
+          <span className="tars-sprite wheel" aria-hidden="true" />
+        ) : (
+          <span className="status-glyph" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+        )}
         <span>{(turn.phase === undefined ? undefined : PHASE[turn.phase]) ?? "回覆中…"}</span>
       </div>
     );
@@ -454,7 +458,7 @@ export function Thread(props: {
   if (conv === undefined && items.length === 0)
     return (
       <div className="empty-state">
-        <Monolith large />
+        <span className="tars-sprite idle" aria-hidden="true" />
         {props.welcome === true ? (
           <>
             <h2>已連線至本機 TARS</h2>

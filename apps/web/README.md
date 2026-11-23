@@ -149,6 +149,27 @@ npx wrangler deploy \
 - 建置時要有 `APP_HOST`。網頁的 CSP（`_headers`）在建置時由它產生，沒設就建置失敗。
 - 〔未確認〕`wrangler deploy --var` 能不能蓋過建置產生的設定裡的佔位符，沒有試過。部署後在控制台看 Worker 的變數是不是實際的值。
 
+### 圖示
+
+`public/` 的 PNG 已提交，建置不需要產生它們。換圖時在 `apps/web/` 重新產生。`<ASSETS>` 是素材目錄，需要 `rsvg-convert` 與 ImageMagick 的 `magick`。
+
+來源一律用 24×24 的 SVG，不用 512 的 PNG 縮放：512 不是 24 的整數倍，從它縮會多一次誤差。
+
+```sh
+cp <ASSETS>/tars-icon-idle-transparent.svg public/favicon.svg
+cp <ASSETS>/tars-icon-idle-512x512-pwa.png public/icons/icon-512.png
+rsvg-convert -w 192 -h 192 <ASSETS>/tars-icon-idle-pwa.svg -o public/icons/icon-192.png
+rsvg-convert -w 32 -h 32 <ASSETS>/tars-icon-idle-transparent.svg -o public/favicon-32.png
+rsvg-convert -w 16 -h 16 <ASSETS>/tars-icon-idle-transparent.svg -o public/favicon-16.png
+rsvg-convert -w 168 -h 168 <ASSETS>/tars-icon-idle-pwa.svg -o touch-168.png
+magick touch-168.png -background none -gravity center -extent 180x180 PNG32:public/apple-touch-icon.png
+rm touch-168.png
+cp <ASSETS>/tars-sprite-wheel.svg <ASSETS>/tars-sprite-idle.svg src/assets/
+```
+
+- 180 是 ×7 加 6px 的邊，保留原圖的圓角與透明（RGBA）。iOS 會把透明處顯示成黑色，要不要填色由擁有者看過再決定。
+- 32 與 16 不是 24 的整數倍，像素寬窄會不一，換圖後要用眼睛看過。
+
 ## 憑證輪替
 
 除了重啟 `tars serve` 的那幾秒，網頁一直能用。
