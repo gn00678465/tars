@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { TarsError } from "../../core/exit.ts";
 import { createExclusive, uniqueTemp } from "../../core/fs.ts";
@@ -41,7 +41,8 @@ export function registerInstall(program: Command, deps: InstallDeps): void {
     .addHelpText(
       "after",
       `
-Skills are replaced on every run. SOUL.md and MEMORY.md are never overwritten.
+Shipped skills are replaced on every run; a skill dir you added to <data>/skills is kept.
+SOUL.md and MEMORY.md are never overwritten.
 
 tars is copied to $XDG_BIN_HOME/tars, else ~/.local/bin/tars. When that dir is not on
 PATH, install writes <data>/env and sources it from ~/.profile, each existing
@@ -78,7 +79,7 @@ export async function install(
   );
 
   await mkdir(paths.data, { recursive: true });
-  await replaceSkills(paths.skills, skills);
+  await replaceSkills(paths.skills, skills, io);
   for (const seed of seeds) {
     if (seed.bytes && !(await createExclusive(seed.target, seed.bytes))) {
       throw concurrentInstall(seed.target);
@@ -123,16 +124,45 @@ async function readSeed(
   }
 }
 
-/** Writes files into a sibling temp dir, then swaps it in, so stale skill files never survive. */
-export async function replaceSkills(dir: string, files: readonly EmbeddedFile[]): Promise<void> {
+/** Names the top-level dirs the last install wrote, so the next one can tell them from the user's. */
+export const SHIPPED_LIST = "shipped.json";
+
+/**
+ * Writes files into a sibling temp dir, then swaps it in, so stale skill files never survive.
+ * Top-level dirs the user added (absent from the last shipped list) are copied into the temp dir
+ * first; a dir that shares a shipped name is replaced by the shipped one.
+ */
+export async function replaceSkills(
+  dir: string,
+  files: readonly EmbeddedFile[],
+  io: Io,
+): Promise<void> {
   const tmp = uniqueTemp(dir);
   const old = uniqueTemp(dir);
+  const shipped = [
+    ...new Set(files.flatMap((f) => (f.path.includes("/") ? [f.path.split("/")[0]!] : []))),
+  ].sort();
   try {
     for (const file of files) {
       const path = join(tmp, file.path);
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, file.bytes);
     }
+    for (const name of await userSkills(dir)) {
+      if (shipped.includes(name)) {
+        io.err(`skills/${name} is not one tars shipped; replaced it with the shipped ${name}`);
+        continue;
+      }
+      // verbatimSymlinks: a link is copied as a link, never the file outside the skill it points to.
+      await cp(join(dir, name), join(tmp, name), { recursive: true, verbatimSymlinks: true }).catch(
+        (err: NodeJS.ErrnoException) => {
+          throw new TarsError(
+            `cannot keep skills/${name}: ${err.code ?? err} at ${err.path ?? join(dir, name)}; skills are unchanged`,
+          );
+        },
+      );
+    }
+    await writeFile(join(tmp, SHIPPED_LIST), `${JSON.stringify(shipped, null, 2)}\n`);
     // rename() cannot replace a non-empty directory, so the old tree moves aside first.
     await rename(dir, old).catch((err: NodeJS.ErrnoException) => {
       if (err.code !== "ENOENT") throw err;
@@ -144,6 +174,28 @@ export async function replaceSkills(dir: string, files: readonly EmbeddedFile[])
     await rm(tmp, { recursive: true, force: true });
     await rm(old, { recursive: true, force: true });
   }
+}
+
+/** Top-level dirs the last install did not ship. Without a list, every dir counts as shipped. */
+async function userSkills(dir: string): Promise<string[]> {
+  const text = await readFile(join(dir, SHIPPED_LIST), "utf8").catch(
+    (err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") return undefined;
+      throw err;
+    },
+  );
+  if (text === undefined) return [];
+  let last: unknown;
+  try {
+    last = JSON.parse(text);
+  } catch {}
+  if (!Array.isArray(last)) {
+    throw new TarsError(
+      `${join(dir, SHIPPED_LIST)} is not a JSON array; delete it and run tars install again`,
+    );
+  }
+  const entries = await readdir(dir, { withFileTypes: true });
+  return entries.filter((e) => e.isDirectory() && !last.includes(e.name)).map((e) => e.name);
 }
 
 /** The target appeared between our check and our rename or link: another install got there first. */

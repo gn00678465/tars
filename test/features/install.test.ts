@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { resolvePaths } from "../../src/core/paths.ts";
 import { skillsFromBundle, type EmbeddedFile } from "../../src/features/install/embedded.ts";
@@ -34,12 +44,12 @@ describe("tars install", () => {
     expect(existsSync(paths.workspace)).toBe(true);
   });
 
-  test("replaces the whole skills dir, so a skill removed from the binary disappears", async () => {
+  test("without a shipped list, every old dir counts as shipped, so a skill removed from the binary disappears", async () => {
     const { deps, paths, seedArgs } = setup();
     mkdirSync(join(paths.skills, "removed"), { recursive: true });
     writeFileSync(join(paths.skills, "removed/SKILL.md"), "old");
     expect(await run(["install", ...seedArgs], deps)).toBe(0);
-    expect(readdirSync(paths.skills).sort()).toEqual(["alpha", "beta"]);
+    expect(readdirSync(paths.skills).sort()).toEqual(["alpha", "beta", "shipped.json"]);
     expect(readdirSync(paths.data).sort()).toEqual([
       "MEMORY.md",
       "SOUL.md",
@@ -48,6 +58,84 @@ describe("tars install", () => {
       "skills",
       "workspace",
     ]);
+  });
+
+  test("writes the shipped list next to the skills and keeps a shipped top-level file", async () => {
+    const { deps, paths, seedArgs } = setup([
+      ...fixture,
+      { path: "upstream.json", bytes: bytes("{}") },
+    ]);
+    expect(await run(["install", ...seedArgs], deps)).toBe(0);
+    expect(JSON.parse(readFileSync(join(paths.skills, "shipped.json"), "utf8"))).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    expect(readFileSync(join(paths.skills, "upstream.json"), "utf8")).toBe("{}");
+  });
+
+  test("keeps a skill the user added, byte for byte, and drops a shipped skill no longer shipped", async () => {
+    const { deps, paths, seedArgs } = setup([
+      ...fixture,
+      { path: "gamma/SKILL.md", bytes: bytes("g") },
+    ]);
+    expect(await run(["install", ...seedArgs], deps)).toBe(0);
+    mkdirSync(join(paths.skills, "mine/reference"), { recursive: true });
+    writeFileSync(join(paths.skills, "mine/SKILL.md"), "my skill");
+    writeFileSync(join(paths.skills, "mine/reference/a.bin"), new Uint8Array([0, 255, 10]));
+
+    const next = testDeps({ env: { HOME: paths.home }, embedded: async () => fixture });
+    expect(await run(["install"], next)).toBe(0);
+    expect(readdirSync(paths.skills).sort()).toEqual(["alpha", "beta", "mine", "shipped.json"]);
+    expect(readFileSync(join(paths.skills, "mine/SKILL.md"), "utf8")).toBe("my skill");
+    expect([...readFileSync(join(paths.skills, "mine/reference/a.bin"))]).toEqual([0, 255, 10]);
+    expect(next.io.stderr.join("\n")).not.toContain("skills/");
+  });
+
+  test("copies a link inside a user skill as a link, not the file it points to", async () => {
+    const { home, deps, paths, seedArgs } = setup();
+    expect(await run(["install", ...seedArgs], deps)).toBe(0);
+    writeFileSync(join(home, "outside.txt"), "outside");
+    mkdirSync(join(paths.skills, "mine"));
+    symlinkSync(join(home, "outside.txt"), join(paths.skills, "mine/abs"));
+    symlinkSync("SKILL.md", join(paths.skills, "mine/rel"));
+    writeFileSync(join(paths.skills, "mine/SKILL.md"), "my skill");
+
+    expect(await run(["install"], deps)).toBe(0);
+    expect(lstatSync(join(paths.skills, "mine/abs")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(paths.skills, "mine/abs"))).toBe(join(home, "outside.txt"));
+    expect(readlinkSync(join(paths.skills, "mine/rel"))).toBe("SKILL.md");
+  });
+
+  test("a user skill sharing a shipped name loses to the shipped one, with a warning naming it", async () => {
+    const { deps, paths, seedArgs } = setup([{ path: "alpha/SKILL.md", bytes: bytes("alpha v2") }]);
+    expect(await run(["install", ...seedArgs], deps)).toBe(0);
+    mkdirSync(join(paths.skills, "beta"));
+    writeFileSync(join(paths.skills, "beta/SKILL.md"), "user beta");
+
+    const next = testDeps({ env: { HOME: paths.home }, embedded: async () => fixture });
+    expect(await run(["install"], next)).toBe(0);
+    expect(readdirSync(join(paths.skills, "beta"))).toEqual(["LICENSE"]);
+    expect(next.io.stderr.join("\n")).toContain("skills/beta");
+  });
+
+  test("a failed copy of a user skill leaves the old skills dir as it was and no temp dir", async () => {
+    const { deps, paths, seedArgs } = setup();
+    expect(await run(["install", ...seedArgs], deps)).toBe(0);
+    mkdirSync(join(paths.skills, "mine"));
+    writeFileSync(join(paths.skills, "mine/SKILL.md"), "my skill");
+    chmodSync(join(paths.skills, "mine/SKILL.md"), 0o000);
+    const before = readdirSync(paths.skills).sort();
+    const dataBefore = readdirSync(paths.data).sort();
+
+    try {
+      expect(await run(["install"], deps)).toBe(1);
+    } finally {
+      chmodSync(join(paths.skills, "mine/SKILL.md"), 0o644);
+    }
+    expect(deps.io.stderr.join("\n")).toContain("cannot keep skills/mine");
+    expect(readdirSync(paths.skills).sort()).toEqual(before);
+    expect(readFileSync(join(paths.skills, "mine/SKILL.md"), "utf8")).toBe("my skill");
+    expect(readdirSync(paths.data).sort()).toEqual(dataBefore);
   });
 
   test("concurrent installs never leave the data dir without skills, a mixed seed, or temp files", async () => {
