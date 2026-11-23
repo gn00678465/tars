@@ -29,8 +29,25 @@ export const UI_CALLS: readonly string[] = [
 /** The one event a form's one button may send. */
 export const UI_EVENT = "ledger_submit";
 
-/** Why the components may not be drawn, or undefined when they may. */
-export function uiFormProblem(components: readonly unknown[]): string | undefined {
+/**
+ * How deep a form may nest (the components array is level 1) and how many values it may hold,
+ * components and data together. The check recurses: without a bound, 16 KiB of short nested
+ * arrays would overflow the stack. The ledger form nests 10 levels and holds about 150 values.
+ */
+export const UI_MAX_DEPTH = 16;
+export const UI_MAX_NODES = 2_000;
+
+/** Keys refused at any level, so nothing A2UI does with the form can reach a prototype. */
+const UI_BAD_KEYS = ["__proto__", "constructor", "prototype"];
+
+/** Why the form may not be drawn, or undefined when it may. */
+export function uiFormProblem(
+  components: readonly unknown[],
+  dataModel?: unknown,
+): string | undefined {
+  const walk = { nodes: 0 };
+  const shape = deepProblem(components, 1, walk) ?? deepProblem(dataModel, 1, walk, false);
+  if (shape !== undefined) return shape;
   let buttons = 0;
   for (const c of components) {
     if (typeof c !== "object" || c === null) return "a component is not an object";
@@ -47,23 +64,26 @@ export function uiFormProblem(components: readonly unknown[]): string | undefine
       return `the button's action is not the ${UI_EVENT} event`;
   }
   if (buttons !== 1) return `${buttons} buttons, not one`;
-  return deepProblem(components);
+  return undefined;
 }
 
-function deepProblem(v: unknown): string | undefined {
-  if (Array.isArray(v)) {
-    for (const x of v) {
-      const p = deepProblem(x);
-      if (p !== undefined) return p;
-    }
-    return undefined;
-  }
+/** Bounds, refused keys and (in components) actions and calls, at every level of v. */
+function deepProblem(
+  v: unknown,
+  depth: number,
+  walk: { nodes: number },
+  components = true,
+): string | undefined {
+  if (++walk.nodes > UI_MAX_NODES) return `more than ${UI_MAX_NODES} values`;
   if (typeof v !== "object" || v === null) return undefined;
-  for (const [k, x] of Object.entries(v)) {
-    if (k === "functionCall") return "a functionCall action";
-    if (k === "@call" && (typeof x !== "string" || !UI_CALLS.includes(x)))
+  if (depth > UI_MAX_DEPTH) return `nested deeper than ${UI_MAX_DEPTH}`;
+  const entries = Array.isArray(v) ? v.map((x) => ["", x] as const) : Object.entries(v);
+  for (const [k, x] of entries) {
+    if (UI_BAD_KEYS.includes(k)) return `key ${k}`;
+    if (components && k === "functionCall") return "a functionCall action";
+    if (components && k === "@call" && (typeof x !== "string" || !UI_CALLS.includes(x)))
       return `call ${String(x)} is not allowed`;
-    const p = deepProblem(x);
+    const p = deepProblem(x, depth + 1, walk, components);
     if (p !== undefined) return p;
   }
   return undefined;

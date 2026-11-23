@@ -52,8 +52,14 @@ export function formSpec(text: string, truncated: boolean) {
 function readForm(text: string, truncated: boolean): Read {
   const spec = formSpec(text, truncated);
   if (spec === undefined) return { ok: false, line: "表單內容不完整，無法顯示。" };
-  if (uiFormProblem(spec.components) !== undefined)
-    return { ok: false, line: "表單含有不允許的元件或動作，不顯示。" };
+  let problem: string | undefined;
+  try {
+    problem = uiFormProblem(spec.components, spec.dataModel);
+  } catch {
+    // The check is bounded, but whatever it throws means the form is not drawn.
+    problem = "the check threw";
+  }
+  if (problem !== undefined) return { ok: false, line: "表單含有不允許的元件或動作，不顯示。" };
   return { ok: true, spec };
 }
 
@@ -72,14 +78,29 @@ export function toContext(context: Readonly<Record<string, unknown>>): UiContext
   return parsed.success ? parsed.data : undefined;
 }
 
-/** A chunk that would not load: a deploy replaced it while this tab was open. */
-class Loaded extends Component<{ children: ReactNode; failed: ReactNode }, { failed: boolean }> {
-  override state = { failed: false };
-  static getDerivedStateFromError() {
-    return { failed: true };
+/**
+ * Anything a form throws stays in its card: a chunk that would not load (a deploy replaced it
+ * while this tab was open) asks for a reload, anything else (A2UI on a form it should have
+ * refused) is said in a line. The rest of the thread is not touched.
+ */
+class Guard extends Component<{ children: ReactNode; step: ReactNode }, { error?: unknown }> {
+  override state: { error?: unknown } = {};
+  static getDerivedStateFromError(error: unknown) {
+    return { error };
   }
   override render() {
-    return this.state.failed ? this.props.failed : this.props.children;
+    if (!("error" in this.state)) return this.props.children;
+    const text = this.state.error instanceof Error ? this.state.error.message : "";
+    // Chrome's, Firefox's and Safari's words for an import() that failed.
+    const chunk = /dynamically imported module|Importing a module script failed/.test(text);
+    return (
+      <>
+        <p className="ui-form-fallback">
+          {chunk ? "表單載不到，請重新整理頁面。" : "這張表單出錯了，無法顯示。"}
+        </p>
+        {this.props.step}
+      </>
+    );
   }
 }
 
@@ -89,7 +110,20 @@ class Loaded extends Component<{ children: ReactNode; failed: ReactNode }, { fai
  * it is in the thread (sent) it is locked, as it is while on its way; a refusal is said under
  * it. What cannot be drawn falls back to a line and the plain tool step (step).
  */
-export function UiForm({
+export function UiForm(props: {
+  call: ToolCall;
+  sent: boolean;
+  hooks: FormHooks | undefined;
+  step: ReactNode;
+}) {
+  return (
+    <Guard step={props.step}>
+      <Form {...props} />
+    </Guard>
+  );
+}
+
+function Form({
   call,
   sent,
   hooks,
@@ -164,16 +198,14 @@ function Drawn({
     </section>
   );
   return (
-    <Loaded failed={fallback("表單載不到，請重新整理頁面。")}>
-      <Suspense fallback={frame(<p className="ui-form-loading">表單載入中…</p>)}>
-        <A2uiCard
-          callId={call.callId}
-          spec={spec}
-          onAction={onAction}
-          frame={frame}
-          invalid={fallback("表單的格式不對，無法顯示。")}
-        />
-      </Suspense>
-    </Loaded>
+    <Suspense fallback={frame(<p className="ui-form-loading">表單載入中…</p>)}>
+      <A2uiCard
+        callId={call.callId}
+        spec={spec}
+        onAction={onAction}
+        frame={frame}
+        invalid={fallback("表單的格式不對，無法顯示。")}
+      />
+    </Suspense>
   );
 }

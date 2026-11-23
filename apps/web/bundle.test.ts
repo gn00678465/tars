@@ -18,6 +18,8 @@ const FIRST_LOAD_SLACK = 5_000;
 /** Strings only zod 3 has, and only zod 4 has (research/a2ui_proto_result.md, Zod 4 (4)). */
 const ZOD3 = "Unrecognized key(s) in object";
 const ZOD4 = "_zod";
+/** A string only A2UI's basic catalog has: the prefix of its elements. */
+const A2UI = "a2ui-basic";
 
 const out = mkdtempSync(join(tmpdir(), "tars-web-bundle-"));
 let html = "";
@@ -53,7 +55,9 @@ const entries = () =>
 /**
  * A chunk's imports, as paths like the HTML's: static ones are `import"./x.js"` and
  * `from"./x.js"`, dynamic ones `import(`./x.js`)` (vite's minified output). A chunk's imports
- * are relative to /assets/.
+ * are relative to /assets/. Known limit: only literal paths are read; an import() of a variable
+ * or a built string is missed. The test below that every chunk is reached catches a chunk only
+ * such an import loads.
  */
 const imports = (src: string, dynamic: boolean) => {
   const code = js.get(src) as string;
@@ -63,10 +67,10 @@ const imports = (src: string, dynamic: boolean) => {
   return [...code.matchAll(re)].map((m) => `/assets/${m[1] as string}`);
 };
 
-/** Every chunk reachable from the entries, following static imports and, if asked, dynamic. */
-const reach = (dynamic: boolean) => {
+/** Every chunk reachable from the starts, following static imports and, if asked, dynamic. */
+const reach = (dynamic: boolean, starts = entries()) => {
   const seen = new Set<string>();
-  const next = entries();
+  const next = [...starts];
   for (let src = next.pop(); src !== undefined; src = next.pop()) {
     if (seen.has(src)) continue;
     seen.add(src);
@@ -101,7 +105,7 @@ test("a first visit loads no zod 3 and about as much JS as before A2UI", () => {
 
 test("A2UI and its zod 3 come only by import(), and nothing so loaded has zod 4", () => {
   const late = later();
-  expect(late.some((src) => js.get(src)?.includes("a2ui-basic"))).toBe(true);
+  expect(late.some((src) => js.get(src)?.includes(A2UI))).toBe(true);
   expect(late.some((src) => js.get(src)?.includes(ZOD3))).toBe(true);
   // A2uiCard and what it imports must not pull @tars/protocol's zod 4 in (m4_design_a2ui.md 6.2),
   // whether into its own chunk or a shared one only it loads.
@@ -109,4 +113,17 @@ test("A2UI and its zod 3 come only by import(), and nothing so loaded has zod 4"
   console.log(
     `later: ${late.map((src) => `${src} = ${gzipSync(js.get(src) as string).length}`).join(", ")} bytes gzip`,
   );
+});
+
+test("a chunk A2UI shares with the first load holds neither A2UI nor its zod 3", () => {
+  const first = reach(false);
+  const late = later();
+  // What the late chunks import statically and the first load has too: react and the like.
+  const shared = [...reach(false, late)].filter((src) => first.has(src));
+  const list = `shared chunks: ${shared.join(", ") || "none"}`;
+  for (const src of shared) {
+    const code = js.get(src) as string;
+    expect(code.includes(ZOD3), `${src} has zod 3; ${list}`).toBe(false);
+    expect(code.includes(A2UI), `${src} has A2UI; ${list}`).toBe(false);
+  }
 });
