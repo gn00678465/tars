@@ -249,7 +249,8 @@ test("D1: a started turn's line names its phase, and is gone once the turn ends"
   expect(await line({ state: "aborted", turn: T })).toBeNull();
 });
 
-test("the sprites: the wheel while thinking, idle on the empty page, and no inline style", async () => {
+// The no-inline-style check covers only these two Thread views, not the whole App.
+test("the sprites: the wheel while thinking, idle on the empty page; neither view has a style", async () => {
   const thinking = await render(
     <Thread
       state={turnState({ state: "started", turn: T, phase: "thinking" })}

@@ -162,12 +162,12 @@ rsvg-convert -w 192 -h 192 <ASSETS>/tars-icon-idle-pwa.svg -o public/icons/icon-
 rsvg-convert -w 32 -h 32 <ASSETS>/tars-icon-idle-transparent.svg -o public/favicon-32.png
 rsvg-convert -w 16 -h 16 <ASSETS>/tars-icon-idle-transparent.svg -o public/favicon-16.png
 rsvg-convert -w 168 -h 168 <ASSETS>/tars-icon-idle-pwa.svg -o touch-168.png
-magick touch-168.png -background '#0b0c0e' -gravity center -extent 180x180 -flatten -alpha off public/apple-touch-icon.png
+magick touch-168.png -background none -gravity center -extent 180x180 PNG32:public/apple-touch-icon.png
 rm touch-168.png
 cp <ASSETS>/tars-sprite-wheel.svg <ASSETS>/tars-sprite-idle.svg src/assets/
 ```
 
-- 180 是 ×7 加 6px 的邊。iOS 自己裁圓角，所以要不透明的正方形；圓角外的透明處填頁面的底色。
+- 180 是 ×7 加 6px 的邊，保留原圖的圓角與透明（RGBA）。iOS 會把透明處顯示成黑色，要不要填色由擁有者看過再決定。
 - 32 與 16 不是 24 的整數倍，像素寬窄會不一，換圖後要用眼睛看過。
 
 ## 憑證輪替
