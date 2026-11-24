@@ -11,7 +11,6 @@ import {
   PanelLeft,
   Plus,
   Shield,
-  Terminal,
   X,
 } from "lucide-react";
 
@@ -24,7 +23,6 @@ const ICONS = {
   check: Check,
   copy: Copy,
   shield: Shield,
-  terminal: Terminal,
   alert: CircleAlert,
   archive: Archive,
   close: X,
