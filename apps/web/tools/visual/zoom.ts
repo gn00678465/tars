@@ -1,7 +1,8 @@
 // iOS Safari zooms the page when a form control under 16px gets focus, and the page then stays
 // wider than the screen (the send button goes off it). This opens every scene at the phone's
 // width, as a touch device, takes the scene's steps, and lists each visible input, textarea,
-// select or editable element whose font size is under 16px. It fails when there is one.
+// select or editable element whose font size is under 16px, and each tool step under 44px
+// tall. It fails when there is one.
 //   node tools/visual/zoom.ts [--only <scene>]
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/zoom/.
 import { join, resolve } from "node:path";
@@ -27,6 +28,24 @@ const context = await browser.newContext({
   locale: "zh-TW",
   timezoneId: "Asia/Taipei",
 });
+
+/**
+ * M4-P3b: a tool step's line is 20px; under a finger (pointer: coarse) its button is 44px tall.
+ * The text says what matched, so a run where the query does not is seen.
+ */
+const SHORT = () => {
+  const found: string[] = [];
+  const coarse = matchMedia("(pointer: coarse)").matches;
+  for (const el of document.querySelectorAll<HTMLElement>(".tool-step-summary")) {
+    const box = el.getBoundingClientRect();
+    if (box.height === 0) continue;
+    if (!coarse || box.height < 44)
+      found.push(
+        `tool step ${box.height}px tall (pointer: coarse ${coarse ? "matches" : "does not match"})`,
+      );
+  }
+  return found;
+};
 
 /** What a touch device would zoom into: a visible control the keyboard types into. */
 const SMALL = () => {
@@ -59,7 +78,8 @@ for (const [i, s] of SCENES.entries()) {
   if (s.measure === true || (args.only !== undefined && String(n) !== args.only)) continue;
   const page = await context.newPage();
   await page.clock.setFixedTime(NOW);
-  await page.goto(`${url}/?scene=${n}`, { waitUntil: "load" });
+  // A scene that only adds steps draws another's data, as run.ts opens it.
+  await page.goto(`${url}/?scene=${s.data ?? n}`, { waitUntil: "load" });
   await page.waitForTimeout(400);
   for (const step of s.phone ?? s.steps ?? []) {
     try {
@@ -77,6 +97,7 @@ for (const [i, s] of SCENES.entries()) {
   }
   await page.waitForTimeout(300);
   for (const f of await page.evaluate(SMALL)) bad.push(`scene ${n} ${s.name}: ${f}`);
+  for (const f of await page.evaluate(SHORT)) bad.push(`scene ${n} ${s.name}: ${f}`);
   const wide = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   if (wide > 0) bad.push(`scene ${n} ${s.name}: the page is ${wide}px wider than the screen`);
   checked += 1;
