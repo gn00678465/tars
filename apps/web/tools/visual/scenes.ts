@@ -431,7 +431,12 @@ export const SCENES: Scene[] = [
     name: "核准卡：等待中，寫外部加任意主機",
     relay: online,
     pushes: [pending("c-backup", "call-1")],
-    answers: answers({ status: { ...STATUS, pendingApprovals: 1 } }),
+    // A card waits only inside a running turn: the snapshot says so, or the page drops the card
+    // as one whose turn ended while it was away (state.ts, conv.snapshot).
+    answers: answers({
+      status: { ...STATUS, pendingApprovals: 1 },
+      running: { conv: "c-backup", phase: "waiting_approval" },
+    }),
     ...both("整理 NAS 備份腳本"),
   },
   {

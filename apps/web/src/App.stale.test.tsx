@@ -147,6 +147,7 @@ test("one sent and not yet started stays 送出中 through a snapshot without ru
   await p.receive(without([p.user, call]));
   const box = p.root.querySelector("textarea") as HTMLTextAreaElement;
   await act(async () => {
+    // oxlint-disable-next-line typescript/unbound-method
     const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     set?.call(box, "再試一次");
     box.dispatchEvent(new Event("input", { bubbles: true }));
