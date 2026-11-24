@@ -75,10 +75,13 @@ async function page() {
     await receive(server("conv.snapshot", { epoch: "epoch-1", more, items }, { conv }));
     await frame();
   }
-  /** Up by `px` as a reader does: the wheel first, then the scroll it makes. */
+  /**
+   * Up by `px` with only the scroll event, as dragging the scrollbar, find in page or a tap on the
+   * status bar make: no wheel, touch or key. Right after the scroller's own scroll to the end, so
+   * within the 180 ms it ignores scrolls in.
+   */
   async function up(px: number) {
     await act(async () => {
-      el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -px }));
       el.scrollTop -= px;
       el.dispatchEvent(new Event("scroll"));
     });
@@ -131,7 +134,7 @@ test("opening lands at the end; at the end the streaming reply is followed, in o
   expect(p.el.scrollTop).toBe(p.end());
 });
 
-test("scrolled up, nothing pulls it back; 捲到最新訊息 shows then, takes it down and follows again", async () => {
+test("scrolled up by the scrollbar while a reply streams, nothing pulls it back; 捲到最新訊息 shows then, takes it down and follows again", async () => {
   const p = await page();
   await p.open(A, [
     ...groups(0, 9),
@@ -164,6 +167,21 @@ test("scrolled up, nothing pulls it back; 捲到最新訊息 shows then, takes i
   expect(document.activeElement).toBe(p.el);
   await p.delta("，回到底之後");
   expect(p.el.scrollTop).toBe(p.end());
+  // Up again mid-stream, right after the scroller's own scroll to the end: still let go.
+  await p.up(150);
+  const held = p.el.scrollTop;
+  expect(held).toBe(p.end() - 150);
+  await p.delta("，再一段");
+  await p.delta("，還有");
+  expect(p.el.scrollTop).toBe(held);
+  // Back within 24 px of the end by the scrollbar: followed again.
+  await act(async () => {
+    p.el.scrollTop = p.end() - 10;
+    p.el.dispatchEvent(new Event("scroll"));
+  });
+  await frame();
+  await p.delta("，到底了");
+  expect(p.el.scrollTop).toBe(p.end());
 });
 
 test("older groups come in above: the rows there keep their ids and elements, and what is read does not move", async () => {
@@ -194,6 +212,35 @@ test("older groups come in above: the rows there keep their ids and elements, an
   expect(seen.getBoundingClientRect().top).toBe(top);
   expect(p.el.scrollTop).toBeGreaterThan(0);
   expect(p.root.textContent).not.toContain("載入更早的訊息");
+});
+
+test("a page cut inside a group: when the group's first half comes, its row keeps its id and element, and what is read does not move", async () => {
+  const p = await page();
+  // Group 10's reply without its message (seq 21), as the local end cuts a page by count.
+  await p.open(A, groups(10, 19).slice(1), true);
+  await p.up(250);
+  const before = p.rows();
+  const ids = before.map((r) => r.dataset.messageId);
+  expect(ids[0]).toBe("g22");
+  const seen = before.find((r) => r.getBoundingClientRect().bottom > 0) as HTMLElement;
+  const top = seen.getBoundingClientRect().top;
+  await act(async () => button(p.root, "載入更早的訊息").click());
+  await p.receive(
+    server(
+      "conv.snapshot",
+      { epoch: "epoch-1", more: false, items: [...groups(4, 9), groups(10, 10)[0] as object] },
+      { conv: A },
+    ),
+  );
+  await frame();
+  const after = p.rows();
+  expect(after.slice(-ids.length).map((r) => r.dataset.messageId)).toEqual(ids);
+  expect(after.slice(-before.length)).toEqual(before);
+  // Group 10 now has its message, in the same row.
+  expect(before[0]?.textContent).toContain("問題 10");
+  expect(after).toHaveLength(before.length + 6);
+  expect(seen.getBoundingClientRect().top).toBe(top);
+  expect(p.el.scrollTop).toBeGreaterThan(0);
 });
 
 test("another conversation opened while scrolled up goes to its end; so does a message the owner sends", async () => {
@@ -296,7 +343,7 @@ test("a card that comes while scrolled up: announced, its deny takes the focus a
   expect(p.el.closest(".workspace")?.getAttribute("aria-live")).toBe("off");
 });
 
-test("the rows are not a live log (the finished reply is spoken once, by the page); busy while one streams", async () => {
+test("the rows are not a live log and not busy (the finished reply is spoken once, by the page; a turn's status and a card's alert are not held back)", async () => {
   const p = await page();
   await p.open(A, [
     ...groups(0, 2),
@@ -307,9 +354,10 @@ test("the rows are not a live log (the finished reply is spoken once, by the pag
   expect(p.root.querySelector('[role="log"]')).toBeNull();
   expect(p.el.getAttribute("role")).toBe("main");
   expect(p.el.getAttribute("aria-label")).toBe("訊息");
-  expect(content.getAttribute("aria-busy")).toBe("false");
+  expect(content.hasAttribute("aria-busy")).toBe(false);
   await p.delta("一段");
-  expect(content.getAttribute("aria-busy")).toBe("true");
+  expect(content.hasAttribute("aria-busy")).toBe(false);
+  expect(p.root.querySelector("[aria-busy]")).toBeNull();
   const polite = p.root.querySelector(".sr-only[aria-live=polite]") as HTMLElement;
   expect(polite.textContent).toBe("");
   await p.receive(
@@ -328,7 +376,7 @@ test("the rows are not a live log (the finished reply is spoken once, by the pag
       { conv: A },
     ),
   );
-  expect(content.getAttribute("aria-busy")).toBe("false");
+  expect(content.hasAttribute("aria-busy")).toBe(false);
   expect(polite.textContent).toContain("一段");
 });
 

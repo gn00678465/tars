@@ -566,7 +566,6 @@ describe("the sidebar and the open conversation", () => {
       expect(el.scrollTop).toBe(600);
       // Scrolled up to read: nothing pulls it down.
       await act(async () => {
-        el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -500 }));
         el.scrollTop = 100;
         el.dispatchEvent(new Event("scroll"));
       });

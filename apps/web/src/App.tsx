@@ -59,13 +59,18 @@ const BOTTOM_PX = 24;
 
 /**
  * In the scroller: a conversation opened or started, and a message the owner sent, go to the end
- * and follow it again, wherever the owner had scrolled to.
+ * and follow it again, wherever the owner had scrolled to. So does 捲到最新訊息 (`pressed`),
+ * smoothly: run here, after following is on again, the scroller keeps to the end while the reply
+ * grows under the smooth scroll; the button's own scroll ran with following still off.
  */
-function ToEnd({ conv, sent }: { conv: string | undefined; sent: number }) {
+function ToEnd(p: { conv: string | undefined; sent: number; pressed: number }) {
   const { scrollToEnd } = useMessageScroller();
   useLayoutEffect(() => {
     scrollToEnd();
-  }, [conv, sent, scrollToEnd]);
+  }, [p.conv, p.sent, scrollToEnd]);
+  useLayoutEffect(() => {
+    if (p.pressed > 0) scrollToEnd({ behavior: reducedMotion() ? "auto" : "smooth" });
+  }, [p.pressed, scrollToEnd]);
   return null;
 }
 
@@ -219,6 +224,15 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // A conversation opened from the list: the page goes to its thread.
   const thread = useRef<HTMLDivElement>(null);
   const [sent, setSent] = useState(0);
+  // Where the owner scrolled up off the end, by any means (a wheel, the scrollbar, find in page, a
+  // tap on the status bar): what comes is not followed there. The scroller lets go only on a wheel,
+  // a touch or a key, and ignores scrolls for 180 ms after each of its own, which a stream keeps
+  // open. Another conversation or a message sent follows again.
+  const [freeAt, setFreeAt] = useState<{ conv: string | undefined; sent: number } | null>(null);
+  const lastTop = useRef(0);
+  const [pressed, setPressed] = useState(0);
+  const follow =
+    !wikiOn && !(freeAt !== null && freeAt.conv === state.conv && freeAt.sent === sent);
   // Whether the composer holds unsent text: a pull does not reload over it.
   const draft = useRef(false);
   const workspace = useRef<HTMLDivElement>(null);
@@ -578,15 +592,28 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           <PullIndicator state={pull} />
           {/* At the bottom what comes is followed; one who scrolled up to read is left there. The
               knowledge base is read from the top: nothing is followed under it. */}
-          <MessageScrollerProvider autoScroll={!wikiOn} scrollEdgeThreshold={BOTTOM_PX}>
+          <MessageScrollerProvider autoScroll={follow} scrollEdgeThreshold={BOTTOM_PX}>
             <MessageScroller className="thread-frame">
-              <ToEnd conv={state.conv} sent={sent} />
+              <ToEnd conv={state.conv} sent={sent} pressed={pressed} />
               <MessageScrollerViewport
                 className="thread-scroll"
                 ref={thread}
                 role="main"
                 tabIndex={-1}
                 aria-label={wikiOn ? "個人知識庫" : "訊息"}
+                onScroll={(e) => {
+                  const el = e.currentTarget;
+                  const up = el.scrollTop < lastTop.current - 0.5;
+                  lastTop.current = el.scrollTop;
+                  const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+                  if (gap <= BOTTOM_PX) setFreeAt(null);
+                  else if (up) {
+                    setFreeAt({ conv: state.conv, sent });
+                    // Tells the scroller now, as a wheel would: it shows 捲到最新訊息 only once
+                    // it stops following, and has no other way to be told. Nothing scrolls by it.
+                    el.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+                  }
+                }}
               >
                 {/* Outside the rows: older rows come in before the first one, which is how the
                     scroller knows to keep the place. */}
@@ -618,11 +645,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                 )}
                 {/* The finished reply is spoken once by the polite region below (state.spoken):
                     as a log, every row added would be read again. */}
-                <MessageScrollerContent
-                  className="thread-inner thread"
-                  role="presentation"
-                  aria-busy={state.running !== undefined}
-                >
+                <MessageScrollerContent className="thread-inner thread" role="presentation">
                   {wikiOn ? (
                     <MessageScrollerItem>
                       <WikiWorkspace
@@ -681,7 +704,11 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                 className="thread-to-end"
                 aria-label="捲到最新訊息"
                 behavior={reducedMotion() ? "auto" : "smooth"}
-                onClick={() => thread.current?.focus({ preventScroll: true })}
+                onClick={() => {
+                  setFreeAt(null);
+                  setPressed((n) => n + 1);
+                  thread.current?.focus({ preventScroll: true });
+                }}
               />
             </MessageScroller>
           </MessageScrollerProvider>

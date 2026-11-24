@@ -472,13 +472,26 @@ function placed(all: ReturnType<typeof groups>, items: readonly WireItem[]) {
   return { compactions, latest, faded: found === -1 ? all.length : found };
 }
 
+type Group = ReturnType<typeof groups>[number];
+
 /**
- * A group's row id, for its key and the scroller's: the seq of the owner's message, or of its
- * first item when older ones are not loaded. Loading older ones and the streaming text, which
- * has no seq yet, leave it as it is.
+ * Each group's row id, for its key and the scroller's. A page of older items is cut by count, not
+ * at a group's start, so the first group can lack its message and gain it on the next page; a new
+ * id there would draw the row anew, and the scroller keeps the place only while the row that was
+ * first stays. So a group keeps the id any of its items had: new groups take the seq of their
+ * first item. `ids` maps item seqs to row ids, for one conversation.
  */
-const rowId = (g: ReturnType<typeof groups>[number], i: number) =>
-  `g${g.user?.seq ?? g.rest[0]?.seq ?? `-${i}`}`;
+function rowIds(all: readonly Group[], ids: Map<number, string>): string[] {
+  const used = new Set<string>();
+  return all.map((g, i) => {
+    const seqs = [...(g.user === undefined ? [] : [g.user.seq]), ...g.rest.map((r) => r.seq)];
+    const had = seqs.map((q) => ids.get(q)).find((id) => id !== undefined && !used.has(id));
+    const id = had ?? `g${seqs[0] ?? `-${i}`}`;
+    used.add(id);
+    for (const q of seqs) ids.set(q, id);
+    return id;
+  });
+}
 
 /** Above the rows, so older ones come in before the first row (the scroller keeps its place). */
 export function Older({ onOlder }: { onOlder: () => void }) {
@@ -520,6 +533,11 @@ export function Thread(props: {
 }) {
   const { items, running, turn, notices, conv } = props.state;
   const sorts = useRef(new Map<string, Sort>()).current;
+  const known = useRef<{ conv: string | undefined; ids: Map<number, string> }>({
+    conv,
+    ids: new Map(),
+  });
+  if (known.current.conv !== conv) known.current = { conv, ids: new Map() };
   if (conv === undefined && items.length === 0)
     return (
       <MessageScrollerItem className="empty-state">
@@ -545,6 +563,7 @@ export function Thread(props: {
       </MessageScrollerItem>
     );
   const all = groups(items);
+  const ids = rowIds(all, known.current.ids);
   // A message a form sent names it: that form is drawn as sent, after a reload too.
   const forms: Forms = {
     hooks: props.forms,
@@ -569,7 +588,7 @@ export function Thread(props: {
   return (
     <TableSorts.Provider value={sorts}>
       {all.map((g, i) => {
-        const id = rowId(g, i);
+        const id = ids[i] as string;
         return (
           <Fragment key={id}>
             {i === 0 && faded > 0 ? (
