@@ -29,7 +29,7 @@ export type Connection =
   /** hello was refused as another protocol version: which side is behind (nack.need). */
   | "version";
 
-export type TurnState = "started" | "rejected" | "completed" | "failed" | "aborted" | "interrupted";
+type TurnState = "started" | "rejected" | "completed" | "failed" | "aborted" | "interrupted";
 
 export interface Card {
   readonly approval: WireApproval;

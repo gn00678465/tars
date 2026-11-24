@@ -56,14 +56,14 @@ export function clampEffort(
 }
 
 /** A model's levels as the prototype's menu says them: the lowest to the highest. */
-export function effortRange(levels: readonly string[] | undefined): string | undefined {
+function effortRange(levels: readonly string[] | undefined): string | undefined {
   if (levels === undefined) return undefined;
   const [low, high] = [levels[0], levels.at(-1)];
   if (low === undefined || high === undefined) return "不支援推理強度";
   return low === high ? `推理 ${effortName(low)}` : `推理 ${effortName(low)}–${effortName(high)}`;
 }
 
-export interface ModelControl {
+interface ModelControl {
   readonly label: string;
   readonly models: readonly WireModel[];
   /** The model the next message goes to. */

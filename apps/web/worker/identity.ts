@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 
-export interface AccessConfig {
+interface AccessConfig {
   readonly teamDomain: string;
   readonly aud: string;
   readonly ownerEmail: string;
@@ -23,7 +23,7 @@ export function accessJwt(request: Request): string | undefined {
 const keySets = new Map<string, JWTVerifyGetKey>();
 
 /** Access's public keys for a team, cached per isolate by jose. */
-export function accessKeys(teamDomain: string): JWTVerifyGetKey {
+function accessKeys(teamDomain: string): JWTVerifyGetKey {
   let keys = keySets.get(teamDomain);
   if (keys === undefined) {
     keys = createRemoteJWKSet(new URL(`https://${teamDomain}/cdn-cgi/access/certs`));

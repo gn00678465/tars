@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Icon } from "./Icon.tsx";
 
 /** How long 已複製 shows before the button reads 複製指令 again, as the prototype. */
-export const COPIED_MS = 1_800;
+const COPIED_MS = 1_800;
 
 /** A command for the owner's terminal, copied in one press (the prototype's cli-copy-row). */
 export function CopyCommand({ command }: { command: string }) {

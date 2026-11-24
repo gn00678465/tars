@@ -18,7 +18,7 @@ import {
 } from "./slash.ts";
 
 const n = (v: number) => v.toLocaleString("en-US");
-export const tooLong = (bytes: number) =>
+const tooLong = (bytes: number) =>
   `訊息超過上限（${n(TEXT_BYTES)} 位元組），目前 ${n(bytes)} 位元組。請縮短內容，或改放進允許的本機檔案再請 TARS 讀取。`;
 
 export function Composer(props: {

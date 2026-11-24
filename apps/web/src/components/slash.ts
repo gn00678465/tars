@@ -7,7 +7,7 @@ export type Skill = NonNullable<WireStatus["skills"]>[number];
  * /wiki and /effort take words after a space (what to keep, the keywords, a level), so picking
  * one from the menu leaves it in the box; `args` says what goes there (14-05).
  */
-export const BUILTINS = [
+const BUILTINS = [
   {
     name: "compact",
     description: "壓縮早期對話前綴，保留近期原文（送出一次模型請求）",

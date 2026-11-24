@@ -83,7 +83,7 @@ const DAY_MS = 86_400_000;
 const CERT_WARN_DAYS = 30;
 
 /** Whole days left on the local end's certificate, by the local end's clock; undefined unknown. */
-export function certDays(status: WireStatus | undefined): number | undefined {
+function certDays(status: WireStatus | undefined): number | undefined {
   if (status?.certExpiresAt === undefined) return undefined;
   return Math.floor((status.certExpiresAt - status.now) / DAY_MS);
 }

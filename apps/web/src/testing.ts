@@ -10,7 +10,7 @@ import { Socket, type SocketDeps, type WebSocketLike } from "./socket.ts";
 import type { Event } from "./state.ts";
 
 /** A WebSocket the test drives: it opens, answers and closes only when told. */
-export class FakeWebSocket implements WebSocketLike {
+class FakeWebSocket implements WebSocketLike {
   readonly sent: string[] = [];
   closedWith: number | undefined;
   onopen: (() => void) | null = null;
@@ -182,7 +182,7 @@ export async function choose(text: string) {
   await press(option);
 }
 
-export interface Pt {
+interface Pt {
   y: number;
   x?: number;
   id?: number;

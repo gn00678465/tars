@@ -53,7 +53,7 @@ function unseen(c: string, n: number): boolean {
  * One argument as the script receives it: quoted, so its ends, an empty one and inner spaces
  * show, and anything unseen written as its \u code (A13: the card is what runs).
  */
-export function argText(arg: string): string {
+function argText(arg: string): string {
   return Array.from(JSON.stringify(arg), (c) => {
     const n = c.codePointAt(0) as number;
     if (!unseen(c, n)) return c;

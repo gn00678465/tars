@@ -16,7 +16,7 @@ interface Shown {
 }
 
 /** What a notice is about: the conversation's provider and effort, when the page knows them. */
-export interface NoticeContext {
+interface NoticeContext {
   readonly provider: string | undefined;
   readonly effort: string | undefined;
 }

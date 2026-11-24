@@ -78,7 +78,7 @@ export type RelayAction =
   | { readonly type: "broadcast.status" }
   | { readonly type: "store"; readonly lastSeenAt?: number; readonly localSince?: number };
 
-export type Routed = { readonly state: RelayState; readonly actions: RelayAction[] };
+type Routed = { readonly state: RelayState; readonly actions: RelayAction[] };
 
 /** online is "there is a local end and it is not stale". */
 export function relayStatus(state: RelayState, id: string): ServerMessage {

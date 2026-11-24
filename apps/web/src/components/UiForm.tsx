@@ -29,7 +29,7 @@ type Read =
  * ui_show's input as the page reads it, or undefined when it cannot be drawn: cut short by the
  * protocol's limit, not JSON, or not components and data. A2UI validates the rest.
  */
-export function formSpec(text: string, truncated: boolean) {
+function formSpec(text: string, truncated: boolean) {
   if (truncated) return undefined;
   let input: unknown;
   try {

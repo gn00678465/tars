@@ -34,7 +34,7 @@ const CARRY_SHARE = 0.4;
  * What continuing costs, said before it is chosen. The page cannot measure this conversation's
  * text, so the figure is the upper bound the window allows.
  */
-export const carryNote = (window: number) =>
+const carryNote = (window: number) =>
   `會帶入這個對話的文字，最多約為新模型視窗的 40%（約 ${Math.round(window * CARRY_SHARE).toLocaleString("en-US")} tokens，上限估計）。新對話第一則請求以全價計費，之後才吃得到快取；工具輸出不會帶入。`;
 
 export const windowText = (w: number) =>
