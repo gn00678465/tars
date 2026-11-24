@@ -143,7 +143,7 @@ for (const [width, options] of Object.entries(WIDTHS)) {
       const seen: string[] = [];
       watch(page, seen);
       await page.clock.setFixedTime(NOW);
-      await page.goto(`${url}/?scene=${s.n}`, { waitUntil: "load" });
+      await page.goto(`${url}/?scene=${s.data ?? s.n}`, { waitUntil: "load" });
       await page.waitForTimeout(400);
       const shot = await take(
         page,
