@@ -236,6 +236,7 @@ systemctl --user enable --now tars-serve.service
 - 顏色沿用原型：`index.css` 的 `@theme inline` 把 shadcn 的變數名對到 `styles.css` 的變數。
 - 焦點外框：`styles.css` 的 `:focus-visible` 外框在 `@layer base` 裡（M4-P2）。放在 layer 外時，它蓋過 shadcn 元件自己的 `outline-none`，元件會有兩圈外框；放進 layer 後元件的 utility 勝出，只剩它自己的那圈。原型裡自己設外框的規則本來就比它具體，畫面不變。
 - 浮層（M4-P2）：`src/components/Panel.tsx` 把原型的面板（標題列、內容、底列）放進 shadcn 的浮層。手機（767 px 以下）是底部的 Drawer；較寬時有錨點就是 Popover（例如上下文環、模型按鈕），沒有就是置中的 Dialog。模型與推理強度在桌面是 DropdownMenu 的單選群組，手機是 Drawer。對話列表在 1023 px 以下是 Sheet，關起來仍留在頁面左緣外、帶 `inert`，Tab 與螢幕閱讀器都碰不到。原型的外觀由原型的類別給；`app.css` 末段只抵銷浮層自帶的 utility，並照原型的方式定尺寸。
+- 字體（M4-F）：`--font-sans` 的中文順序是蘋方、本機裝的 `Noto Sans TC`、網站自己提供的 `Noto Sans TC Variable`、微軟正黑。網站的字體來自 `@fontsource-variable/noto-sans-tc`（`main.tsx` 匯入 `wght.css`），建置後是 `assets/` 下 108 個 woff2，每個切片有自己的 `unicode-range`。瀏覽器只下載畫面用到的字所在的切片。蘋果裝置在蘋方就停下，不下載。`font-src 'self'` 不收 `data:`，所以 `headers.ts` 的 `assetsInlineLimit` 讓字體一律輸出成檔案，不讓 Vite 內嵌；`vite.config.ts`、`bundle.test.ts` 與 `tools/visual/page.ts` 都用它。
 - `shadcn` 套件不裝進 repo（它會帶進 `osv-scanner` 擋的漏洞）。`src/vendor/shadcn-tailwind.css` 是它的樣式檔原樣複製，版本記在 `THIRD_PARTY_NOTICES.md`；`vendor/` 不重排格式，才能和上游逐位元組比對。
 
 ### 畫面比對
@@ -335,6 +336,23 @@ node tools/visual/scroll.ts --no-timing   # 不計時
 - 200 組計時：從按下對話到 200 組畫出來，以及到頁面能再接受輸入（那一格之後的下一個 task）。和基準的樹比，基準用這個分支的 `fake.ts` 與 `scenes.ts` 建置。各量 5 次取中位數；手機寬度把 CPU 降到 1/4。
 - CSP 違規與頁面錯誤的判斷和 `csp.ts` 相同。截圖（`*-follow.png`、`*-up.png`、`*-card.png`、`*-tool-open.png`）在 `.visual/scroll/`。需要 Chromium，不在 `bun run check` 裡。
 - iPhone Safari 上的慣性捲動、網址列收合時 scrollHeight 的變化與橡皮筋效果，Chromium 都測不到。
+
+### 字體的下載
+
+改了字體、`--font-sans`／`--font-mono` 或 CSP 之後跑：
+
+```
+cd apps/web
+node tools/visual/font.ts                     # 蘋方的替身是 Noto Sans CJK TC
+node tools/visual/font.ts --local "<family>"  # 換一個本機有的中文字體（fc-list :lang=zh-tw）
+```
+
+- 每個場景（空狀態、對話、知識庫、核准卡）在兩種寬度各開一個新的瀏覽器環境，沒有快取。
+- 建兩份：照原樣建置的一份；另一份把 CSS 的 `"PingFang TC"` 換成本機有的中文字體，當作蘋果裝置的替身。
+- 量 woff2 的請求數與位元組、`document.fonts` 載入了幾個、CDP 回報中文那一行實際用的字體、CSP 違規。
+- 字體的回應先扣住，等頁面用備援字體畫好，再放行。比較放行前後每個文字框的位置與大小，並加總放行後的 layout shift。
+- 照原樣的那份，中文沒用到網站的字體就失敗；替身那份下載了任何字體就失敗；有 CSP 違規也失敗。
+- 這台機器沒有蘋方。蘋果裝置不下載是用替身推論的，不是實機。Windows 上的備援是微軟正黑，切換時的位移沒有實測。
 
 ## 手動驗收
 
