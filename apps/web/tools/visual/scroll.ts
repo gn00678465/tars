@@ -544,14 +544,22 @@ async function toolOpened(width: keyof typeof WIDTHS) {
   const line = page.locator('.tool-step:has-text("nas-log") .tool-step-summary');
   await line.waitFor();
   await page.waitForTimeout(300);
-  const before = await gap(page);
+  // At the end before the press, by time as judge() reads the end: the reply streams on, and a
+  // single read could fall on the frame between its growth and the follow (33 px, then 0).
+  const before = Math.min(...(await frames(page, AWAY_MS)).fs.map((f) => f.gap));
   // Two windows: the line opening, then the rest of the output at once.
   let watching = frames(page, 1_200);
   await line.focus();
   await page.keyboard.press("Enter");
   const opening = await watching;
   watching = frames(page, 1_200);
-  await page.locator('.tool-step:has-text("nas-log") button:has-text("展開其餘")').click();
+  // Pressed with the keyboard, as the line above. Playwright's click() waits for a button that
+  // holds still; the reply moves it up as it streams, and on its retries Playwright scrolls the
+  // button in at another alignment itself: 408 px up, which the page takes as the owner's.
+  await page
+    .locator('.tool-step:has-text("nas-log") button:has-text("展開其餘")')
+    .evaluate((b) => (b as HTMLElement).focus({ preventScroll: true }));
+  await page.keyboard.press("Enter");
   const rest = await watching;
   const expanded = await line.getAttribute("aria-expanded");
   const lines = await page
@@ -569,7 +577,7 @@ async function toolOpened(width: keyof typeof WIDTHS) {
   checkHeld(
     expanded === "true" && before <= END_PX && held(oj),
     `${width} tool open`,
-    `${where} 串流中來了工具列，按 Enter 展開（aria-expanded=${expanded}）：${told(oj)}`,
+    `${where} 串流中來了工具列，按 Enter 展開（aria-expanded=${expanded}，按之前 ${AWAY_MS} ms 內離底最少 ${round(before)} px）：${told(oj)}`,
     opening.fs,
     oj,
   );
