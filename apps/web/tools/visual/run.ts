@@ -38,7 +38,8 @@ const web = resolve(import.meta.dirname, "../..");
 const repo = resolve(web, "../..");
 const out = join(web, ".visual");
 const scenes = SCENES.map((s, i) => ({ ...s, n: i + 1 })).filter(
-  (s) => args.only === undefined || String(s.n) === args.only,
+  // A measuring scene is scroll.ts's: a base has none to compare with.
+  (s) => s.measure !== true && (args.only === undefined || String(s.n) === args.only),
 );
 if (scenes.length === 0) {
   console.error(`no scene ${args.only}; scenes are 1 to ${SCENES.length}`);
@@ -57,6 +58,8 @@ async function take(page: Page, steps: readonly Step[], problems: string[]) {
     try {
       if ("click" in s) await page.locator(s.click).first().click({ timeout: 5_000 });
       else if ("fill" in s) await page.locator(s.fill).first().fill(s.text, { timeout: 5_000 });
+      else if ("top" in s)
+        await page.locator(".thread-scroll").evaluate((e) => e.scrollTo({ top: 0 }));
       else await page.waitForTimeout(s.wait);
     } catch {
       problems.push(`step failed: ${JSON.stringify(s)}`);

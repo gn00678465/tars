@@ -28,7 +28,9 @@ export interface Push {
 export type Step =
   | { readonly click: string }
   | { readonly fill: string; readonly text: string }
-  | { readonly wait: number };
+  | { readonly wait: number }
+  /** Scrolls the thread to its top: where a page that drew late leaves it differs by version. */
+  | { readonly top: true };
 
 export interface Scene {
   readonly name: string;
@@ -36,7 +38,10 @@ export interface Scene {
   /** Sent after hello, unasked. */
   readonly pushes?: readonly Push[];
   readonly answers: Readonly<
-    Record<string, readonly Push[] | ((m: { conv?: string; p: { path?: string } }) => Push[])>
+    Record<
+      string,
+      readonly Push[] | ((m: { conv?: string; p: { path?: string; before?: number } }) => Push[])
+    >
   >;
   readonly steps?: readonly Step[];
   /** At phone width, in place of steps. */
@@ -47,6 +52,13 @@ export interface Scene {
    * it too; this scene's own relay and answers go unused.
    */
   readonly data?: number;
+  /** Only for scroll.ts (M4-P3a): run.ts and zoom.ts leave it out, as a base has no such scene. */
+  readonly measure?: true;
+  /**
+   * Once `conv` opens, fake.ts sends its reply as the local end does, a delta every 50–100 ms,
+   * `chunks` of them, then the finished item.
+   */
+  readonly stream?: { readonly conv: string; readonly turn: string; readonly chunks: number };
 }
 
 const conv = (id: string, title: string, model: string, ago: number): WireConv => ({
@@ -240,7 +252,7 @@ const COMPACTED: WireItem[] = [
   },
 ];
 
-const approval = (conv: string, callId?: string): WireApproval => ({
+export const approval = (conv: string, callId?: string): WireApproval => ({
   approvalId: `ap-${conv}`,
   conv,
   hash: "a".repeat(64),
@@ -357,6 +369,49 @@ const spent = {
     provider("openrouter", 2.4, 10),
   ],
 };
+
+/** `count` groups from group `first`: a question and a reply of a few paragraphs, seqs 2g+1, 2g+2. */
+function talk(first: number, count: number): WireItem[] {
+  return Array.from({ length: count }, (_, k): WireItem[] => {
+    const g = first + k;
+    const turn = `turn-g${g}`;
+    return [
+      {
+        seq: g * 2 + 1,
+        turn,
+        kind: "user",
+        text: `第 ${g} 個問題：這段怎麼排比較好？`,
+        truncated: false,
+      },
+      {
+        seq: g * 2 + 2,
+        turn,
+        kind: "assistant",
+        text: Array.from(
+          { length: 1 + (g % 3) },
+          (_, i) => `第 ${g} 則回覆的第 ${i + 1} 段。先看現在的排程，再決定要不要拆開兩個步驟。`,
+        ).join("\n\n"),
+        truncated: false,
+        state: "complete",
+      },
+    ];
+  }).flat();
+}
+
+export const STREAM_TURN = "turn-stream";
+/** The question being answered, and a tool call a card can come for (scroll.ts pushes it). */
+const STREAM_ASKED: WireItem[] = [
+  { seq: 500, turn: STREAM_TURN, kind: "user", text: "幫我把備份腳本整理一下", truncated: false },
+  {
+    seq: 501,
+    turn: STREAM_TURN,
+    kind: "tool_call",
+    callId: "call-stream",
+    name: "run_script",
+    input: '{"script":"nas-backup"}',
+    truncated: false,
+  },
+];
 
 export const SCENES: Scene[] = [
   {
@@ -482,8 +537,12 @@ export const SCENES: Scene[] = [
     name: "記帳表單（A2UI）：帳戶的 Combobox 展開並過濾",
     relay: online,
     answers: answers({ convs: [conv("c-form", "記帳表單", "gpt-6", 0.1 * HOUR), ...CONVS] }),
+    // The form is drawn after the thread: since M4-P3a the scroller follows it to the end, which
+    // the old one did not. The scene is the combobox, so both start from the top.
     ...both(
       "記帳表單",
+      { wait: 500 },
+      { top: true },
       { click: 'input[role="combobox"]' },
       { fill: 'input[role="combobox"]', text: "Food" },
       { wait: 300 },
@@ -515,5 +574,53 @@ export const SCENES: Scene[] = [
     // The page is open already; a press on it in the list draws it again.
     steps: [{ click: 'button:has-text("個人知識庫")' }, { click: ".wiki-cite-pill:visible" }],
     phone: [{ click: 'button:has-text("個人知識庫")' }, { click: ".wiki-cite-pill:visible" }],
+  },
+  // M4-P3a, for tools/visual/scroll.ts only: a long conversation whose reply streams in, with
+  // older groups to load; and one of 200 groups, for how long it takes to draw.
+  {
+    name: "串流：長對話中的回覆（量測用）",
+    measure: true,
+    relay: online,
+    stream: { conv: "c-stream", turn: STREAM_TURN, chunks: 400 },
+    answers: {
+      ...answers({
+        convs: [conv("c-stream", "串流量測", "claude-sonnet-5-5", 0), ...CONVS],
+        running: { conv: "c-stream", phase: "replying" },
+      }),
+      "conv.open": (m) => [
+        {
+          kind: "conv.snapshot",
+          conv: m.conv,
+          p:
+            m.p.before === undefined
+              ? {
+                  epoch: EPOCH,
+                  items: [...talk(40, 24), ...STREAM_ASKED],
+                  more: true,
+                  running: { turn: STREAM_TURN, text: "", truncated: false, phase: "replying" },
+                }
+              : { epoch: EPOCH, items: talk(20, 20), more: false },
+        },
+      ],
+    },
+    ...both("串流量測"),
+  },
+  {
+    name: "長對話：200 組（量測用）",
+    measure: true,
+    relay: online,
+    answers: {
+      ...answers({ convs: [conv("c-big", "兩百組", "claude-sonnet-5-5", 0), ...CONVS] }),
+      "conv.open": (m) => [
+        // A snapshot holds 50 items (SNAPSHOT_ITEMS): the last 25 groups, then the rest as items.
+        {
+          kind: "conv.snapshot",
+          conv: m.conv,
+          p: { epoch: EPOCH, items: talk(175, 25), more: false },
+        },
+        ...talk(0, 175).map((item) => ({ kind: "item", conv: m.conv, p: { item } })),
+      ],
+    },
+    ...both("兩百組"),
   },
 ];

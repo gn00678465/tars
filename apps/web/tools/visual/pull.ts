@@ -43,7 +43,7 @@ async function violations(page: Page, where: string) {
 
 /** A finger's way past the rest (56 px of page at 0.5 of the finger). */
 const FULL = 140;
-const scroller = (page: Page) => page.locator("main.thread-scroll");
+const scroller = (page: Page) => page.locator(".thread-scroll");
 const scrollTop = (page: Page) => scroller(page).evaluate((el) => el.scrollTop);
 const bar = (page: Page) =>
   page.evaluate(() => {
@@ -77,7 +77,7 @@ const LAYOUT = () => {
   };
   return {
     topbar: box(".topbar"),
-    thread: box("main.thread-scroll"),
+    thread: box(".thread-scroll"),
     dock: box(".composer-dock"),
     bar: box(".pull-indicator"),
     text: box(".pull-indicator .pull-text"),
@@ -128,9 +128,9 @@ async function phone(scene: number, open: (page: Page) => Promise<void>, where: 
   // where it stays and the one a finger at its top touches.
   await page.waitForFunction(
     () => {
-      const r = document.querySelector("main.thread-scroll")?.getBoundingClientRect();
+      const r = document.querySelector(".thread-scroll")?.getBoundingClientRect();
       if (r === undefined || r.x !== 0) return false;
-      return document.elementFromPoint(r.x + 6, r.y + 40)?.closest("main.thread-scroll") != null;
+      return document.elementFromPoint(r.x + 6, r.y + 40)?.closest(".thread-scroll") != null;
     },
     undefined,
     { timeout: 3_000 },
@@ -347,12 +347,12 @@ try {
             const at = document.elementFromPoint(x as number, y as number);
             return {
               open: document.querySelectorAll(`[data-slot="${slot}"][data-open]`).length,
-              marked: document.querySelector("main.thread-scroll")?.closest("[data-base-ui-inert]")
-                ?.id,
+              marked: document.querySelector(".thread-scroll")?.closest("[data-base-ui-inert]")?.id,
               under:
                 at === null
                   ? "nothing"
-                  : (at.getAttribute("data-slot") ?? (at.closest("main") ? "thread" : at.tagName)),
+                  : (at.getAttribute("data-slot") ??
+                    (at.closest(".thread-scroll") ? "thread" : at.tagName)),
             };
           },
           [slot, x, y] as const,

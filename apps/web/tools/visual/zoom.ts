@@ -56,7 +56,7 @@ const bad: string[] = [];
 let checked = 0;
 for (const [i, s] of SCENES.entries()) {
   const n = i + 1;
-  if (args.only !== undefined && String(n) !== args.only) continue;
+  if (s.measure === true || (args.only !== undefined && String(n) !== args.only)) continue;
   const page = await context.newPage();
   await page.clock.setFixedTime(NOW);
   await page.goto(`${url}/?scene=${n}`, { waitUntil: "load" });
@@ -66,6 +66,8 @@ for (const [i, s] of SCENES.entries()) {
       if ("click" in step) await page.locator(step.click).first().click({ timeout: 5_000 });
       else if ("fill" in step)
         await page.locator(step.fill).first().fill(step.text, { timeout: 5_000 });
+      else if ("top" in step)
+        await page.locator(".thread-scroll").evaluate((e) => e.scrollTo({ top: 0 }));
       else await page.waitForTimeout(step.wait);
     } catch {
       bad.push(`scene ${n} ${s.name}: step failed ${JSON.stringify(step)}`);
