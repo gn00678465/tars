@@ -1,14 +1,15 @@
 import type { WireConv } from "@tars/protocol";
-import { type ReactNode, useRef } from "react";
+import type { ReactNode } from "react";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Icon, Monolith } from "./Icon.tsx";
-import { useModal } from "./modal.ts";
 import { listTime } from "./time.ts";
 
 const titleOf = (c: WireConv) => (c.title === "" ? "（沒有標題）" : c.title);
 
 /**
  * The prototype's sidebar (ui_spec 5.1, 5.5): a fixed column on desktop that can fold, a drawer
- * from the left below 1024px. The open conversation says 目前 in words, not by its shade alone.
+ * from the left below 1024px (shadcn's sheet: it holds the focus and Esc or a press outside
+ * closes it). The open conversation says 目前 in words, not by its shade alone.
  */
 export function ConversationList(props: {
   convs: readonly WireConv[];
@@ -20,7 +21,8 @@ export function ConversationList(props: {
   /** Conversations with an approval waiting. */
   waiting: ReadonlySet<string>;
   collapsed: boolean;
-  /** The drawer below 1024px is open: it holds the focus and Esc closes it. */
+  /** Below 1024px: the list is a drawer, shown only while `drawerOpen`. */
+  compact: boolean;
   drawerOpen: boolean;
   onOpen: (conv: string | undefined) => void;
   onCollapse: () => void;
@@ -43,24 +45,13 @@ export function ConversationList(props: {
     readonly onArchive: (conv: string) => void;
   };
 }) {
-  const aside = useRef<HTMLElement>(null);
   // The parent may be past the list's 500: then it is named only as another conversation.
   const parentTitle = (id: string) => {
     const parent = props.convs.find((c) => c.id === id);
     return parent === undefined ? "另一個對話" : titleOf(parent);
   };
-  // Only the drawer is modal: the desktop column sits beside the thread.
-  useModal(aside, props.drawerOpen, props.onCollapse);
-  const cls = ["sidebar"];
-  if (props.collapsed) cls.push("collapsed");
-  if (props.drawerOpen) cls.push("mobile-open");
-  return (
-    <aside
-      ref={aside}
-      className={cls.join(" ")}
-      aria-label="對話列表"
-      {...(props.drawerOpen ? { role: "dialog", "aria-modal": true } : {})}
-    >
+  const inner = (
+    <>
       <div className="sidebar-header">
         <div className="brand-mark">
           <Monolith />
@@ -161,6 +152,34 @@ export function ConversationList(props: {
           </span>
         </div>
       )}
+    </>
+  );
+  if (props.compact)
+    return (
+      <Sheet
+        open={props.drawerOpen}
+        onOpenChange={(open) => {
+          if (!open) props.onCollapse();
+        }}
+      >
+        {/* Kept in the page closed, off its left edge as before, and inert there: Tab and a
+            screen reader skip it, while its shadow still edges the screen. */}
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          keepMounted
+          inert={!props.drawerOpen}
+          className={props.drawerOpen ? "sidebar mobile-open" : "sidebar"}
+          aria-label="對話列表"
+          render={<aside />}
+        >
+          {inner}
+        </SheetContent>
+      </Sheet>
+    );
+  return (
+    <aside className={props.collapsed ? "sidebar collapsed" : "sidebar"} aria-label="對話列表">
+      {inner}
     </aside>
   );
 }

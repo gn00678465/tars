@@ -55,7 +55,7 @@ test("F2, F3: the top bar says the list's date, then the model whose price needs
   expect(desktop().textContent).toBe("Claude Opus 4.1 價目 34 天未確認");
   expect(phone().textContent).toBe("價目待確認");
   await act(async () => desktop().click());
-  const sheet = root.querySelector(".sheet-panel") as HTMLElement;
+  const sheet = document.querySelector(".sheet-panel") as HTMLElement;
   expect(sheet.querySelector("h2")?.textContent).toBe("花費、模型清單與價目表（唯讀）");
   expect(sheet.querySelectorAll(".catalog-table tbody tr")).toHaveLength(1);
   expect(sheet.textContent).toContain("模型啟用、單價與額度只能在本機終端修改");

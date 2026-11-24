@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
 import { button, buttons, render } from "./render.ts";
 import { shortTime } from "./components/time.ts";
-import { server, socketHarness } from "./testing.ts";
+import { frame, server, socketHarness } from "./testing.ts";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -773,7 +773,7 @@ test("spend says 本期 and 估 until status says the period and source; a table
     );
   });
   await act(async () => (root.querySelector(".topbar-right .sg-btn") as HTMLButtonElement).click());
-  const sheet = root.querySelector(".sheet-panel") as HTMLElement;
+  const sheet = document.querySelector(".sheet-panel") as HTMLElement;
   expect(sheet.textContent).not.toMatch(/本月|累計/);
   expect(sheet.textContent?.match(/本期 1\.00 \/ [0-9,]+ USD 估/g)).toHaveLength(2);
   await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
@@ -872,10 +872,10 @@ describe("the / menu and the certificate, from status", () => {
   });
 
   test("/cost opens the status sheet", async () => {
-    const { root, type, key, unmount } = await ready({});
+    const { type, key, unmount } = await ready({});
     await type("/cost");
     await key("Enter");
-    expect(root.querySelector(".sheet-panel")).not.toBeNull();
+    expect(document.querySelector(".sheet-panel")).not.toBeNull();
     unmount();
   });
 
@@ -884,7 +884,7 @@ describe("the / menu and the certificate, from status", () => {
     const bar = root.querySelector(".topbar-right .desktop-only") as HTMLButtonElement;
     expect(bar.textContent).toBe("憑證剩 10 天");
     await act(async () => bar.click());
-    const sheet = root.querySelector(".sheet-panel") as HTMLElement;
+    const sheet = document.querySelector(".sheet-panel") as HTMLElement;
     expect(sheet.textContent).toContain("本機端憑證30 天內到期");
     expect(sheet.textContent).toContain("（剩 10 天）");
     // On a phone the button says it too, with a warn dot.
@@ -919,7 +919,10 @@ describe("the drawer and the status sheet hold the focus; Esc closes them", () =
         void document.dispatchEvent(new KeyboardEvent("keydown", { key, shiftKey, bubbles: true })),
     );
 
-  test("the drawer below 1024px: focus goes in, Tab wraps, Esc closes and the menu button has it back", async () => {
+  // Tab staying inside is Base UI's focus trap, which moves the focus by real Tab presses onto
+  // its guard elements; jsdom moves no focus on a dispatched Tab, so tools/visual/csp.ts checks
+  // it in Chromium.
+  test("the drawer below 1024px: focus goes in, Esc closes and the menu button has it back", async () => {
     vi.stubGlobal("matchMedia", () => ({
       matches: true,
       addEventListener: () => undefined,
@@ -929,20 +932,17 @@ describe("the drawer and the status sheet hold the focus; Esc closes them", () =
     const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
     await act(async () => h.last().ready());
     const menu = root.querySelector('[aria-label="展開對話列表"]') as HTMLButtonElement;
+    // A popup under document.body, kept there closed and inert: Tab and a screen reader skip it.
+    const drawer = document.querySelector(".sidebar") as HTMLElement;
+    expect(drawer.hasAttribute("inert")).toBe(true);
     menu.focus();
     await act(async () => menu.click());
-    const drawer = root.querySelector(".sidebar") as HTMLElement;
+    await frame();
     expect(drawer.getAttribute("role")).toBe("dialog");
+    expect(drawer.hasAttribute("inert")).toBe(false);
     expect(drawer.contains(document.activeElement)).toBe(true);
-    const inside = [...drawer.querySelectorAll<HTMLElement>("button")];
-    (inside.at(-1) as HTMLElement).focus();
-    await press("Tab");
-    expect(document.activeElement).toBe(inside[0]);
-    await press("Tab", true);
-    expect(document.activeElement).toBe(inside.at(-1));
     await press("Escape");
-    expect(drawer.classList.contains("mobile-open")).toBe(false);
-    expect(drawer.getAttribute("role")).toBeNull();
+    expect(drawer.hasAttribute("inert")).toBe(true);
     expect(document.activeElement).toBe(menu);
     unmount();
     vi.unstubAllGlobals();
@@ -966,18 +966,24 @@ describe("the drawer and the status sheet hold the focus; Esc closes them", () =
     const opener = root.querySelector(".topbar-right .desktop-only") as HTMLButtonElement;
     opener.focus();
     await act(async () => opener.click());
+    await frame();
     expect(document.activeElement?.getAttribute("aria-label")).toBe("關閉");
     await press("Tab");
     expect(document.activeElement?.getAttribute("aria-label")).toBe("關閉");
     await press("Escape");
-    expect(root.querySelector(".sheet-panel")).toBeNull();
+    expect(document.querySelector(".sheet-panel")).toBeNull();
     expect(document.activeElement).toBe(opener);
     unmount();
   });
 });
 
 test("往返延遲: measured from connecting, every half minute, and when the sheet opens; shown in the top bar", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  // The frames too: Base UI asks for one when the sheet opens, and jsdom would build its frame
+  // loop on the faked setInterval, which stops every later frame in this file. Nothing focused
+  // leaves the page while they are faked, so jsdom's focus fixup does not start that loop here.
+  vi.useFakeTimers({
+    toFake: ["setInterval", "clearInterval", "requestAnimationFrame", "cancelAnimationFrame"],
+  });
   try {
     const h = socketHarness();
     const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
@@ -1020,7 +1026,7 @@ test("往返延遲: measured from connecting, every half minute, and when the sh
       (root.querySelector(".topbar-right .desktop-only") as HTMLButtonElement).click(),
     );
     expect(asked()).toHaveLength(3);
-    const sheet = root.querySelector(".sheet-panel") as HTMLElement;
+    const sheet = document.querySelector(".sheet-panel") as HTMLElement;
     expect(sheet.textContent).toContain("往返延遲180 ms");
     unmount();
   } finally {
@@ -1093,15 +1099,16 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     const seg = root.querySelector(".run-seg") as HTMLButtonElement;
     expect(seg.textContent).toBe("模型Model A");
     await act(async () => seg.click());
-    const menu = root.querySelector("[role=menu][aria-label=選擇模型]") as HTMLElement;
+    const menu = document.querySelector("[role=menu][aria-label=選擇模型]") as HTMLElement;
     const g = [...menu.querySelectorAll<HTMLButtonElement>(".model-menu-option")].find((b) =>
       b.textContent?.startsWith("G"),
     );
-    expect(g?.disabled).toBe(true);
+    // Base UI marks a menu item off with aria-disabled; it keeps no native disabled.
+    expect(g?.getAttribute("aria-disabled")).toBe("true");
     expect(g?.textContent).toContain("這家 provider 沒有 API 金鑰");
     // A new conversation switches in place: no sheet.
     await act(async () => button(menu, "Model Bcontext 100K").click());
-    expect(root.querySelector("[aria-labelledby=model-sheet-title]")).toBeNull();
+    expect(document.querySelector("[aria-labelledby=model-sheet-title]")).toBeNull();
     expect(root.querySelector(".run-seg")?.textContent).toBe("模型Model B");
     expect(root.querySelector(".empty-state p")?.textContent).toBe(
       "目前用 Model B。要換模型或推理強度，在輸入框右下角選。送出第一則訊息後，模型就綁在這個對話上。",
@@ -1166,11 +1173,11 @@ describe("another model: chosen for a new conversation, or continuing one", () =
   test("/model opens the model menu on a new conversation and the continue sheet on one with messages", async () => {
     const { root, send, submitted, unmount } = await ready(true);
     await send("/model");
-    expect(root.querySelector("[role=menu][aria-label=選擇模型]")).not.toBeNull();
+    expect(document.querySelector("[role=menu][aria-label=選擇模型]")).not.toBeNull();
     expect(submitted()).toBeUndefined();
     await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
     await send("/model");
-    expect(root.querySelector("[aria-labelledby=model-sheet-title]")).not.toBeNull();
+    expect(document.querySelector("[aria-labelledby=model-sheet-title]")).not.toBeNull();
     expect(submitted()).toBeUndefined();
     unmount();
   });
@@ -1200,7 +1207,7 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     const { h, root, send, submitted, unmount } = await ready(true);
     await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
     await act(async () => button(root, "以另一個模型接續").click());
-    const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
+    const sheet = document.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
     expect(sheet.textContent).toContain("來源對話：甲（原模型 Model A）");
     const a = [...sheet.querySelectorAll<HTMLButtonElement>(".model-option")][0];
     expect([a?.disabled, a?.textContent?.includes("目前")]).toEqual([true, true]);
@@ -1453,22 +1460,30 @@ describe("effort: the level beside the model, its menu, and what the message car
         .messages()
         .filter((m) => m.kind === "turn.submit")
         .at(-1);
-    const openConv = async (title: string) =>
-      act(async () =>
+    const openConv = async (title: string) => {
+      // On a phone the list is in the drawer, which is there only while open.
+      const menu = r.root.querySelector<HTMLButtonElement>('[aria-label="展開對話列表"]');
+      if (r.root.querySelector(".conv-item") === null && menu !== null)
+        await act(async () => menu.click());
+      await act(async () =>
         (
-          [...r.root.querySelectorAll<HTMLButtonElement>(".conv-item")].find((b) =>
+          [...document.querySelectorAll<HTMLButtonElement>(".conv-item")].find((b) =>
             b.textContent?.startsWith(title),
           ) as HTMLButtonElement
         ).click(),
       );
+    };
     const seg = () => r.root.querySelector(".effort-anchor .run-seg") as HTMLButtonElement | null;
-    const menu = () => r.root.querySelector("[role=menu]") as HTMLElement | null;
-    const key = async (k: string) =>
-      act(async () => {
+    const menu = () => document.querySelector("[role=menu]") as HTMLElement | null;
+    // Base UI moves a menu's focus by keys on the next frame.
+    const key = async (k: string) => {
+      await act(async () => {
         document.activeElement?.dispatchEvent(
           new KeyboardEvent("keydown", { key: k, bubbles: true }),
         );
       });
+      await frame();
+    };
     return { h, ...r, send, submitted, openConv, seg, menu, key };
   }
 
@@ -1525,6 +1540,7 @@ describe("effort: the level beside the model, its menu, and what the message car
     expect(root.querySelector(".conv-header-effort")?.textContent).toBe("推理：高");
     expect(seg()?.textContent).toBe("推理高");
     await act(async () => seg()?.click());
+    await frame();
     expect(seg()?.getAttribute("aria-expanded")).toBe("true");
     const options = () => [
       ...(menu()?.querySelectorAll<HTMLButtonElement>("[role=menuitemradio]") ?? []),
@@ -1544,7 +1560,9 @@ describe("effort: the level beside the model, its menu, and what the message car
     expect(document.activeElement).toBe(seg());
 
     await act(async () => seg()?.click());
-    vi.useFakeTimers();
+    // The toast's timeout only: jsdom builds its frame loop on setInterval when the picked item
+    // leaves with the focus, and on a faked one every later frame in this file stops.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       await act(async () => options()[0]?.click());
       expect(menu()).toBeNull();
@@ -1588,7 +1606,7 @@ describe("effort: the level beside the model, its menu, and what the message car
     );
     await act(async () =>
       button(
-        root.querySelector("[aria-label=選擇模型]") as HTMLElement,
+        document.querySelector("[aria-label=選擇模型]") as HTMLElement,
         "Model Bcontext 100K · 推理 低–中",
       ).click(),
     );
@@ -1607,7 +1625,7 @@ describe("effort: the level beside the model, its menu, and what the message car
     const { root, seg, openConv, send, submitted, unmount } = await ready();
     await openConv("甲");
     await act(async () => button(root, "以另一個模型接續").click());
-    const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
+    const sheet = document.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
     await act(async () => button(sheet, "Model Bmodel-b100K").click());
     await act(async () => button(sheet, "建立接續對話").click());
     expect(seg()?.textContent).toBe("這個模型不支援推理 高，改用 中：推理中");
@@ -1663,10 +1681,10 @@ describe("effort: the level beside the model, its menu, and what the message car
     await openConv("甲");
     await act(async () => seg()?.click());
     expect(menu()).toBeNull();
-    const sheet = root.querySelector("[aria-labelledby=effort-sheet-title]") as HTMLElement;
+    const sheet = document.querySelector("[aria-labelledby=effort-sheet-title]") as HTMLElement;
     expect(sheet.querySelector("h2")?.textContent).toBe("選擇推理強度（Model A）");
     await act(async () => button(sheet, "低（low）回應最快，思考最少").click());
-    expect(root.querySelector("[aria-labelledby=effort-sheet-title]")).toBeNull();
+    expect(document.querySelector("[aria-labelledby=effort-sheet-title]")).toBeNull();
     expect(seg()?.textContent).toBe("推理低");
     expect((root.querySelector(".effort-toast") as HTMLElement).hidden).toBe(false);
     unmount();
@@ -1793,7 +1811,7 @@ describe("effort: the level beside the model, its menu, and what the message car
     await b.type("/effort ");
     await b.press("Escape");
     await b.press("Enter");
-    const sheet = root.querySelector("[aria-labelledby=effort-sheet-title]") as HTMLElement;
+    const sheet = document.querySelector("[aria-labelledby=effort-sheet-title]") as HTMLElement;
     expect(sheet.querySelector("h2")?.textContent).toBe("選擇推理強度（Model A）");
     unmount();
   });
@@ -1875,19 +1893,23 @@ describe("the model menu: spending by provider, each model's window and levels, 
     });
     const seg = () => r.root.querySelector(".model-anchor .run-seg") as HTMLButtonElement;
     const menu = () =>
-      r.root.querySelector("[role=menu][aria-label=選擇模型]") as HTMLElement | null;
-    const key = async (k: string) =>
-      act(async () => {
+      document.querySelector("[role=menu][aria-label=選擇模型]") as HTMLElement | null;
+    // Base UI moves a menu's focus by keys on the next frame.
+    const key = async (k: string) => {
+      await act(async () => {
         document.activeElement?.dispatchEvent(
           new KeyboardEvent("keydown", { key: k, bubbles: true }),
         );
       });
+      await frame();
+    };
     return { h, ...r, seg, menu, key };
   }
 
-  test("a new conversation: groups with their spending, a stopped one closed, each model's line; keys move past what cannot be picked", async () => {
+  test("a new conversation: groups with their spending, a stopped one closed, each model's line; keys reach what cannot be picked, which says why", async () => {
     const { seg, menu, key, unmount } = await ready();
     await act(async () => seg().click());
+    await frame();
     expect(seg().getAttribute("aria-expanded")).toBe("true");
     const heads = [...(menu()?.querySelectorAll(".model-menu-head") ?? [])].map(
       (e) => e.textContent,
@@ -1899,19 +1921,25 @@ describe("the model menu: spending by provider, each model's window and levels, 
     const options = [
       ...(menu()?.querySelectorAll<HTMLButtonElement>("[role=menuitemradio]") ?? []),
     ];
-    expect(options.map((o) => [o.textContent, o.getAttribute("aria-checked"), o.disabled])).toEqual(
-      [
-        ["Model Acontext 200K · 推理 低–高", "true", false],
-        ["Model Ccontext 128K · 不支援推理強度", "false", false],
-        ["Gcontext 1M · 推理 低–高", "false", true],
-      ],
-    );
+    // Base UI marks a menu item off with aria-disabled; it keeps no native disabled.
+    const off = (o: HTMLElement) => o.getAttribute("aria-disabled") === "true";
+    expect(options.map((o) => [o.textContent, o.getAttribute("aria-checked"), off(o)])).toEqual([
+      ["Model Acontext 200K · 推理 低–高", "true", false],
+      ["Model Ccontext 128K · 不支援推理強度", "false", false],
+      ["Gcontext 1M · 推理 低–高", "false", true],
+    ]);
     expect(menu()?.querySelector(".model-menu-note")?.textContent).toBe(
       "這個對話還沒有訊息，可以直接換模型。送出第一則訊息後，模型就綁在對話上。",
     );
     expect(document.activeElement).toBe(options[0]);
     await key("ArrowDown");
     expect(document.activeElement).toBe(options[1]);
+    // Base UI keeps an item that is off in the key order, as the WAI-ARIA menu pattern has it:
+    // reached, it says why it cannot be picked; Enter on it does nothing.
+    await key("ArrowDown");
+    expect(document.activeElement).toBe(options[2]);
+    await key("Enter");
+    expect(menu()).not.toBeNull();
     await key("ArrowDown");
     expect(document.activeElement).toBe(options[0]);
     await key("Escape");
@@ -1931,7 +1959,7 @@ describe("the model menu: spending by provider, each model's window and levels, 
       button(menu() as HTMLElement, "Model Ccontext 128K · 不支援推理強度").click(),
     );
     expect(menu()).toBeNull();
-    const sheet = root.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
+    const sheet = document.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
     expect(sheet.querySelector("h2")?.textContent).toBe("以另一個模型接續對話");
     expect(sheet.querySelector(".model-option.selected")?.textContent).toContain("Model C");
     expect([...sheet.querySelectorAll(".provider-group-head")].map((e) => e.textContent)).toEqual([
@@ -1952,11 +1980,11 @@ describe("the model menu: spending by provider, each model's window and levels, 
       addEventListener: () => undefined,
       removeEventListener: () => undefined,
     })) as unknown as typeof window.matchMedia;
-    const { root, seg, menu, unmount } = await ready();
+    const { seg, menu, unmount } = await ready();
     expect(seg().getAttribute("aria-haspopup")).toBe("dialog");
     await act(async () => seg().click());
     expect(menu()).toBeNull();
-    expect(root.querySelector("[aria-labelledby=model-sheet-title] h2")?.textContent).toBe(
+    expect(document.querySelector("[aria-labelledby=model-sheet-title] h2")?.textContent).toBe(
       "選擇模型",
     );
     unmount();

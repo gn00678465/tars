@@ -107,6 +107,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState(false);
+  // What the desktop's context and model sheets drop from.
+  const ring = useRef<HTMLButtonElement>(null);
+  const modelButton = useRef<HTMLButtonElement>(null);
   /** The context sheet, with what to keep already typed after /compact when it was too long. */
   const [contextSheet, setContextSheet] = useState<{ focus: string } | undefined>(undefined);
   const live = state.connection === "open";
@@ -439,11 +442,6 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
         {state.spoken ?? ""}
       </div>
       <div className="app-shell">
-        <div
-          className={drawer ? "drawer-scrim visible" : "drawer-scrim"}
-          aria-hidden="true"
-          onClick={() => setDrawer(false)}
-        />
         <ConversationList
           convs={state.convs}
           listed={state.listed === true}
@@ -451,6 +449,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           current={state.conv}
           waiting={waiting}
           collapsed={collapsed && !compact}
+          compact={compact}
           drawerOpen={drawer && compact}
           onOpen={open}
           onCollapse={() => (compact ? setDrawer(false) : setCollapsed(true))}
@@ -481,6 +480,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             onMenu={() => (compact ? setDrawer(true) : setCollapsed(false))}
             onSheet={() => setSheet(true)}
             onContext={() => setContextSheet({ focus: "" })}
+            ringRef={ring}
           />
           {targetRef === undefined ? null : (
             <div className="conv-header-bar">
@@ -740,6 +740,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                                 ? "這個對話還沒有訊息，可以直接換模型。送出第一則訊息後，模型就綁在對話上。"
                                 : "模型綁在對話上。這個對話已有訊息，選另一個模型會開新對話接續。",
                             open: modelOpen,
+                            trigger: modelButton,
                             ...(locked === undefined ? {} : { disabled: locked }),
                             onOpen: (o) => (phone ? o && pickModel() : setModelOpen(o)),
                             onChoose: (model) => {
@@ -770,6 +771,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
         {sheet ? (
           <StatusSheet
             state={state}
+            phone={phone}
             onClose={() => setSheet(false)}
             {...(canCompact
               ? {
@@ -788,6 +790,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             context={state.context}
             conv={state.conv}
             focus={contextSheet.focus}
+            phone={phone}
+            at={ring}
             blocked={compactBlocked}
             onCompact={compactNow}
             onClose={() => setContextSheet(undefined)}
@@ -797,6 +801,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           <SourceOverlay
             source={wiki.source}
             now={today}
+            phone={phone}
             onClose={() => toWiki({ type: "source", ref: undefined })}
             onJump={(c) => {
               toWiki({ type: "source", ref: undefined });
@@ -812,6 +817,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
         (picking === "continue" && sourceConv === undefined) ? null : (
           <ModelSheet
             models={models}
+            phone={phone}
+            at={modelButton}
             picked={picking === "continue" ? (forkPick ?? chosen?.model) : chosen?.model}
             spend={spend}
             {...(picking === "continue" && source !== undefined && sourceConv !== undefined

@@ -1,11 +1,19 @@
 import type { WireModel } from "@tars/protocol";
-import { useRef } from "react";
+import type { FocusEvent, Ref } from "react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Icon } from "./Icon.tsx";
 import { type ModelRef, type Spend, SpendText, windowText } from "./ModelSheet.tsx";
 import { reasonText } from "../reasons.ts";
 import { providerName } from "./StatusBar.tsx";
-import { useModal } from "./modal.ts";
-import { usePopover } from "./popover.ts";
+import { Panel } from "./Panel.tsx";
 
 /** The local end's levels, lowest first: how a level the model lacks is moved, as it moves it. */
 const ORDER = ["low", "medium", "high", "xhigh", "max"];
@@ -69,6 +77,8 @@ export interface ModelControl {
   readonly onChoose: (model: ModelRef) => void;
   /** Why the model cannot be changed now (offline, a turn running); undefined when it can. */
   readonly disabled?: string;
+  /** The model button, which the desktop's model sheet rises from. */
+  readonly trigger?: Ref<HTMLButtonElement>;
 }
 
 const isModel = (m: WireModel, r: ModelRef | undefined) =>
@@ -93,7 +103,8 @@ const optionsOf = (e: EffortControl) =>
 
 /**
  * The prototype's joined control beside the send button: the model, then the effort level. On a
- * desktop the level drops a menu from its button; a phone gets the sheet (EffortSheet) instead.
+ * desktop each drops a menu (shadcn's dropdown-menu, one choice) from its button; a phone gets a
+ * sheet instead (ModelSheet, EffortSheet), so the buttons there are plain.
  */
 export function RunSetup(props: {
   compact: boolean;
@@ -102,125 +113,33 @@ export function RunSetup(props: {
   /** Just picked: says when it applies. */
   toast: boolean;
 }) {
-  const anchor = useRef<HTMLDivElement>(null);
-  const menu = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const modelAnchor = useRef<HTMLDivElement>(null);
-  const modelMenu = useRef<HTMLDivElement>(null);
-  const modelTrigger = useRef<HTMLButtonElement>(null);
   const m = props.model;
   const e = props.effort;
   const none = e !== undefined && e.levels.length === 0;
   const dropped = e !== undefined && e.open && !props.compact && !none && e.disabled === undefined;
   const modelDropped = m.open && !props.compact && m.disabled === undefined;
-  usePopover(anchor, menu, dropped, () => e?.onOpen(false));
-  usePopover(modelAnchor, modelMenu, modelDropped, () => m.onOpen(false));
   const providers = [...new Set(m.models.map((x) => x.provider))];
-  return (
-    <>
-      <span className="effort-toast" role="status" hidden={!props.toast}>
-        下一則訊息起生效
-      </span>
-      <div
-        className="run-setup"
-        role="group"
-        aria-label={e === undefined ? "模型" : "模型與推理強度"}
-      >
-        <div className="model-anchor" ref={modelAnchor}>
-          <button
-            ref={modelTrigger}
-            className="run-seg"
-            type="button"
-            aria-haspopup={props.compact ? "dialog" : "menu"}
-            aria-expanded={modelDropped}
-            disabled={m.disabled !== undefined}
-            title={m.disabled ?? "選擇模型"}
-            onClick={() => m.onOpen(!m.open)}
-          >
-            <span className="run-seg-label">模型</span>
-            <span>{m.label}</span>
-            <Icon name="chevron" />
-          </button>
-          {modelDropped ? (
-            <div
-              ref={modelMenu}
-              className="model-popover sg-popover"
-              role="menu"
-              aria-label="選擇模型"
-            >
-              {m.models.length === 0 ? (
-                <div className="task-notice warn">
-                  <div className="task-notice-body">
-                    <div className="task-notice-title">還沒有可用的模型</div>
-                    <div className="task-notice-desc">
-                      請在本機終端更新模型清單：tars models refresh
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-              {providers.map((p) => {
-                const spend = m.spend(p);
-                return (
-                  <div
-                    className="model-menu-group"
-                    role="group"
-                    aria-label={providerName(p)}
-                    key={p}
-                  >
-                    <div className="model-menu-head">
-                      <span>{providerName(p)}</span>
-                      <SpendText spend={spend} className="mono" />
-                    </div>
-                    {m.models
-                      .filter((x) => x.provider === p)
-                      .map((x) => {
-                        const on = isModel(x, m.current);
-                        const sub = [
-                          x.window === undefined ? undefined : `context ${windowText(x.window)}`,
-                          x.unusable === undefined
-                            ? effortRange(x.effortLevels)
-                            : reasonText(x.unusable),
-                        ].filter((t) => t !== undefined);
-                        return (
-                          <button
-                            key={x.id}
-                            className={on ? "model-menu-option active" : "model-menu-option"}
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={on}
-                            disabled={!on && (x.unusable !== undefined || spend?.stopped === true)}
-                            onClick={() => {
-                              m.onChoose({ provider: x.provider, id: x.id });
-                              modelTrigger.current?.focus();
-                            }}
-                          >
-                            <span className="model-menu-main">
-                              <span className="model-menu-name">{x.label}</span>
-                              <span className="model-menu-sub">{sub.join(" · ")}</span>
-                            </span>
-                            {on ? <Icon name="check" /> : null}
-                          </button>
-                        );
-                      })}
-                  </div>
-                );
-              })}
-              <p className="model-menu-note">{m.note}</p>
-            </div>
-          ) : null}
-        </div>
-        {e === undefined ? null : (
-          <div className="effort-anchor" ref={anchor}>
-            <button
-              ref={trigger}
-              className="run-seg"
-              type="button"
-              aria-haspopup={props.compact ? "dialog" : "menu"}
-              aria-expanded={dropped}
-              disabled={none || e.disabled !== undefined}
-              title={none ? "這個模型不支援推理強度" : (e.disabled ?? "調整推理強度")}
-              onClick={() => e.onOpen(!e.open)}
-            >
+  const modelSeg = {
+    className: "run-seg",
+    disabled: m.disabled !== undefined,
+    title: m.disabled ?? "選擇模型",
+    children: (
+      <>
+        <span className="run-seg-label">模型</span>
+        <span>{m.label}</span>
+        <Icon name="chevron" />
+      </>
+    ),
+  };
+  const effortSeg =
+    e === undefined
+      ? undefined
+      : {
+          className: "run-seg",
+          disabled: none || e.disabled !== undefined,
+          title: none ? "這個模型不支援推理強度" : (e.disabled ?? "調整推理強度"),
+          children: (
+            <>
               {e.movedFrom === undefined || e.current === undefined ? null : (
                 <>
                   <span className="status-dot warn" aria-hidden="true" />
@@ -232,40 +151,153 @@ export function RunSetup(props: {
               <span className="run-seg-label">推理</span>
               <span>{none || e.current === undefined ? "不適用" : effortName(e.current)}</span>
               {none ? null : <Icon name="chevron" />}
-            </button>
-            {dropped ? (
-              <div
-                ref={menu}
-                className="effort-popover sg-popover"
-                role="menu"
-                aria-label="選擇推理強度"
+            </>
+          ),
+        };
+  return (
+    <>
+      <span className="effort-toast" role="status" hidden={!props.toast}>
+        下一則訊息起生效
+      </span>
+      <div
+        className="run-setup"
+        role="group"
+        aria-label={e === undefined ? "模型" : "模型與推理強度"}
+      >
+        <div className="model-anchor">
+          {props.compact ? (
+            <button
+              ref={m.trigger}
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded={false}
+              onClick={() => m.onOpen(true)}
+              {...modelSeg}
+            />
+          ) : (
+            <DropdownMenu open={modelDropped} onOpenChange={m.onOpen}>
+              <DropdownMenuTrigger ref={m.trigger} {...modelSeg} />
+              <DropdownMenuContent
+                className="model-popover sg-popover"
+                side="top"
+                align="end"
+                sideOffset={8}
+                aria-label="選擇模型"
+                onFocus={toChecked}
               >
-                {optionsOf(e).map(({ level, on }) => (
-                  <button
-                    key={level}
-                    className={on ? "effort-option active" : "effort-option"}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={on}
-                    onClick={() => {
-                      e.onPick(level);
-                      // The menu goes with the pick; the focus would fall to the page.
-                      trigger.current?.focus();
-                    }}
-                  >
-                    <div>
-                      <div className="effort-option-title">
-                        {effortName(level)}（{level}）
+                {m.models.length === 0 ? (
+                  <div className="task-notice warn">
+                    <div className="task-notice-body">
+                      <div className="task-notice-title">還沒有可用的模型</div>
+                      <div className="task-notice-desc">
+                        請在本機終端更新模型清單：tars models refresh
                       </div>
-                      {NOTES[level] === undefined ? null : (
-                        <div className="effort-option-note">{NOTES[level]}</div>
-                      )}
                     </div>
-                    {on ? <Icon name="check" /> : null}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+                  </div>
+                ) : null}
+                <DropdownMenuRadioGroup
+                  className="model-menu-groups"
+                  value={m.current === undefined ? "" : keyOf(m.current)}
+                  onValueChange={(v: string) => {
+                    const x = m.models.find((y) => keyOf(y) === v);
+                    if (x !== undefined) m.onChoose({ provider: x.provider, id: x.id });
+                  }}
+                >
+                  {providers.map((p) => {
+                    const spend = m.spend(p);
+                    return (
+                      <DropdownMenuGroup className="model-menu-group" key={p}>
+                        <DropdownMenuLabel className="model-menu-head">
+                          <span>{providerName(p)}</span>
+                          <SpendText spend={spend} className="mono" />
+                        </DropdownMenuLabel>
+                        {m.models
+                          .filter((x) => x.provider === p)
+                          .map((x) => {
+                            const on = isModel(x, m.current);
+                            const sub = [
+                              x.window === undefined
+                                ? undefined
+                                : `context ${windowText(x.window)}`,
+                              x.unusable === undefined
+                                ? effortRange(x.effortLevels)
+                                : reasonText(x.unusable),
+                            ].filter((t) => t !== undefined);
+                            return (
+                              <DropdownMenuRadioItem
+                                key={x.id}
+                                value={keyOf(x)}
+                                className={on ? "model-menu-option active" : "model-menu-option"}
+                                nativeButton
+                                render={<button type="button" />}
+                                disabled={
+                                  !on && (x.unusable !== undefined || spend?.stopped === true)
+                                }
+                              >
+                                <span className="model-menu-main">
+                                  <span className="model-menu-name">{x.label}</span>
+                                  <span className="model-menu-sub">{sub.join(" · ")}</span>
+                                </span>
+                              </DropdownMenuRadioItem>
+                            );
+                          })}
+                      </DropdownMenuGroup>
+                    );
+                  })}
+                </DropdownMenuRadioGroup>
+                <p className="model-menu-note">{m.note}</p>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+        {e === undefined || effortSeg === undefined ? null : (
+          <div className="effort-anchor">
+            {props.compact ? (
+              <button
+                type="button"
+                aria-haspopup="dialog"
+                aria-expanded={false}
+                onClick={() => e.onOpen(!e.open)}
+                {...effortSeg}
+              />
+            ) : (
+              <DropdownMenu open={dropped} onOpenChange={e.onOpen}>
+                <DropdownMenuTrigger {...effortSeg} />
+                <DropdownMenuContent
+                  className="effort-popover sg-popover"
+                  side="top"
+                  align="end"
+                  sideOffset={8}
+                  aria-label="選擇推理強度"
+                  onFocus={toChecked}
+                >
+                  <DropdownMenuRadioGroup
+                    className="effort-options"
+                    value={e.current ?? ""}
+                    onValueChange={e.onPick}
+                  >
+                    {optionsOf(e).map(({ level, on }) => (
+                      <DropdownMenuRadioItem
+                        key={level}
+                        value={level}
+                        className={on ? "effort-option active" : "effort-option"}
+                        nativeButton
+                        render={<button type="button" />}
+                      >
+                        <div>
+                          <div className="effort-option-title">
+                            {effortName(level)}（{level}）
+                          </div>
+                          {NOTES[level] === undefined ? null : (
+                            <div className="effort-option-note">{NOTES[level]}</div>
+                          )}
+                        </div>
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
         )}
       </div>
@@ -273,59 +305,61 @@ export function RunSetup(props: {
   );
 }
 
+const keyOf = (r: ModelRef) => `${r.provider}\u0000${r.id}`;
+
+/**
+ * Base UI's menu takes the focus to its first item on opening; the prototype's starts on the
+ * chosen one, as a select does. Once per opening: the popup is a new element each time.
+ */
+function toChecked(e: FocusEvent<HTMLDivElement>) {
+  const menu = e.currentTarget;
+  // The popup itself may take the focus first; the move is on the first item that does.
+  if (menu.dataset.started !== undefined || e.target.getAttribute("role") !== "menuitemradio")
+    return;
+  menu.dataset.started = "";
+  const chosen = menu.querySelector<HTMLElement>(
+    '[aria-checked="true"]:not([aria-disabled="true"])',
+  );
+  if (chosen !== null && chosen !== e.target) chosen.focus();
+}
+
 /** The phone's effort sheet (the prototype's overlay "effort"). */
 export function EffortSheet(props: { effort: EffortControl; modelLabel: string }) {
-  const panel = useRef<HTMLElement>(null);
   const close = () => props.effort.onOpen(false);
-  useModal(panel, true, close);
   return (
-    <div
-      className="overlay-backdrop"
-      onClick={(ev) => {
-        if (ev.target === ev.currentTarget) close();
-      }}
-    >
-      <section
-        ref={panel}
-        className="sheet-panel sg-popover"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="effort-sheet-title"
-      >
-        <div className="sheet-head">
-          <h2 id="effort-sheet-title">選擇推理強度（{props.modelLabel}）</h2>
-          <button className="sg-icon-btn" type="button" aria-label="關閉" onClick={close}>
-            <Icon name="close" size={15} />
-          </button>
-        </div>
-        <div className="sheet-body">
-          {optionsOf(props.effort).map(({ level, on }) => (
-            <button
-              key={level}
-              className={on ? "model-option selected" : "model-option"}
-              type="button"
-              aria-pressed={on}
-              onClick={() => props.effort.onPick(level)}
-            >
-              <div>
-                <div className="model-option-name">
-                  {effortName(level)}（{level}）
-                </div>
-                {NOTES[level] === undefined ? null : (
-                  <div className="model-option-id">{NOTES[level]}</div>
-                )}
-              </div>
-              {on ? <Icon name="check" /> : null}
-            </button>
-          ))}
-        </div>
-        <div className="sheet-foot">
+    <Panel
+      phone
+      title={`選擇推理強度（${props.modelLabel}）`}
+      titleId="effort-sheet-title"
+      onClose={close}
+      foot={
+        <>
           <span>選取後自下一則訊息生效</span>
           <button className="sg-btn" type="button" onClick={close}>
             關閉
           </button>
-        </div>
-      </section>
-    </div>
+        </>
+      }
+    >
+      {optionsOf(props.effort).map(({ level, on }) => (
+        <button
+          key={level}
+          className={on ? "model-option selected" : "model-option"}
+          type="button"
+          aria-pressed={on}
+          onClick={() => props.effort.onPick(level)}
+        >
+          <div>
+            <div className="model-option-name">
+              {effortName(level)}（{level}）
+            </div>
+            {NOTES[level] === undefined ? null : (
+              <div className="model-option-id">{NOTES[level]}</div>
+            )}
+          </div>
+          {on ? <Icon name="check" /> : null}
+        </button>
+      ))}
+    </Panel>
   );
 }

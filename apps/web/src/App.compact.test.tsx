@@ -99,14 +99,14 @@ test("E1, E3: the ring; /compact with what to keep sends conv.compact; 壓縮中
 test("E2, E3: the sheet says the local end's figures and starts a compaction; busy is a failure card", async () => {
   const { root, sent, receive, unmount } = await opened({ ...CONTEXT, lastCompactedAt: 1 });
   await act(async () => (root.querySelector(".context-trigger") as HTMLButtonElement).click());
-  const sheet = root.querySelector(".sheet-panel") as HTMLElement;
+  const sheet = document.querySelector(".sheet-panel") as HTMLElement;
   const values = [...sheet.querySelectorAll("dd")].map((d) => d.textContent);
   expect(values[0]).toBe("48,200 / 200,000 tokens（24%）");
   expect(values[1]).toBe("92%");
   expect(values[3]).toBe("75% 自動 · 85% 硬停");
   expect(sheet.textContent).toContain("壓縮會送出一次模型請求");
-  await act(async () => button(root, "立即壓縮").click());
-  expect(root.querySelector(".sheet-panel")).toBeNull();
+  await act(async () => button(document.body, "立即壓縮").click());
+  expect(document.querySelector(".sheet-panel")).toBeNull();
   const [compact] = sent("conv.compact");
   expect(compact?.p).toEqual({});
   await receive(server("nack", { reason: "busy" }, { re: compact?.id }));
@@ -125,8 +125,8 @@ test("E5, auto compaction on: past the stop line the hint offers compaction, and
     "已超過 85% 硬停門檻。送出時本機端會先自動壓縮較早的部分；也可以先手動壓縮。",
   );
   await act(async () => button(root, "開啟壓縮").click());
-  expect(root.querySelector(".sheet-panel h2")?.textContent).toBe("上下文用量與壓縮");
-  await act(async () => button(root, "取消").click());
+  expect(document.querySelector(".sheet-panel h2")?.textContent).toBe("上下文用量與壓縮");
+  await act(async () => button(document.body, "取消").click());
   await type("你好");
   await key("Enter");
   expect(sent("turn.submit")).toHaveLength(1);
@@ -239,7 +239,7 @@ test("after a compaction, before a request measures it: the local end's estimate
   const { root, unmount } = await opened({ ...CONTEXT, contextUsed: 24_000, estimated: true });
   expect(root.querySelector(".context-trigger .mono")?.textContent).toBe("約 12%");
   await act(async () => (root.querySelector(".context-trigger") as HTMLButtonElement).click());
-  expect(root.querySelector(".sheet-panel dd")?.textContent).toBe(
+  expect(document.querySelector(".sheet-panel dd")?.textContent).toBe(
     "約 24,000 / 200,000 tokens（12%），壓縮後的估計，下一則訊息後更新",
   );
   unmount();

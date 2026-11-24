@@ -1,8 +1,7 @@
 import type { WireModel } from "@tars/protocol";
-import { useRef, useState } from "react";
+import { type RefObject, useState } from "react";
 import { reasonText } from "../reasons.ts";
-import { Icon } from "./Icon.tsx";
-import { useModal } from "./modal.ts";
+import { Panel } from "./Panel.tsx";
 import { providerName } from "./StatusBar.tsx";
 
 export interface Spend {
@@ -52,11 +51,12 @@ export function ModelSheet(props: {
   from?: { readonly title: string; readonly model: ModelRef };
   onConfirm: (model: ModelRef) => void;
   onClose: () => void;
+  phone: boolean;
+  /** The composer's model button: on a wider screen the sheet rises from it. */
+  at?: RefObject<HTMLButtonElement | null>;
   /** A provider's spending, from status; past its stop threshold its models cannot be chosen. */
   spend?: (provider: string) => Spend | undefined;
 }) {
-  const panel = useRef<HTMLElement>(null);
-  useModal(panel, true, props.onClose);
   const usable = (m: WireModel) =>
     m.unusable === undefined &&
     !same(m, props.from?.model) &&
@@ -70,92 +70,15 @@ export function ModelSheet(props: {
   const providers = [...new Set(props.models.map((m) => m.provider))];
   const fork = props.from !== undefined;
   return (
-    <div
-      className="overlay-backdrop"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) props.onClose();
-      }}
-    >
-      <section
-        ref={panel}
-        className="sheet-panel sg-popover wide"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="model-sheet-title"
-      >
-        <div className="sheet-head">
-          <h2 id="model-sheet-title">{fork ? "以另一個模型接續對話" : "選擇模型"}</h2>
-          <button className="sg-icon-btn" type="button" aria-label="關閉" onClick={props.onClose}>
-            <Icon name="close" size={15} />
-          </button>
-        </div>
-        <div className="sheet-body">
-          {props.from === undefined ? null : (
-            <div className="fork-banner">
-              <span>
-                來源對話：{props.from.title}（原模型{" "}
-                {props.models.find(
-                  (m) => m.provider === props.from?.model.provider && m.id === props.from.model.id,
-                )?.label ?? props.from.model.id}
-                ）
-              </span>
-            </div>
-          )}
-          {props.models.length === 0 ? (
-            <div className="task-notice warn">
-              <div className="task-notice-body">
-                <div className="task-notice-title">還沒有可用的模型</div>
-                <div className="task-notice-desc">
-                  請在本機終端更新模型清單：tars models refresh
-                </div>
-              </div>
-            </div>
-          ) : (
-            providers.map((p) => (
-              <div className="provider-group" key={p} role="group" aria-label={providerName(p)}>
-                <div className="provider-group-head">
-                  <span>{providerName(p)}</span>
-                  <SpendText spend={props.spend?.(p)} />
-                </div>
-                {props.models
-                  .filter((m) => m.provider === p)
-                  .map((m) => (
-                    <button
-                      key={m.id}
-                      className={same(m, choice) ? "model-option selected" : "model-option"}
-                      type="button"
-                      aria-pressed={same(m, choice)}
-                      disabled={!usable(m)}
-                      onClick={() => setChoice({ provider: m.provider, id: m.id })}
-                    >
-                      <div>
-                        <div className="model-option-name">
-                          {m.label}
-                          {m.isDefault ? <span className="sg-tag">預設</span> : null}
-                          {same(m, props.from?.model) ? <span className="sg-tag">目前</span> : null}
-                        </div>
-                        <div className="mono model-option-id">
-                          {m.unusable === undefined ? m.id : `${m.id}：${reasonText(m.unusable)}`}
-                        </div>
-                      </div>
-                      {m.window === undefined ? null : (
-                        <span className="mono model-option-ctx">{windowText(m.window)}</span>
-                      )}
-                    </button>
-                  ))}
-              </div>
-            ))
-          )}
-          {fork && chosen?.window !== undefined ? (
-            <div className="task-notice warn">
-              <div className="task-notice-body">
-                <div className="task-notice-title">接續的成本</div>
-                <div className="task-notice-desc">{carryNote(chosen.window)}</div>
-              </div>
-            </div>
-          ) : null}
-        </div>
-        <div className="sheet-foot">
+    <Panel
+      phone={props.phone}
+      {...(props.at === undefined ? {} : { at: { ref: props.at, side: "top" as const } })}
+      title={fork ? "以另一個模型接續對話" : "選擇模型"}
+      titleId="model-sheet-title"
+      wide
+      onClose={props.onClose}
+      foot={
+        <>
           <span>模型綁在對話上；換模型會開新對話接續</span>
           <button
             className="sg-btn sg-btn-primary"
@@ -167,9 +90,72 @@ export function ModelSheet(props: {
           >
             {fork ? "建立接續對話" : "使用這個模型"}
           </button>
+        </>
+      }
+    >
+      {props.from === undefined ? null : (
+        <div className="fork-banner">
+          <span>
+            來源對話：{props.from.title}（原模型{" "}
+            {props.models.find(
+              (m) => m.provider === props.from?.model.provider && m.id === props.from.model.id,
+            )?.label ?? props.from.model.id}
+            ）
+          </span>
         </div>
-      </section>
-    </div>
+      )}
+      {props.models.length === 0 ? (
+        <div className="task-notice warn">
+          <div className="task-notice-body">
+            <div className="task-notice-title">還沒有可用的模型</div>
+            <div className="task-notice-desc">請在本機終端更新模型清單：tars models refresh</div>
+          </div>
+        </div>
+      ) : (
+        providers.map((p) => (
+          <div className="provider-group" key={p} role="group" aria-label={providerName(p)}>
+            <div className="provider-group-head">
+              <span>{providerName(p)}</span>
+              <SpendText spend={props.spend?.(p)} />
+            </div>
+            {props.models
+              .filter((m) => m.provider === p)
+              .map((m) => (
+                <button
+                  key={m.id}
+                  className={same(m, choice) ? "model-option selected" : "model-option"}
+                  type="button"
+                  aria-pressed={same(m, choice)}
+                  disabled={!usable(m)}
+                  onClick={() => setChoice({ provider: m.provider, id: m.id })}
+                >
+                  <div>
+                    <div className="model-option-name">
+                      {m.label}
+                      {m.isDefault ? <span className="sg-tag">預設</span> : null}
+                      {same(m, props.from?.model) ? <span className="sg-tag">目前</span> : null}
+                    </div>
+                    <div className="mono model-option-id">
+                      {m.unusable === undefined ? m.id : `${m.id}：${reasonText(m.unusable)}`}
+                    </div>
+                  </div>
+                  {m.window === undefined ? null : (
+                    <span className="mono model-option-ctx">{windowText(m.window)}</span>
+                  )}
+                </button>
+              ))}
+          </div>
+        ))
+      )}
+      {fork && chosen?.window !== undefined ? (
+        <div className="task-notice warn">
+          <div className="task-notice-body">
+            <div className="task-notice-title">接續的成本</div>
+            <div className="task-notice-desc">{carryNote(chosen.window)}</div>
+          </div>
+        </div>
+      ) : null}
+    </Panel>
   );
 }
 
