@@ -33,6 +33,24 @@ test("a font is never inlined; other assets keep Vite's limit", () => {
   expect(assetsInlineLimit("/x/tars-sprite-idle.svg")).toBeUndefined();
 });
 
+test("/assets/* is cached a year; /* has the CSP alone", () => {
+  const file = headersFile("app.example.test");
+  const rules = file.split(/\n(?=\S)/).map((r) =>
+    r
+      .trim()
+      .split("\n")
+      .map((l) => l.trim()),
+  );
+  expect(rules).toEqual([
+    ["/*", expect.stringMatching(/^Content-Security-Policy: default-src 'none'; /)],
+    ["/assets/*", "Cache-Control: public, max-age=31536000, immutable"],
+  ]);
+  const csp = rules[0]?.[1] ?? "";
+  expect(csp).not.toContain("unsafe-inline");
+  expect(csp).not.toContain("*");
+  expect(file.match(/Cache-Control/g)).toHaveLength(1);
+});
+
 test.each([
   undefined,
   "",

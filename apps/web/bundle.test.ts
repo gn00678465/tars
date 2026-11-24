@@ -34,6 +34,7 @@ let html = "";
 const js = new Map<string, string>();
 const css = new Map<string, string>();
 const fonts: string[] = [];
+const assets: string[] = [];
 
 beforeAll(async () => {
   // Vitest sets NODE_ENV to test, which would build React's development code.
@@ -58,6 +59,7 @@ beforeAll(async () => {
     ] as const)
       if (f.endsWith(ext)) map.set(`/assets/${f}`, readFileSync(join(out, "assets", f), "utf8"));
   fonts.push(...readdirSync(join(out, "assets")).filter((f) => f.endsWith(".woff2")));
+  assets.push(...readdirSync(join(out, "assets"), { recursive: true, encoding: "utf8" }));
 }, 120_000);
 
 afterAll(() => rmSync(out, { recursive: true, force: true }));
@@ -157,4 +159,18 @@ test("Noto Sans TC is 108 font files under /assets/, none inlined, nothing from 
   expect(styles).not.toContain("data:font");
   expect(styles).not.toMatch(/https?:\/\//);
   expect(styles).toMatch(/font-family:"?Noto Sans TC Variable/);
+});
+
+/** Vite's names under assets/: name-<8 base64url characters of the content's hash>.ext. */
+const HASHED = /^[^/]+-[A-Za-z0-9_-]{8}\.[a-z0-9]+$/;
+
+test("every file under /assets/ is named by its hash, so _headers may cache it a year", () => {
+  expect(assets.length).toBeGreaterThan(108);
+  expect(assets.filter((f) => !HASHED.test(f))).toEqual([]);
+  // public/ is copied to the root as is: nothing of it may land in assets/.
+  const pub = readdirSync(join(import.meta.dirname, "public"), {
+    recursive: true,
+    encoding: "utf8",
+  });
+  expect(pub.filter((f) => f === "assets" || f.startsWith("assets/"))).toEqual([]);
 });
