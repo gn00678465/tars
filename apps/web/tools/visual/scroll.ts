@@ -226,11 +226,18 @@ function trace(name: string, fs: Frame[], j: Judged) {
   const l = j.longest;
   if (l === null) return;
   const t0 = (fs[0] as Frame).t;
-  const rows = fs.slice(Math.max(0, l.from - 3), l.to + 4).map((f, k, a) => {
-    const dt = k === 0 ? "" : ` +${round(f.t - (a[k - 1] as Frame).t)}`;
-    return `    t=${round(f.t - t0)}${dt} 離底 ${round(f.gap)} 高 ${f.h}`;
-  });
-  console.log(`  ${name}: 最長一段的前後各 3 格\n${rows.join("\n")}`);
+  // Its start and its end, 3 frames each side: a long run is told in 14 lines, not all of it.
+  const at = (from: number, to: number) =>
+    fs.slice(Math.max(0, from), Math.min(fs.length, to)).map((f) => {
+      const i = fs.indexOf(f);
+      const dt = i === 0 ? "" : ` +${round(f.t - (fs[i - 1] as Frame).t)}`;
+      return `    t=${round(f.t - t0)}${dt} 離底 ${round(f.gap)} 高 ${f.h}`;
+    });
+  const rows =
+    l.to - l.from <= 6
+      ? at(l.from - 3, l.to + 4)
+      : [...at(l.from - 3, l.from + 4), "    …", ...at(l.to - 3, l.to + 4)];
+  console.log(`  ${name}: 最長一段的開頭與結尾，前後各 3 格\n${rows.join("\n")}`);
 }
 
 /** Checks a window held; on failure its frames go to the log and .visual/scroll/traces.json. */
@@ -551,6 +558,12 @@ async function toolOpened(width: keyof typeof WIDTHS) {
     .locator('.tool-step:has-text("nas-log") [data-slot=code-block-code]')
     .nth(1)
     .evaluate((e) => e.textContent?.split("\n").length ?? 0);
+  // In the thread a step opens at once (app.css). Its 200 ms height slid the end up to 126 px
+  // for 117–150 ms, which AWAY_MS lets by: this holds the choice itself.
+  const slide = await page
+    .locator('.tool-step:has-text("nas-log") [data-slot=trace-collapsible-content]')
+    .evaluate((e) => getComputedStyle(e).transitionDuration);
+  check(slide === "0s", `${where} 對話串裡的工具列展開不做高度動畫：transition-duration ${slide}`);
   const oj = judge(opening.fs);
   const rj = judge(rest.fs);
   checkHeld(
