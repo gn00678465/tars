@@ -1,11 +1,11 @@
 // A double press on one approval card must decide that card only (p4_review.md 5, 6). The scene
 // "別的對話的待核准卡" gets a second card from another conversation, so the pinned dock holds two
 // waiting; then the first card's approve (and, in another page, deny) button takes a double
-// click at the desktop's width, and two taps at the phone's, 0, 60, 150 and 300 ms apart, and a
-// focused deny button takes Enter twice. After a decision the focus goes to the second card,
+// click at the desktop's width, and two taps at the phone's, 0, 60, 150, 300, 700 and 900 ms
+// apart, and a focused deny button takes Enter twice. After a decision the focus goes to the second card,
 // whose buttons the browser scrolls to where the first's were: that is what a layout-free test
 // cannot show. The fake local end never answers, so each decision sent stays sent; the count of
-// approval.decide it got must be one, for the first card. Then, 700 ms on, the second card's
+// approval.decide it got must be one, for the first card. Then, 1000 ms on, the second card's
 // decision is sent: the press held back took nothing with it.
 //   node tools/visual/decide.ts
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/decide/.
@@ -36,7 +36,7 @@ const WIDTHS = [
   { name: "phone", viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
 ] as const;
 type Press = "approve" | "deny";
-const GAPS = [0, 60, 150, 300];
+const GAPS = [0, 60, 150, 300, 700, 900];
 
 const sent = (page: Page) =>
   page.evaluate(() =>
@@ -120,12 +120,12 @@ for (const w of WIDTHS)
       const name = `${w.name} ${press} ×2, ${gap} ms`;
       result(name, await sent(page), [`${decision}@${FIRST}`]);
       await page.screenshot({ path: join(shots, `${w.name}-${press}-${gap}.png`) });
-      // 700 ms after the first, the second card's own press is sent. A second card already
+      // 1000 ms after the first, the second card's own press is sent. A second card already
       // decided by the double press has no button to press: that run has failed above.
-      await page.clock.runFor(700);
+      await page.clock.runFor(1_000);
       if (await button(page, 1, press).isEnabled()) {
         await button(page, 1, press).click();
-        result(`${name}, then the second card at 700 ms`, await sent(page), [
+        result(`${name}, then the second card at 1000 ms`, await sent(page), [
           `${decision}@${FIRST}`,
           `${decision}@${SECOND}`,
         ]);

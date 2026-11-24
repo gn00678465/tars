@@ -95,7 +95,7 @@ describe.each(["pinned", "thread"] as const)("two cards waiting, %s", (layout) =
     t.unmount();
   });
 
-  test.each([0, 60, 150, 300, 699])(
+  test.each([0, 60, 150, 300, 700, 900, 999])(
     "a double click: the second, %i ms on, lands on the other card and is not sent",
     async (gap) => {
       const t = await twoCards(layout);
@@ -119,12 +119,12 @@ describe.each(["pinned", "thread"] as const)("two cards waiting, %s", (layout) =
     t.unmount();
   });
 
-  test("the press held back is not lost: 700 ms on, the other card's decision is sent", async () => {
+  test("the press held back is not lost: 1000 ms on, the other card's decision is sent", async () => {
     const t = await twoCards(layout);
     await t.press(0, "approve");
     await act(async () => t.h.advance(100));
     await t.press(1, "approve");
-    await act(async () => t.h.advance(600));
+    await act(async () => t.h.advance(900));
     await t.press(1, "approve");
     expect(t.decisions()).toEqual(["approved@approval-1", "approved@approval-2"]);
     t.unmount();

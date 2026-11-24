@@ -87,8 +87,11 @@ const TOAST_MS = 2_600;
 /** How long 已封存 · 復原 stays: longer than a toast, so a thumb on a phone is not too late. */
 const ARCHIVE_TOAST_MS = 8_000;
 
-/** How long after one card's decision another card's is held back: past a double click's gap. */
-export const OTHER_CARD_MS = 700;
+/**
+ * How long after one card's decision another card's is held back: past the longest double click
+ * Windows allows (about 900 ms), and too soon to have read the other card.
+ */
+export const OTHER_CARD_MS = 1_000;
 
 export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // A reload comes back where the tab was (kept.ts): the conversation is opened after the hello,
