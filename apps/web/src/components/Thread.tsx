@@ -408,11 +408,7 @@ function TurnEnd({
   if (compacting)
     return (
       <MessageScrollerItem className="turn-status" role="status">
-        <span className="status-glyph" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </span>
+        <span className="tars-sprite wheel" aria-hidden="true" />
         <span>壓縮中…</span>
       </MessageScrollerItem>
     );
@@ -420,17 +416,11 @@ function TurnEnd({
   if (turn.state === "started")
     return (
       <MessageScrollerItem className="turn-status" role="status">
-        {turn.phase === "thinking" ? (
-          <span className="tars-sprite wheel" aria-hidden="true" />
-        ) : turn.phase === "waiting_approval" ? (
-          <span className="tars-sprite idle" aria-hidden="true" />
-        ) : (
-          <span className="status-glyph" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </span>
-        )}
+        {/* Waiting for the owner: TARS stands; every phase that is working: TARS rolls. */}
+        <span
+          className={turn.phase === "waiting_approval" ? "tars-sprite idle" : "tars-sprite wheel"}
+          aria-hidden="true"
+        />
         <span>{(turn.phase === undefined ? undefined : PHASE[turn.phase]) ?? "回覆中…"}</span>
       </MessageScrollerItem>
     );
