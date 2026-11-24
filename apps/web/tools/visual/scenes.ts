@@ -289,7 +289,77 @@ const FORM: WireItem[] = [
   },
 ];
 
+/**
+ * M4-P3b: a tool step per result the local end ends one with, a long output, and one still
+ * running in the turn under way (its line says 執行腳本).
+ */
+const RESULTS = [
+  "done",
+  "failed",
+  "denied",
+  "expired",
+  "cancelled",
+  "skipped",
+  "refused",
+  "interrupted",
+] as const;
+const TOOLS: WireItem[] = [
+  { ...at(1, "t1"), kind: "user", text: "把每種結果都跑一次", truncated: false },
+  ...RESULTS.flatMap((status, i): WireItem[] => [
+    {
+      ...at(2 + i * 2, "t1"),
+      kind: "tool_call",
+      callId: `call-r${i}`,
+      name: "tars",
+      input: JSON.stringify({ argv: ["script", "run", `demo-${status}`] }),
+      truncated: false,
+    },
+    {
+      ...at(3 + i * 2, "t1"),
+      kind: "tool_result",
+      callId: `call-r${i}`,
+      status,
+      ...(status === "refused" ? { refusal: "changed" } : {}),
+      ...(status === "done" || status === "failed" ? { exit: status === "done" ? 0 : 2 } : {}),
+      text: status === "failed" ? "error: <target> 不存在\n**沒有寫入**" : "",
+      truncated: false,
+      ...(status === "done" || status === "failed" ? { durationMs: 1_250 + i * 100 } : {}),
+    },
+  ]),
+  {
+    ...at(20, "t1"),
+    kind: "tool_call",
+    callId: "call-long",
+    name: "tars",
+    input: JSON.stringify({ argv: ["script", "run", "nas-log", "--tail", "40"] }),
+    truncated: false,
+  },
+  {
+    ...at(21, "t1"),
+    kind: "tool_result",
+    callId: "call-long",
+    status: "done",
+    exit: 0,
+    text: Array.from(
+      { length: 40 },
+      (_, i) =>
+        `2026-11-23 03:${String(i).padStart(2, "0")} rsync photos/2026-11/IMG_${1000 + i}.heic`,
+    ).join("\n"),
+    truncated: false,
+    durationMs: 3_100,
+  },
+  {
+    ...at(22, "turn-9"),
+    kind: "tool_call",
+    callId: "call-now",
+    name: "tars",
+    input: JSON.stringify({ argv: ["script", "run", "nas-backup"] }),
+    truncated: false,
+  },
+];
+
 const items: Record<string, WireItem[]> = {
+  "c-tools": TOOLS,
   "c-form": FORM,
   "c-backup": BACKUP,
   "c-ledger": ERRORS,
@@ -574,6 +644,33 @@ export const SCENES: Scene[] = [
     // The page is open already; a press on it in the list draws it again.
     steps: [{ click: 'button:has-text("個人知識庫")' }, { click: ".wiki-cite-pill:visible" }],
     phone: [{ click: 'button:has-text("個人知識庫")' }, { click: ".wiki-cite-pill:visible" }],
+  },
+  {
+    // M4-P3b. Only this scene lists the conversation. The long output is opened in full; the
+    // last step still runs, and the turn's line says 執行腳本 (TARS rolls, still under the
+    // reduced motion run.ts asks for).
+    name: "工具列：每種結果、執行中、長輸出展開",
+    relay: online,
+    answers: answers({
+      convs: [conv("c-tools", "工具結果", "claude-sonnet-5-5", 0.1 * HOUR), ...CONVS],
+      running: { conv: "c-tools", phase: "running_script" },
+    }),
+    ...both(
+      "工具結果",
+      { click: '.tool-step:has-text("nas-log") .tool-step-summary' },
+      { click: '.tool-step:has-text("nas-log") button:has-text("展開其餘")' },
+    ),
+  },
+  {
+    name: "工具列：失敗的一列展開（純文字輸出）",
+    data: 21,
+    relay: online,
+    answers: answers({}),
+    ...both(
+      "工具結果",
+      { click: '.tool-step:has-text("demo-failed") .tool-step-summary' },
+      { top: true },
+    ),
   },
   // M4-P3a, for tools/visual/scroll.ts only: a long conversation whose reply streams in, with
   // older groups to load; and one of 200 groups, for how long it takes to draw.

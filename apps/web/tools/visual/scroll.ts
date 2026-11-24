@@ -23,7 +23,7 @@ import { parseArgs } from "node:util";
 import { type Browser, chromium, type Page } from "playwright-core";
 import { WIDTHS } from "./overlays.ts";
 import { buildTree, COLLECT, serve, type Violation, zodProbe } from "./page.ts";
-import { approval, SCENES } from "./scenes.ts";
+import { approval, SCENES, STREAM_TURN } from "./scenes.ts";
 
 const { values: args } = parseArgs({
   options: {
@@ -361,6 +361,89 @@ async function streaming(width: keyof typeof WIDTHS) {
   await second.context.close();
 }
 
+/**
+ * M4-P3b: while the reply streams, a tool step comes and is opened (by its key: Enter on the
+ * focused line), then its long output in full. Trace opens by height over 200 ms; the thread
+ * stays at the end through it, and a drag up after it is still not taken back.
+ */
+async function toolOpened(width: keyof typeof WIDTHS) {
+  const { context, page } = await opened(browser, width, head.url, STREAM);
+  const where = width === "desktop" ? "桌面" : "手機";
+  await page.waitForSelector(".thread .streaming");
+  await page.waitForTimeout(500);
+  const push = (p: unknown) =>
+    page.evaluate((p) => (globalThis as { visualPush?: (m: unknown) => void }).visualPush?.(p), p);
+  const item = (i: object) => ({ kind: "item", conv: "c-stream", p: { item: i } });
+  await push(
+    item({
+      seq: 503,
+      turn: STREAM_TURN,
+      kind: "tool_call",
+      callId: "call-open",
+      name: "tars",
+      input: JSON.stringify({ argv: ["script", "run", "nas-log"] }),
+      truncated: false,
+    }),
+  );
+  await push(
+    item({
+      seq: 504,
+      turn: STREAM_TURN,
+      kind: "tool_result",
+      callId: "call-open",
+      status: "done",
+      exit: 0,
+      text: Array.from({ length: 60 }, (_, i) => `rsync IMG_${1000 + i}.heic`).join("\n"),
+      truncated: false,
+      durationMs: 900,
+    }),
+  );
+  const line = page.locator('.tool-step:has-text("nas-log") .tool-step-summary');
+  await line.waitFor();
+  await page.waitForTimeout(300);
+  const before = await gap(page);
+  // Two windows: the line opening (Trace's 200 ms height), then the rest of the output at once.
+  let watching = follow(page, 1_200);
+  await line.focus();
+  await page.keyboard.press("Enter");
+  const opening = await watching;
+  watching = follow(page, 1_200);
+  await page.locator('.tool-step:has-text("nas-log") button:has-text("展開其餘")').click();
+  const rest = await watching;
+  const expanded = await line.getAttribute("aria-expanded");
+  const lines = await page
+    .locator('.tool-step:has-text("nas-log") [data-slot=code-block-code]')
+    .nth(1)
+    .evaluate((e) => e.textContent?.split("\n").length ?? 0);
+  const told = (w: Awaited<ReturnType<typeof follow>>) =>
+    `${w.frames} 格長高 ${w.grew} px，離底最大 ${round(w.max)} px，超過 ${END_PX} px 最長連續 ${w.longest} 格，往上跳 ${w.up} 次，結束時離底 ${round(w.end)} px`;
+  const held = (w: Awaited<ReturnType<typeof follow>>) =>
+    w.end <= END_PX && w.longest <= 3 && w.up === 0;
+  check(
+    expanded === "true" && before <= END_PX && held(opening),
+    `${where} 串流中來了工具列，按 Enter 展開（aria-expanded=${expanded}）：${told(opening)}`,
+  );
+  check(lines === 60 && held(rest), `${where} 再按展開其餘（共 ${lines} 行）：${told(rest)}`);
+  await page.screenshot({ path: join(dir, `${width}-tool-open.png`) });
+  await page.waitForTimeout(500);
+  let drags = 0;
+  let off = 0;
+  while (drags < 3 && off < 50) {
+    await up(page, width, 200);
+    drags += 1;
+    off = await gap(page);
+  }
+  const left = await top(page);
+  await page.waitForTimeout(2_000);
+  const after = await top(page);
+  check(
+    off >= 50 && Math.abs(after - left) <= 1,
+    `${where} 工具列展開後往上拖 200 px（${drags} 次），離底 ${round(off)} px：2 秒後 scrollTop ${round(left)} → ${round(after)}`,
+  );
+  await violations(page, where);
+  await context.close();
+}
+
 /** Up to the top, loads the older groups, and how far the row being read moved. */
 async function older(
   page: Page,
@@ -432,6 +515,7 @@ const widths = (["desktop", "phone"] as const).filter(
 for (const width of widths) {
   try {
     await streaming(width);
+    await toolOpened(width);
     await compacted(width);
   } catch (e) {
     check(false, `${width}: ${(e as Error).message.split("\n")[0]}`);
