@@ -25,10 +25,16 @@
   color-scheme: dark;
 
   /* Typography */
+  /* PingFang first, so an Apple device draws with it and fetches no font; then Noto Sans TC as
+   * installed, then the same font served here (main.tsx), whose unicode-range slices download
+   * only for the characters drawn. The code font ends with the same three: Chinese in a code
+   * block takes them, not the system's fallback, and an Apple device still fetches nothing. */
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei",
-    sans-serif;
-  --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+    ui-sans-serif, system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Noto Sans TC Variable",
+    "Microsoft JhengHei", sans-serif;
+  --font-mono:
+    ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace, "PingFang TC",
+    "Noto Sans TC", "Noto Sans TC Variable";
 
   /* Solid Glass Dark Tokens */
   --background: oklch(0.155 0.005 250);

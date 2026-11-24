@@ -7,6 +7,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
+import { assetsInlineLimit } from "./headers.ts";
 
 /**
  * Under this much JS a first visit loads, gzipped: main's 232,977 bytes at M4-P3b (8de1362) plus
@@ -32,6 +33,7 @@ const out = mkdtempSync(join(tmpdir(), "tars-web-bundle-"));
 let html = "";
 const js = new Map<string, string>();
 const css = new Map<string, string>();
+const fonts: string[] = [];
 
 beforeAll(async () => {
   // Vitest sets NODE_ENV to test, which would build React's development code.
@@ -44,7 +46,7 @@ beforeAll(async () => {
     logLevel: "silent",
     plugins: [react(), tailwindcss()],
     resolve: { alias: { "@": join(import.meta.dirname, "src") } },
-    build: { outDir: out, emptyOutDir: true },
+    build: { outDir: out, emptyOutDir: true, assetsInlineLimit },
   }).finally(() => {
     process.env.NODE_ENV = env;
   });
@@ -55,6 +57,7 @@ beforeAll(async () => {
       [".css", css],
     ] as const)
       if (f.endsWith(ext)) map.set(`/assets/${f}`, readFileSync(join(out, "assets", f), "utf8"));
+  fonts.push(...readdirSync(join(out, "assets")).filter((f) => f.endsWith(".woff2")));
 }, 120_000);
 
 afterAll(() => rmSync(out, { recursive: true, force: true }));
@@ -144,4 +147,14 @@ test("a chunk A2UI shares with the first load holds neither A2UI nor its zod 3",
     expect(code.includes(ZOD3), `${src} has zod 3; ${list}`).toBe(false);
     expect(code.includes(A2UI), `${src} has A2UI; ${list}`).toBe(false);
   }
+});
+
+test("Noto Sans TC is 108 font files under /assets/, none inlined, nothing from another host", () => {
+  const styles = [...css.values()].join("\n");
+  const urls = [...styles.matchAll(/url\(([^)]+\.woff2)\)/g)].map((m) => m[1] as string);
+  expect(fonts.length).toBe(108);
+  expect(urls.sort()).toEqual(fonts.map((f) => `/assets/${f}`).sort());
+  expect(styles).not.toContain("data:font");
+  expect(styles).not.toMatch(/https?:\/\//);
+  expect(styles).toMatch(/font-family:"?Noto Sans TC Variable/);
 });

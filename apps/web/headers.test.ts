@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expect, test } from "vite-plus/test";
-import { headersFile, headersPlugin } from "./headers.ts";
+import { assetsInlineLimit, headersFile, headersPlugin } from "./headers.ts";
 
 test("connect-src has 'self' and wss:// with the host given", () => {
   const file = headersFile("app.example.test");
@@ -15,6 +15,22 @@ test("manifest-src 'self' for the PWA manifest; nothing inline is allowed", () =
   const file = headersFile("app.example.test");
   expect(file).toContain("manifest-src 'self'");
   expect(file).not.toContain("unsafe-inline");
+});
+
+test("font-src 'self' for the served fonts, and no other host or wildcard", () => {
+  // The policy alone: the file's first line is the path pattern /*.
+  const csp = /Content-Security-Policy: (.+)/.exec(headersFile("app.example.test"))?.[1] ?? "";
+  expect(csp.split("; ")).toContain("font-src 'self'");
+  expect(csp.split("; ")).toContain("default-src 'none'");
+  expect(csp).not.toContain("unsafe-inline");
+  expect(csp).not.toContain("https://");
+  expect(csp).not.toContain("*");
+  expect(csp).not.toMatch(/font-src[^;]*data:/);
+});
+
+test("a font is never inlined; other assets keep Vite's limit", () => {
+  expect(assetsInlineLimit("/x/noto-sans-tc-101-wght-normal.woff2")).toBe(false);
+  expect(assetsInlineLimit("/x/tars-sprite-idle.svg")).toBeUndefined();
 });
 
 test.each([

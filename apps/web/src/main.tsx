@@ -2,6 +2,7 @@ import { CSPProvider } from "@base-ui/react/csp-provider";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { browserSocket } from "./socket.ts";
+import "@fontsource-variable/noto-sans-tc/wght.css";
 import "./index.css";
 import "./styles.css";
 import "./app.css";

@@ -7,7 +7,7 @@ import { extname, join, normalize } from "node:path";
 import react from "@vitejs/plugin-react";
 import type { Page } from "playwright-core";
 import { build, type Plugin } from "vite-plus";
-import { headersFile } from "../../headers.ts";
+import { assetsInlineLimit, headersFile } from "../../headers.ts";
 
 /** The scene page's local end goes before main.tsx; the app itself is the tree's own. */
 const scenePage = (): Plugin => ({
@@ -38,7 +38,8 @@ export async function buildTree(root: string, dir: string, scenesToo: boolean) {
     logLevel: "warn",
     plugins: [react(), ...tailwind, ...(scenesToo ? [scenePage()] : [])],
     resolve: { alias: { "@": join(root, "src") } },
-    build: { outDir: dir, emptyOutDir: true },
+    // A base tree before the fonts has no .woff2: the option changes nothing there.
+    build: { outDir: dir, emptyOutDir: true, assetsInlineLimit },
   });
 }
 
@@ -49,6 +50,7 @@ const TYPES: Record<string, string> = {
   ".css": "text/css",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".woff2": "font/woff2",
   ".webmanifest": "application/manifest+json",
 };
 

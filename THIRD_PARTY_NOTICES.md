@@ -139,3 +139,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Noto Sans TC（思源黑體）
+
+- 位置：不複製進 repo。npm 套件 `@fontsource-variable/noto-sans-tc` 5.3.1（`apps/web/package.json`，完整性雜湊在 `bun.lock`），網頁建置時把字體檔輸出到 `dist/client/assets/`，由網站自己提供。
+- 來源：https://github.com/fontsource/font-files/tree/main/fonts/variable/noto-sans-tc （Google Fonts 的 Noto Sans TC 可變字體，字體版本 v40）
+- 授權：SIL Open Font License 1.1。全文在套件的 `LICENSE`，也在 https://openfontlicense.org/open-font-license-official-text/ 。
