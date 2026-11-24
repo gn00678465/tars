@@ -676,7 +676,7 @@ th[aria-sort="descending"] .md-sort-mark::after {
   width: 20px;
   height: 20px;
 }
-.pull-indicator[data-pull="busy"] .pull-mark {
+.pull-indicator:is([data-pull="pulling"], [data-pull="ready"], [data-pull="busy"]) .pull-mark {
   visibility: visible;
 }
 .pull-indicator .pull-spin svg {

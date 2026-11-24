@@ -112,7 +112,7 @@ test("let go past the rest: the page settles at it with 重新整理中… and t
   expect(shown(root)).toEqual(["busy", "重新整理中…"]);
 });
 
-test("one box in every state: the spinner's place is kept, so the text does not move", async () => {
+test("one box in every state: the spinner turns from the first pull on, so the text does not move", async () => {
   const { root, at } = await page();
   const kids = () => [...(bar(root)?.children ?? [])].map((c) => c.className);
   drag(at("msg"), 40, true);
@@ -121,8 +121,8 @@ test("one box in every state: the spinner's place is kept, so the text does not 
   const ready = kids();
   touch(at("msg"), "touchend", [], [{ y: 100 + PULL_PX }]);
   expect([pulling, ready, kids()]).toEqual([
-    ["pull-mark", "pull-text"],
-    ["pull-mark", "pull-text"],
+    ["pull-mark pull-spin", "pull-text"],
+    ["pull-mark pull-spin", "pull-text"],
     ["pull-mark pull-spin", "pull-text"],
   ]);
 });
