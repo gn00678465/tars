@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { PROTOCOL_VERSION, skillInvocationText } from "@tars/protocol";
+import { PROTOCOL_VERSION, parseClient, skillInvocationText } from "@tars/protocol";
 import { act } from "react";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
@@ -1345,11 +1345,11 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     expect(banner.textContent).toContain("新對話第一則請求以全價計費");
     await act(async () => button(banner, "最後 3 回合").click());
     await send("繼續");
-    expect(submitted()?.p).toMatchObject({
-      model: { provider: "anthropic", id: "model-b" },
-      from: "conv-1",
-      keepLast: 3,
-    });
+    expect(submitted()?.p).toMatchObject({ from: "conv-1", keepLast: 3 });
+    // Exactly the ref, not the sheet's whole model: toMatchObject let a label and a window through,
+    // and the local end refused the message as bad_message.
+    expect(submitted()?.p.model).toStrictEqual({ provider: "anthropic", id: "model-b" });
+    expect(parseClient(JSON.stringify(submitted())).ok).toBe(true);
     expect(submitted()?.conv).toBeUndefined();
     const requestId = String(submitted()?.p.requestId);
     await act(async () =>

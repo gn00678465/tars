@@ -64,7 +64,10 @@ export function ModelSheet(props: {
   const [choice, setChoice] = useState<ModelRef | undefined>(() => {
     const start =
       props.models.find((m) => same(m, props.picked)) ?? props.models.find((m) => m.isDefault);
-    return start !== undefined && usable(start) ? start : props.models.find(usable);
+    const pick = start !== undefined && usable(start) ? start : props.models.find(usable);
+    // Only the ref: turn.submit's model is a strictObject, and a whole WireModel (label, window…)
+    // makes the local end answer bad_message when the owner confirms the model already picked.
+    return pick === undefined ? undefined : { provider: pick.provider, id: pick.id };
   });
   const chosen = props.models.find((m) => same(m, choice));
   const providers = [...new Set(props.models.map((m) => m.provider))];
