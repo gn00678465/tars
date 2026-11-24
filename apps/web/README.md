@@ -297,6 +297,7 @@ node tools/visual/pull.ts
   - 「下拉重新整理」「放開重新整理」「重新整理中…」三種狀態下，指示盒與文字的位置和高度都相同，文字只佔一行。
   - 截圖：`pull-half.png`（拉到一半）、`pull-ready.png`（過門檻）、`pull-released.png`（放開後）。
   - 知識庫的頁面拉 140 px 放開，也重新載入。
+  - 重新載入後還在同一個對話（`src/kept.ts` 存在 sessionStorage 的 `tars.page`）；知識庫的頁面重新載入後，等 `wiki.status` 回來，回到知識庫的同一頁。
   - `tools/visual/overlays.ts` 的每種浮層開著時拉 140 px，都不重新載入。手機寬度和桌面寬度各測一次；桌面寬度也用觸控，模擬 iPad。同時確認 Base UI 在 `#root` 加了 `data-base-ui-inert`，下拉的判斷就是讀這個標記。
   - 下拉中來了核准卡：`role=alert` 的公告和指示列的 `role=status` 都在無障礙樹裡。
 - 桌面寬度：滑鼠拖曳與滾輪不出現指示列，也不重新載入。
