@@ -18,5 +18,11 @@ export default defineConfig({
   fmt: { ignorePatterns: [...generated, "src/vendor/**"] },
   lint: { ignorePatterns: generated, options: { typeAware: true, typeCheck: true } },
   // .visual/ holds the base tree that tools/visual extracts, tests and all.
-  test: { exclude: ["**/node_modules/**", ".visual/**"], setupFiles: ["src/test-setup.ts"] },
+  test: {
+    exclude: ["**/node_modules/**", ".visual/**"],
+    setupFiles: ["src/test-setup.ts"],
+    // After-hooks in the order written, the setup's first: it unmounts the roots a test left
+    // (render.ts) while their portals are still in the body a file's own afterEach then empties.
+    sequence: { hooks: "list" },
+  },
 });
