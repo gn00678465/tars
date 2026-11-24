@@ -322,6 +322,28 @@ node tools/visual/composer.ts
 - 只記錄、不判定：選單蓋住對話串核准卡的鈕；手機上釘選的卡比螢幕高時，選單跑出畫面上緣。main 也一樣，這是選單與釘選卡的位置問題，不屬於輸入框。
 - CSP 違規與頁面錯誤的判斷和 `csp.ts` 相同。截圖在 `.visual/composer/`。需要 Chromium，不在 `bun run check` 裡。
 
+### 核准卡
+
+改了 `ApprovalCard.tsx`、它的樣式，或 `ui/button.tsx` 之後跑：
+
+```
+cd apps/web
+node tools/visual/approval.ts
+```
+
+核准卡決定腳本能不能執行。這支只數頁面真的送給假本機端的 `approval.decide`，不看畫面上寫什麼。桌面寬度（滑鼠、鍵盤）與手機寬度（觸控）各查：
+
+- 新的卡出現時，焦點在拒絕鈕，不在核准鈕。Tab 從拒絕到核准，Shift+Tab 回到拒絕。
+- 焦點在卡的文字上時按 y、n、a、d、Enter、Space，送出的決定是 0 個。
+- 寫外部的卡：核准鈕寫「確認核准寫外部」，顏色是警告色；影響範圍標「寫外部（高風險）」；任意主機（*）也是警告標籤。
+- 卡比螢幕高時，拒絕與核准鈕都捲得到，中心點按到的是按鈕自己。
+- 核准鈕停用時（決定送出中、離線），是原生 `disabled`，沒有 `aria-disabled`，也拿不到焦點。試過滑鼠點、觸控點、Enter、Space、程式送的 click，這張卡送出的決定都不增加。
+  - 決定送出後，App 會把焦點移到下一張卡的拒絕鈕，這時按 Enter 會拒絕那一張。所以只數這張卡自己的決定。
+- 手機上捲到拒絕鈕、觸控點一下：剛好送出一個 `denied`。
+- 已核准（另一台裝置）、已拒絕、已過期、已取消：每張卡等待時有 2 顆鈕，決定後是 0 顆。卡要一張一張推：在別處決定的卡，頁面只留最近幾張。
+
+CSP 違規與頁面錯誤的判斷和 `csp.ts` 相同。截圖在 `.visual/approval/`。需要 Chromium，不在 `bun run check` 裡。
+
 ### 對話串的捲動
 
 改了對話串的捲動（`src/components/ui/message-scroller.tsx`、`App.tsx` 的 `MessageScroller*`）、對話串的列或 `tools/visual/fake.ts` 之後跑：
