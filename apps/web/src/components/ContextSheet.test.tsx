@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { afterEach, expect, test } from "vite-plus/test";
-import { button, render } from "../render.ts";
+import { button, render, unmountAll } from "../render.ts";
 import { ContextRing, ContextSheet } from "./ContextSheet.tsx";
 
 afterEach(() => {
@@ -19,7 +19,7 @@ const context = {
 
 test("E1: the ring turns at the local end's warn and stop lines", async () => {
   const tone = async (used: number) => {
-    document.body.innerHTML = "";
+    unmountAll();
     const { root } = await render(
       <ContextRing
         context={{ ...context, contextUsed: used }}
@@ -60,11 +60,11 @@ test("E2, E3: no cache figure or compaction yet, auto off; a blocked or too long
   ]);
   await act(async () => button(root, "立即壓縮").click());
   expect(asked).toEqual([undefined]);
-  document.body.innerHTML = "";
+  unmountAll();
   await sheet("回合進行中");
   expect(button(document.body, "立即壓縮").disabled).toBe(true);
   expect(document.body.querySelector(".composer-disabled-reason")?.textContent).toBe("回合進行中");
-  document.body.innerHTML = "";
+  unmountAll();
   await sheet(undefined, "字".repeat(501));
   expect(button(document.body, "立即壓縮").disabled).toBe(true);
   expect(document.body.querySelector(".composer-disabled-reason")?.textContent).toBe(
@@ -74,7 +74,7 @@ test("E2, E3: no cache figure or compaction yet, auto off; a blocked or too long
 
 test("the bar says the share used, at the ring's tone, and caps at 100", async () => {
   const bar = async (used: number) => {
-    document.body.innerHTML = "";
+    unmountAll();
     await render(
       <ContextSheet
         context={{ ...context, contextUsed: used }}

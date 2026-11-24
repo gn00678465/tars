@@ -3,7 +3,19 @@ import { createRoot, type Root } from "react-dom/client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-/** Renders into a fresh element in the document; the test removes it with unmount. */
+/**
+ * Every root render made and not yet unmounted. test-setup.ts unmounts them after each test: a
+ * root left mounted can schedule work (Base UI's Collapsible a few ms after it opens) that React
+ * runs after the file's jsdom is gone, a "window is not defined" outside any test.
+ */
+const mounted = new Set<() => void>();
+
+/** Unmounts every root a test left; test-setup.ts runs it after each test. */
+export function unmountAll() {
+  for (const unmount of mounted) unmount();
+}
+
+/** Renders into a fresh element in the document; the test may remove it with unmount. */
 export async function render(el: ReactElement): Promise<{
   root: HTMLElement;
   unmount: () => void;
@@ -16,14 +28,13 @@ export async function render(el: ReactElement): Promise<{
     r = createRoot(root);
     r.render(el);
   });
-  return {
-    root,
-    rerender: (next) => act(async () => r?.render(next)),
-    unmount: () => {
-      act(() => r?.unmount());
-      root.remove();
-    },
+  const unmount = () => {
+    if (!mounted.delete(unmount)) return;
+    act(() => r?.unmount());
+    root.remove();
   };
+  mounted.add(unmount);
+  return { root, rerender: (next) => act(async () => r?.render(next)), unmount };
 }
 
 export const buttons = (root: HTMLElement) => [...root.querySelectorAll("button")];
