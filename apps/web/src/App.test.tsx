@@ -400,6 +400,32 @@ describe("the sidebar and the open conversation", () => {
     unmount();
   });
 
+  test("P4: no single key on the page decides a waiting card (App, not only the card)", async () => {
+    const { h, root, unmount } = await listed();
+    await act(async () => entry(root, "對話 1").click());
+    await act(async () => h.last().receive(request("conv-2")));
+    const card = pinnedCard(root) as HTMLElement;
+    expect(buttons(card).map((b) => [b.textContent, b.disabled])).toContainEqual([
+      "確認核准寫外部",
+      false,
+    ]);
+    const keys = ["y", "Y", "n", "N", "a", "A", "d", "D", "Enter", " "];
+    await act(async () => {
+      for (const at of [document, document.body, root, card])
+        for (const key of keys)
+          for (const type of ["keydown", "keypress", "keyup"])
+            at.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true, cancelable: true }));
+      for (const key of keys) window.dispatchEvent(new KeyboardEvent("keydown", { key }));
+    });
+    expect(
+      h
+        .last()
+        .messages()
+        .filter((m) => m.kind === "approval.decide"),
+    ).toEqual([]);
+    unmount();
+  });
+
   describe("approved, then the connection dropped before the ack", () => {
     const APPROVE = "確認核准寫外部";
     const pick = (root: HTMLElement, text: string) =>

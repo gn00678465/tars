@@ -407,3 +407,198 @@ test("B1, B2: a decided card says when and on which device", async () => {
     "已在別處決定 · 另一台裝置已拒絕",
   );
 });
+
+// M4-P4: the card's safety, kept by Base UI's Button as by the plain buttons before it.
+
+/** Every way a pointer, a finger or a key can press a button, in the order a browser sends. */
+async function pressEveryWay(b: HTMLElement) {
+  await act(async () => {
+    for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"])
+      b.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
+    b.click();
+    b.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, cancelable: true }));
+    b.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true }));
+    for (const key of ["Enter", " "])
+      for (const type of ["keydown", "keypress", "keyup"])
+        b.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true, cancelable: true }));
+  });
+}
+
+test.each<[string, Partial<Card>, string | undefined]>([
+  ["deciding", { deciding: "m1" }, undefined],
+  ["acked, waiting for the result", { acked: true }, undefined],
+  ["offline", {}, "離線，無法送出決定"],
+])("P4: %s, off is the native disabled; no press of any kind decides", async (_, over, blocked) => {
+  const decided: string[] = [];
+  const { root } = await render(
+    <ApprovalCard
+      card={card(over)}
+      localNow={undefined}
+      {...(blocked === undefined ? {} : { blocked })}
+      onDecide={(d) => decided.push(d)}
+    />,
+  );
+  const both = [...root.querySelectorAll<HTMLButtonElement>(".approval-actions button")];
+  expect(both).toHaveLength(2);
+  for (const b of both) {
+    expect([b.disabled, b.hasAttribute("disabled"), b.getAttribute("aria-disabled")]).toEqual([
+      true,
+      true,
+      null,
+    ]);
+    b.focus();
+    await pressEveryWay(b);
+  }
+  expect(decided).toEqual([]);
+});
+
+test("P4: after a drop, the other decision is off to every press; the same one still goes", async () => {
+  const decided: string[] = [];
+  const { root } = await render(
+    <ApprovalCard
+      card={card({ lost: true, choice: "denied" })}
+      localNow={undefined}
+      onDecide={(d) => decided.push(d)}
+    />,
+  );
+  await pressEveryWay(button(root, APPROVE));
+  expect(decided).toEqual([]);
+  await act(async () => button(root, DENY).click());
+  expect(decided).toEqual(["denied"]);
+});
+
+test("P4: no single key decides: not on the card, its text, the page or a focused button", async () => {
+  const decided: string[] = [];
+  const { root } = await render(
+    <ApprovalCard card={card()} localNow={undefined} onDecide={(d) => decided.push(d)} />,
+  );
+  const card_ = root.querySelector(".approval-card") as HTMLElement;
+  const places = [
+    card_,
+    root.querySelector("ol.argv code") as HTMLElement,
+    root.querySelector(".approval-grid") as HTMLElement,
+    document.body,
+  ];
+  const keys = ["Enter", " ", "y", "Y", "n", "N", "a", "A", "d", "D", "Escape", "Delete"];
+  await act(async () => {
+    for (const at of places)
+      for (const key of keys)
+        for (const type of ["keydown", "keypress", "keyup"])
+          at.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true, cancelable: true }));
+    for (const key of keys)
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  });
+  // Letters on the buttons themselves are not a way either; only Enter and Space press one.
+  await act(async () => {
+    for (const b of root.querySelectorAll("button"))
+      for (const key of ["y", "n", "a", "d"])
+        b.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
+  expect(decided).toEqual([]);
+});
+
+test("P4: the order in the page is deny, then approve; the focus is deny's, never approve's", async () => {
+  const { root } = await render(
+    <ApprovalCard card={card()} localNow={undefined} onDecide={() => undefined} />,
+  );
+  const [first, second] = [...root.querySelectorAll<HTMLButtonElement>(".approval-actions button")];
+  expect(first?.compareDocumentPosition(second as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect([first?.className.includes("sg-btn-danger"), first?.textContent]).toEqual([true, DENY]);
+  expect(document.activeElement).toBe(first);
+  expect(document.activeElement).not.toBe(second);
+});
+
+test("P4: named again (focus false, then true), the card gives deny the focus; typing keeps it", async () => {
+  const view = (focus: boolean) => (
+    <ApprovalCard card={card()} focus={focus} localNow={undefined} onDecide={() => undefined} />
+  );
+  const { root, rerender } = await render(view(false));
+  const elsewhere = document.body.appendChild(document.createElement("button"));
+  elsewhere.focus();
+  await rerender(view(true));
+  expect(document.activeElement).toBe(button(root, DENY));
+  // The owner typing in the composer: a card named then does not take the focus from it.
+  await rerender(view(false));
+  const form = document.body.appendChild(document.createElement("form"));
+  form.className = "composer";
+  const area = form.appendChild(document.createElement("textarea"));
+  area.focus();
+  await rerender(view(true));
+  expect(document.activeElement).toBe(area);
+});
+
+test("P4: writing outside: the approve button says so in the warning colour", async () => {
+  const { root } = await render(
+    <ApprovalCard card={card()} localNow={undefined} onDecide={() => undefined} />,
+  );
+  const approve = button(root, APPROVE);
+  expect(approve.className).toContain("sg-btn-warn-action");
+  expect(approve.className).not.toContain("sg-btn-approve");
+});
+
+test.each<[string, NonNullable<Card["resolved"]>]>([
+  ["approved", { state: "approved", here: true }],
+  ["denied", { state: "denied", here: true }],
+  ["expired", { state: "expired", here: true }],
+  ["cancelled", { state: "cancelled", here: true }],
+  ["decided on another device", { state: "approved", here: false, source: "other_device" }],
+])("P4: %s: no button, only the result", async (_, resolved) => {
+  const decided: string[] = [];
+  const { root } = await render(
+    <ApprovalCard
+      card={card({ resolved })}
+      localNow={undefined}
+      onDecide={(d) => decided.push(d)}
+    />,
+  );
+  expect(root.querySelectorAll("button")).toHaveLength(0);
+  expect(root.querySelector(".approval-actions")).toBeNull();
+  expect(root.querySelector(".approval-foot .compaction-meta")?.textContent).not.toBe("");
+  expect(decided).toEqual([]);
+});
+
+test("P4: the buttons are Base UI's (data-slot), drawn by the prototype's classes, no style", async () => {
+  const jump: string[] = [];
+  const { root } = await render(
+    <ApprovalCard
+      card={card()}
+      localNow={undefined}
+      onDecide={() => undefined}
+      origin={{
+        title: "別的對話",
+        detail: "c-1",
+        onJump: () => jump.push("jump"),
+        onDismiss: () => jump.push("close"),
+      }}
+    />,
+  );
+  const all = [...root.querySelectorAll<HTMLButtonElement>("button")];
+  expect(all.map((b) => [b.textContent, b.dataset["slot"], b.type])).toEqual([
+    ["跳至該對話", "button", "button"],
+    ["關閉", "button", "button"],
+    [DENY, "button", "button"],
+    [APPROVE, "button", "button"],
+  ]);
+  for (const b of all) expect(b.className).toMatch(/(^| )sg-btn( |$)/);
+  expect(root.querySelector("[style], style")).toBeNull();
+  await act(async () => button(root, "跳至該對話").click());
+  await act(async () => button(root, "關閉").click());
+  expect(jump).toEqual(["jump", "close"]);
+});
+
+test("P4: after a drop with approve chosen, deny is off to every press; approve still goes", async () => {
+  const decided: string[] = [];
+  const { root } = await render(
+    <ApprovalCard
+      card={card({ lost: true, choice: "approved" })}
+      localNow={undefined}
+      onDecide={(d) => decided.push(d)}
+    />,
+  );
+  const deny = button(root, DENY);
+  expect([deny.disabled, deny.getAttribute("aria-disabled")]).toEqual([true, null]);
+  await pressEveryWay(deny);
+  expect(decided).toEqual([]);
+  await act(async () => button(root, APPROVE).click());
+  expect(decided).toEqual(["approved"]);
+});

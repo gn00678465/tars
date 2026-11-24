@@ -946,3 +946,33 @@ th[aria-sort="descending"] .md-sort-mark::after {
     transition: none;
   }
 }
+
+/*
+ * shadcn's Button drawn as the prototype's .sg-btn (M4-P4, the approval card): its base classes
+ * set what .sg-btn leaves alone. Back to the prototype: no fixed height (.sg-btn-sm is 28px) nor
+ * text-sm's line height, no press nudge (Tailwind 4's active:translate-y-px sets the translate
+ * property, not transform), the background under the border, shrinking as a plain button. Its
+ * outline-none and a ring under .sg-btn's shadow left no focus mark at all: the base layer's
+ * outline again.
+ * styles.css's disabled look skips [data-slot]; here it is, at full opacity, with its cursor.
+ */
+.sg-btn[data-slot="button"] {
+  height: auto;
+  line-height: inherit;
+  flex-shrink: 1;
+  background-clip: border-box;
+  user-select: auto;
+  translate: none;
+}
+.sg-btn[data-slot="button"]:focus-visible {
+  outline: 2px solid var(--focus-line);
+  outline-offset: 2px;
+}
+.sg-btn[data-slot="button"]:disabled {
+  background: var(--surface-sub);
+  border-color: var(--glass-edge);
+  color: var(--subtle-foreground);
+  box-shadow: none;
+  opacity: 1;
+  pointer-events: auto;
+}

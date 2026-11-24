@@ -260,7 +260,7 @@ export const approval = (conv: string, callId?: string): WireApproval => ({
   script: "nas-backup",
   version: "3",
   summary: "把 NAS 同步到外接硬碟，刪除 30 天前的快照",
-  effects: "write_external",
+  effects: "external-write",
   domains: ["nas.example.com", "*"],
   secret: "nas-backup-key",
   argv: ["--target", "/mnt/backup", "--keep", "30"],

@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type { WireApproval } from "@tars/protocol";
 import type { Card } from "../state.ts";
 import { Icon } from "./Icon.tsx";
+import { Button } from "./ui/button.tsx";
 import { clock, leftText, shortId, timeText } from "./time.ts";
 
 const EFFECTS: Record<string, string> = {
@@ -165,13 +166,13 @@ export function ApprovalCard(props: {
             <span className="approval-origin-detail mono">{props.origin.detail}</span>
           </div>
           <div className="approval-origin-actions">
-            <button className="sg-btn sg-btn-sm" type="button" onClick={props.origin.onJump}>
+            <Button variant="ghost" className="sg-btn sg-btn-sm" onClick={props.origin.onJump}>
               跳至該對話
-            </button>
+            </Button>
             {props.origin.onDismiss === undefined ? null : (
-              <button className="sg-btn sg-btn-sm" type="button" onClick={props.origin.onDismiss}>
+              <Button variant="ghost" className="sg-btn sg-btn-sm" onClick={props.origin.onDismiss}>
                 關閉
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -255,19 +256,20 @@ export function ApprovalCard(props: {
         </dl>
         {resolved === undefined ? (
           <div className="approval-actions">
-            {/* Deny comes first and has the focus; there are no keyboard shortcuts (A14). */}
-            <button
+            {/* Deny comes first and has the focus; there are no keyboard shortcuts (A14). Base UI's
+                Button, not composite nor focusableWhenDisabled: off is the native disabled. */}
+            <Button
+              variant="ghost"
               className="sg-btn sg-btn-danger"
-              type="button"
               ref={deny}
               disabled={off || only === "approved"}
               onClick={() => props.onDecide("denied")}
             >
               拒絕（預設）
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
               className={external ? "sg-btn sg-btn-warn-action" : "sg-btn sg-btn-approve"}
-              type="button"
               disabled={off || only === "denied"}
               onClick={() => props.onDecide("approved")}
             >
@@ -278,7 +280,7 @@ export function ApprovalCard(props: {
                   : external
                     ? "確認核准寫外部"
                     : "核准執行"}
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="compaction-meta">{OUTCOME[resolved.state] ?? ""}</div>
