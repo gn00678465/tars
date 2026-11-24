@@ -87,6 +87,9 @@ const TOAST_MS = 2_600;
 /** How long 已封存 · 復原 stays: longer than a toast, so a thumb on a phone is not too late. */
 const ARCHIVE_TOAST_MS = 8_000;
 
+/** How long after one card's decision another card's is held back: past a double click's gap. */
+export const OTHER_CARD_MS = 700;
+
 export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // A reload comes back where the tab was (kept.ts): the conversation is opened after the hello,
   // the knowledge base once the local end says it has one.
@@ -149,6 +152,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [sheet, setSheet] = useState(false);
   // What the desktop's context and model sheets drop from.
   const ring = useRef<HTMLButtonElement>(null);
+  /** The last decision sent: which card, and when on `now`. */
+  const lastDecided = useRef<{ approvalId: string; at: number }>(undefined);
   const modelButton = useRef<HTMLButtonElement>(null);
   /** The context sheet, with what to keep already typed after /compact when it was too long. */
   const [contextSheet, setContextSheet] = useState<{ focus: string } | undefined>(undefined);
@@ -302,11 +307,25 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     dispatch({ type: "archive_sent", conv, undo, ...(id === undefined ? {} : { id }) });
   };
   const decide = (card: (typeof state.cards)[number], decision: "approved" | "denied") => {
+    // A decision sent moves the focus to the next card's deny button, and the browser scrolls that
+    // card's buttons to where the first card's were: the second click of a double click, or a
+    // second Enter, would decide a card not yet read (p4_review.md 5, 6). So, soon after one
+    // card's decision, another card's is not sent, and nothing about it changes. The same card's
+    // is: a decision refused may go again at once.
+    const at = now();
+    const last = lastDecided.current;
+    if (
+      last !== undefined &&
+      last.approvalId !== card.approval.approvalId &&
+      at - last.at < OTHER_CARD_MS
+    )
+      return;
     const id = socket.send("approval.decide", {
       approvalId: card.approval.approvalId,
       decision,
       hash: card.approval.hash,
     });
+    if (id !== undefined) lastDecided.current = { approvalId: card.approval.approvalId, at };
     dispatch(
       id === undefined
         ? { type: "decide_failed", approvalId: card.approval.approvalId }
