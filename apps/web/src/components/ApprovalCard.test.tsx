@@ -585,3 +585,20 @@ test("P4: the buttons are Base UI's (data-slot), drawn by the prototype's classe
   await act(async () => button(root, "關閉").click());
   expect(jump).toEqual(["jump", "close"]);
 });
+
+test("P4: after a drop with approve chosen, deny is off to every press; approve still goes", async () => {
+  const decided: string[] = [];
+  const { root } = await render(
+    <ApprovalCard
+      card={card({ lost: true, choice: "approved" })}
+      localNow={undefined}
+      onDecide={(d) => decided.push(d)}
+    />,
+  );
+  const deny = button(root, DENY);
+  expect([deny.disabled, deny.getAttribute("aria-disabled")]).toEqual([true, null]);
+  await pressEveryWay(deny);
+  expect(decided).toEqual([]);
+  await act(async () => button(root, APPROVE).click());
+  expect(decided).toEqual(["approved"]);
+});

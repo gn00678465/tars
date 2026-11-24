@@ -340,9 +340,108 @@ async function resolved(width: Width, where: string) {
   await context.close();
 }
 
+/** What looks() read from main's build at 36e9d74, before the cards had shadcn's Button. */
+const MAIN = {
+  desktop: {
+    height: [40, 40],
+    translate: ["none", "none", "none"],
+    moved: [0, 0],
+    focus: "solid 2px oklch(0.78 0.12 235 / 0.88) 2px visible=true",
+    off: "oklch(0.175 0.006 250) oklch(0.73 0.007 250) opacity 1 not-allowed",
+  },
+  phone: {
+    height: [46, 46],
+    translate: ["none", "none", "none"],
+    moved: [0, 0],
+    focus: "solid 2px oklch(0.78 0.12 235 / 0.88) 2px visible=true",
+    off: "oklch(0.175 0.006 250) oklch(0.73 0.007 250) opacity 1 not-allowed",
+  },
+};
+
+/**
+ * The two buttons' look, read from the page: the prototype's, as main draws them with plain
+ * buttons (MAIN, read by this function from main's build). Height, no move when pressed, the
+ * keyboard's focus ring, the off look; and deny before approve as the eye reads them.
+ */
+async function looks(width: Width, where: string) {
+  const { context, page } = await opened(width);
+  const read = (selector: string) =>
+    page
+      .locator(selector)
+      .first()
+      .evaluate((b) => {
+        const c = getComputedStyle(b);
+        const r = b.getBoundingClientRect();
+        return {
+          height: Math.round(r.height),
+          top: r.top,
+          left: r.left,
+          right: r.right,
+          bottom: r.bottom,
+          translate: c.translate,
+          transform: c.transform,
+          outline: `${c.outlineStyle} ${c.outlineWidth} ${c.outlineColor} ${c.outlineOffset}`,
+          background: c.backgroundColor,
+          color: c.color,
+          opacity: c.opacity,
+          cursor: c.cursor,
+        };
+      });
+  const deny = await read(DENY);
+  const approve = await read(APPROVE);
+  // Pressed: held down on deny, let go elsewhere so nothing is decided.
+  await page.locator(DENY).first().scrollIntoViewIfNeeded();
+  const at = await reach(page, DENY);
+  await page.mouse.move(at?.x ?? 0, at?.y ?? 0);
+  await page.mouse.down();
+  await page.waitForTimeout(250);
+  const held = await read(DENY);
+  await page.mouse.move(2, 2);
+  await page.mouse.up();
+  // The keyboard's focus: Tab away and back.
+  await page.locator(DENY).first().focus();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Shift+Tab");
+  const focused = await read(DENY);
+  const visible = await page.evaluate(() => document.activeElement?.matches(":focus-visible"));
+  await push(page, { kind: "relay.status", p: { online: false } });
+  await page.waitForTimeout(300);
+  const off = await read(APPROVE);
+  await page.mouse.move(off.left + 4, off.top + 4);
+  await page.mouse.down();
+  await page.waitForTimeout(250);
+  const offHeld = await read(APPROVE);
+  await page.mouse.move(2, 2);
+  await page.mouse.up();
+  const got = {
+    height: [deny.height, approve.height],
+    translate: [deny.translate, held.translate, offHeld.translate],
+    moved: [held.top - deny.top, offHeld.top - off.top],
+    focus: `${focused.outline} visible=${visible}`,
+    off: `${off.background} ${off.color} opacity ${off.opacity} ${off.cursor}`,
+  };
+  const want = MAIN[width];
+  check(
+    JSON.stringify(got) === JSON.stringify(want),
+    `${where} 外觀與 main 相同：${JSON.stringify(got)}${JSON.stringify(got) === JSON.stringify(want) ? "" : `，main 是 ${JSON.stringify(want)}`}`,
+  );
+  const sent = await decisions(page);
+  check(sent.length === 0, `${where} 量外觀時沒有送出決定：${JSON.stringify(sent)}`);
+  // Deny first as seen: left of approve on a desktop, above it on a phone.
+  const order =
+    width === "desktop"
+      ? deny.right <= approve.left && Math.abs(deny.top - approve.top) < 1
+      : deny.bottom <= approve.top && Math.abs(deny.left - approve.left) < 1;
+  check(
+    order,
+    `${where} 看到的順序：拒絕 ${Math.round(deny.left)},${Math.round(deny.top)}、核准 ${Math.round(approve.left)},${Math.round(approve.top)}（${width === "desktop" ? "拒絕在左" : "拒絕在上"}）`,
+  );
+  await context.close();
+}
+
 for (const width of ["desktop", "phone"] as const) {
   const where = width === "desktop" ? "桌面" : "手機";
-  for (const run of [focusAndLook, offline, resolved]) {
+  for (const run of [looks, focusAndLook, offline, resolved]) {
     try {
       await run(width, where);
     } catch (e) {
