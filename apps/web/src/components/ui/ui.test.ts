@@ -25,6 +25,7 @@ const ours = [
   "PullIndicator.tsx",
   "NoticeItem.tsx",
   "Thread.tsx",
+  "Composer.tsx",
 ].map((f) => join(dir, "..", f));
 
 /**

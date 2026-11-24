@@ -2,6 +2,12 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { TEXT_BYTES } from "@tars/protocol";
 import { Icon } from "./Icon.tsx";
 import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupText,
+  InputGroupTextarea,
+} from "./ui/input-group.tsx";
+import {
   type Builtin,
   type EffortMenu,
   menuFor,
@@ -205,14 +211,16 @@ export function Composer(props: {
           </div>
         </div>
       )}
-      <div className="composer-box">
+      {/* shadcn's Input Group: the box, the text and the toolbar under it. The prototype's
+          classes draw it (styles.css); a box off is drawn as before, not faded. */}
+      <InputGroup className="composer-box has-disabled:opacity-100">
         <label htmlFor="composer-input" className="sr-only">
           輸入訊息，或以 / 開啟指令
         </label>
-        <textarea
+        <InputGroupTextarea
           id="composer-input"
           ref={input}
-          className="composer-input"
+          className="composer-input disabled:opacity-100"
           rows={2}
           role="combobox"
           aria-label="訊息"
@@ -227,7 +235,9 @@ export function Composer(props: {
           disabled={off}
           onChange={(e) => change(e.target.value)}
           onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing) return;
+            // A key the IME takes, picking a word: Safari's last one, the Enter that ends it,
+            // comes after compositionend with isComposing false and keyCode 229.
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
             if (menu !== undefined) {
               if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                 e.preventDefault();
@@ -248,7 +258,7 @@ export function Composer(props: {
             }
           }}
         />
-        <div className="composer-toolbar">
+        <InputGroupAddon align="block-end" className="composer-toolbar">
           <div className="composer-toolbar-left">
             <button
               ref={slashButton}
@@ -264,9 +274,9 @@ export function Composer(props: {
               <span className="mono">/</span>
               <span>指令</span>
             </button>
-            <span className="composer-hint desktop-only">
+            <InputGroupText className="composer-hint desktop-only">
               Enter 送出 · Shift+Enter 換行 · // 跳脫斜線
-            </span>
+            </InputGroupText>
           </div>
           <div className="composer-toolbar-right">
             {props.setup}
@@ -284,8 +294,8 @@ export function Composer(props: {
               </button>
             )}
           </div>
-        </div>
-      </div>
+        </InputGroupAddon>
+      </InputGroup>
     </form>
   );
 }

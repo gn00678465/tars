@@ -355,3 +355,119 @@ test("C4: a message over TEXT_BYTES (UTF-8) is not sent; the error gives the lim
   await act(async () => button(root, "送出").click());
   expect(sent).toHaveLength(1);
 });
+
+/** A ready composer, typed into and keyed as the owner does; what it sent and said. */
+async function typing(extra: { focus?: number } = {}) {
+  const sent: string[] = [];
+  const drafts: boolean[] = [];
+  const view = (focus?: number) => (
+    <Composer
+      {...(focus === undefined ? {} : { focus })}
+      blocked={undefined}
+      busy={undefined}
+      canAbort={false}
+      error={undefined}
+      skills={[]}
+      onSend={(t) => sent.push(t)}
+      onAbort={() => undefined}
+      onCommand={() => undefined}
+      onDraft={(d) => drafts.push(d)}
+    />
+  );
+  const r = await render(view(extra.focus));
+  const area = r.root.querySelector("textarea") as HTMLTextAreaElement;
+  const type = (value: string) =>
+    act(async () => {
+      // oxlint-disable-next-line typescript/unbound-method
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      set?.call(area, value);
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  const key = (init: KeyboardEventInit) =>
+    act(async () => {
+      area.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
+      );
+    });
+  return { ...r, area, type, key, sent, drafts, view };
+}
+
+// Beautiful UI's prompt bar sends on the Enter that picks an IME word; this one never did.
+test("P3c: Enter while an IME composes sends nothing: isComposing, and Safari's keyCode 229 after compositionend", async () => {
+  const c = await typing();
+  await c.type("ㄋㄧˇ");
+  await act(async () => {
+    c.area.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  });
+  await c.key({ key: "Enter", isComposing: true });
+  expect(c.sent).toEqual([]);
+  await act(async () => {
+    c.area.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "你" }));
+  });
+  await c.type("你");
+  // Safari: the Enter that ended it comes now, not composing, as key 229.
+  await c.key({ key: "Enter", keyCode: 229 });
+  expect(c.sent).toEqual([]);
+  expect(c.area.value).toBe("你");
+  await c.key({ key: "Enter" });
+  expect(c.sent).toEqual(["你"]);
+});
+
+test("P3c: an IME's Enter in the / menu picks nothing", async () => {
+  const c = await typing();
+  await c.type("/");
+  const shown = () => c.root.querySelector("#slash-menu") !== null;
+  expect(shown()).toBe(true);
+  await c.key({ key: "Enter", isComposing: true });
+  await c.key({ key: "Enter", keyCode: 229 });
+  expect([shown(), c.area.value, c.sent]).toEqual([true, "/", []]);
+});
+
+test("P3c: Shift+Enter is a new line, not a send; Enter keeps the focus in the box", async () => {
+  const c = await typing();
+  c.area.focus();
+  await c.type("第一行");
+  await c.key({ key: "Enter", shiftKey: true });
+  expect(c.sent).toEqual([]);
+  await c.type("第一行\n第二行");
+  await c.key({ key: "Enter" });
+  expect(c.sent).toEqual(["第一行\n第二行"]);
+  expect(document.activeElement).toBe(c.area);
+});
+
+test("P3c: each new focus number gives the box the focus; the same one again does not", async () => {
+  const c = await typing({ focus: 0 });
+  const other = document.body.appendChild(document.createElement("button"));
+  other.focus();
+  await c.rerender(c.view(1));
+  expect(document.activeElement).toBe(c.area);
+  other.focus();
+  await c.rerender(c.view(1));
+  expect(document.activeElement).toBe(other);
+});
+
+test("P3c: onDraft says when there is unsent text, and when it went", async () => {
+  const c = await typing();
+  expect(c.drafts).toEqual([false]);
+  await c.type("還沒送");
+  await c.type("還沒送出");
+  await c.key({ key: "Enter" });
+  expect(c.drafts).toEqual([false, true, false]);
+});
+
+test("P3c: shadcn's Input Group: the box, the text that grows with its lines, the toolbar under it; no style", async () => {
+  const c = await typing();
+  const group = c.root.querySelector(".composer-box") as HTMLElement;
+  expect(group.dataset["slot"]).toBe("input-group");
+  expect(c.area.dataset["slot"]).toBe("input-group-control");
+  expect(c.area.parentElement).toBe(group);
+  // Grows with its text up to styles.css's 180px; rows stays for a browser without field-sizing.
+  expect(c.area.className).toContain("field-sizing-content");
+  expect(c.area.getAttribute("rows")).toBe("2");
+  const bar = group.querySelector(".composer-toolbar") as HTMLElement;
+  expect([bar.dataset["slot"], bar.dataset["align"]]).toEqual(["input-group-addon", "block-end"]);
+  expect(c.area.getAttribute("role")).toBe("combobox");
+  expect(c.root.querySelector("[style], style")).toBeNull();
+  await c.type("/");
+  expect(c.root.querySelector("[style], style")).toBeNull();
+});
