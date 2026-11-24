@@ -305,6 +305,23 @@ node tools/visual/pull.ts
 - CSP 違規與頁面錯誤的判斷和 `csp.ts` 相同。截圖在 `.visual/pull/`。需要 Chromium，不在 `bun run check` 裡。
 - iPhone Safari 的橡皮筋效果和 `preventDefault` 怎麼互動，Chromium 測不到，要在手機上試。
 
+### 輸入框
+
+改了 `Composer.tsx`、輸入框的樣式或 `slash.ts` 之後跑：
+
+```
+cd apps/web
+node tools/visual/composer.ts
+```
+
+- 桌面寬度與手機寬度（觸控）各查：
+  - 換行時長高：空白與 2 行一樣高（原型的兩行），4 行多兩行的高度，12 行停在 180 px，之後在框內捲動。靠 Textarea 的 `field-sizing: content`；不支援的瀏覽器（目前包括 Safari）維持兩行，在框內捲動。
+  - 鍵盤：把視窗高度縮成 60% 模擬（Chromium 叫不出真的軟鍵盤）。輸入框與送出鈕要在畫面內，送出鈕中心點按到的是它自己。
+  - 沒有回合在跑時，送出鈕會送出並清空輸入框；自己的回合在跑時，右下只有「停止」，而且按得到。
+  - Slash 選單開著時，選取的那列在最上層；別的對話的卡釘在輸入框上方時，選單不蓋住卡上的鈕，按 Esc 關掉後拒絕鈕按得到。
+- 只記錄、不判定：選單蓋住對話串核准卡的鈕；手機上釘選的卡比螢幕高時，選單跑出畫面上緣。main 也一樣，這是選單與釘選卡的位置問題，不屬於輸入框。
+- CSP 違規與頁面錯誤的判斷和 `csp.ts` 相同。截圖在 `.visual/composer/`。需要 Chromium，不在 `bun run check` 裡。
+
 ### 對話串的捲動
 
 改了對話串的捲動（`src/components/ui/message-scroller.tsx`、`App.tsx` 的 `MessageScroller*`）、對話串的列或 `tools/visual/fake.ts` 之後跑：

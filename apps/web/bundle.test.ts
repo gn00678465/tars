@@ -10,9 +10,9 @@ import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 import { assetsInlineLimit } from "./headers.ts";
 
 /**
- * Under this much JS a first visit loads, gzipped: main's 232,977 bytes at M4-P3b (8de1362) plus
- * 8 kB for Trace, Code Block, Item and the lucide icons in place of the drawn ones; P3b measured
- * 237,640. M4-P3a's step was main's 224,351 (82467ac) plus 9 kB for the Message Scroller.
+ * Under this much JS a first visit loads, gzipped: main's 237,680 bytes at M4-P3c (ae89269) plus
+ * 4 kB for the composer on Input Group and Textarea; P3c measured 240,440. M4-P3b's step was
+ * main's 232,977 (8de1362) plus 8 kB for Trace, Code Block, Item and lucide. M4-P3a's step was main's 224,351 (82467ac) plus 9 kB for the Message Scroller.
  * main's count has the screen readout in the status sheet, about 1 kB: it is for finding the
  * iPhone's bottom gap, and goes when that is found.
  * P2 put Base UI's overlays on the first load (main was 138,115): the design's estimate was about
@@ -21,7 +21,7 @@ import { assetsInlineLimit } from "./headers.ts";
  * Measured by this file's own build, which leaves out the Cloudflare and _headers plugins: they
  * do not change the page's chunks.
  */
-const FIRST_LOAD_LIMIT = 232_977 + 8_000;
+const FIRST_LOAD_LIMIT = 237_680 + 4_000;
 
 /** Strings only zod 3 has, and only zod 4 has (research/a2ui_proto_result.md, Zod 4 (4)). */
 const ZOD3 = "Unrecognized key(s) in object";
