@@ -90,13 +90,7 @@ export function Icon({ name, size = 14 }: { name: keyof typeof PATHS; size?: num
   );
 }
 
-export function Monolith() {
-  return (
-    <span className="tars-monolith" aria-hidden="true">
-      <span />
-      <span />
-      <span />
-      <span />
-    </span>
-  );
+/** The brand mark: the first frame of the idle sprite, still (app.css `.tars-mark`). */
+export function BrandMark() {
+  return <span className="tars-mark" aria-hidden="true" />;
 }
