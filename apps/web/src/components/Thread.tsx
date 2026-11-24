@@ -13,6 +13,28 @@ import { Bubble, BubbleContent } from "./ui/bubble.tsx";
 import { Marker } from "./ui/marker.tsx";
 import { Message, MessageContent, MessageFooter } from "./ui/message.tsx";
 import { MessageScrollerItem } from "./ui/message-scroller.tsx";
+import { CodeBlock, CodeBlockContent } from "./ui/code-block.tsx";
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from "./ui/trace.tsx";
+import {
+  Ban,
+  Check,
+  CircleMinus,
+  CircleQuestionMark,
+  CircleX,
+  type LucideIcon,
+  ShieldExclamationPoint,
+  SkipForward,
+  TimerOff,
+} from "lucide-react";
 
 const cut = (truncated: boolean) => (truncated ? "（已截斷）" : "");
 const n = (v: number) => v.toLocaleString("en-US");
@@ -32,19 +54,24 @@ const PHASE: Record<string, string> = {
 };
 
 /**
- * ui_spec 5.3: a tool step's results, as the prototype's tags, keyed by the local end's
- * ToolCallEndState. A refused one says why when the local end does (REFUSAL); an older local end
- * says only that it did not run.
+ * ui_spec 5.3: a tool step's results, keyed by the local end's ToolCallEndState: the words, an
+ * icon of their own, and a tone. Trace's `error` is for 失敗 alone: one denied, cancelled or
+ * refused did not fail. The words always show; colour is never the only sign (Trace's
+ * accessibility notes). A refused one says why when the local end does (REFUSAL); an older local
+ * end says only that it did not run.
  */
-const RESULT: Record<string, [string, string]> = {
-  done: ["ok", "完成"],
-  failed: ["error", "失敗"],
-  denied: ["error", "已拒絕"],
-  expired: ["error", "已過期"],
-  cancelled: ["", "已取消"],
-  skipped: ["", "已略過"],
-  refused: ["warn", "沒有執行"],
-  interrupted: ["warn", "中斷（結果不明）"],
+const RESULT: Record<
+  string,
+  { text: string; icon: LucideIcon; tone: "ok" | "error" | "warn" | "" }
+> = {
+  done: { text: "完成", icon: Check, tone: "ok" },
+  failed: { text: "失敗", icon: CircleX, tone: "error" },
+  denied: { text: "已拒絕", icon: Ban, tone: "" },
+  expired: { text: "已過期", icon: TimerOff, tone: "" },
+  cancelled: { text: "已取消", icon: CircleMinus, tone: "" },
+  skipped: { text: "已略過", icon: SkipForward, tone: "" },
+  refused: { text: "沒有執行", icon: ShieldExclamationPoint, tone: "warn" },
+  interrupted: { text: "中斷（結果不明）", icon: CircleQuestionMark, tone: "warn" },
 };
 
 const REFUSAL: Record<string, string> = {
@@ -61,50 +88,67 @@ const OUTPUT_LINES = 20;
 type ToolCall = Extract<WireItem, { kind: "tool_call" }>;
 type ToolResult = Extract<WireItem, { kind: "tool_result" }>;
 
+/**
+ * One tool step as Trace: the line is what ran, on what, its time and its result; opened, the
+ * argv and the output as plain text, never Markdown or HTML (T11). Running, TARS rolls.
+ */
 function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undefined }) {
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState(false);
-  const [tone, plain] =
-    result === undefined ? ["active", "執行中"] : (RESULT[result.status] ?? ["", result.status]);
+  const outcome = result === undefined ? undefined : RESULT[result.status];
+  const plain = result === undefined ? "執行中" : (outcome?.text ?? result.status);
   const label =
     result?.status === "refused" && result.refusal !== undefined
       ? (REFUSAL[result.refusal] ?? plain)
       : plain;
+  const Mark = outcome?.icon ?? CircleQuestionMark;
   // With its time in the summary, the exit code moves into the output (A2); an older local end
   // sends no time, and the code stays where it was.
   const timed = result?.durationMs !== undefined;
   const lines = result === undefined ? [] : result.text.split("\n");
   const shown = full ? lines : lines.slice(0, OUTPUT_LINES);
   return (
-    <div className="tool-step">
-      <button
-        className="tool-step-summary"
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <div className="tool-step-left">
-          <Icon name="terminal" />
-          <span>{result?.status === "refused" ? "已擋下" : call.name}</span>
-          <span className="tool-step-target">{call.input}</span>
-        </div>
-        <div className="tool-step-right">
-          {result?.durationMs !== undefined ? (
-            <span className="mono">{seconds(result.durationMs)}</span>
-          ) : result?.exit === undefined ? null : (
-            <span className="mono">結束碼 {result.exit}</span>
-          )}
-          <span className={`sg-tag ${tone}`}>{label}</span>
-          <span className="tool-step-chevron">
-            <Icon name="chevron" />
-          </span>
-        </div>
-      </button>
-      {open ? (
-        <div className="tool-step-body">
+    <Trace className="tool-step" data-result={result?.status ?? "running"}>
+      <TraceCollapsible open={open} onOpenChange={setOpen}>
+        <TraceCollapsibleTrigger className="tool-step-summary">
+          <TraceLine
+            status={
+              result === undefined ? "running" : result.status === "failed" ? "error" : undefined
+            }
+          >
+            <TraceIcon className={`tool-step-icon ${outcome?.tone ?? ""}`}>
+              {result === undefined ? (
+                <span className="tars-sprite wheel sm" aria-hidden="true" />
+              ) : (
+                <Mark strokeWidth={1.7} />
+              )}
+            </TraceIcon>
+            <TraceTitle>
+              <span className="tool-step-name">
+                {result?.status === "refused" ? "已擋下" : call.name}
+              </span>{" "}
+              <span className="tool-step-target">{call.input}</span>
+            </TraceTitle>
+            <TraceDescription className="tool-step-right">
+              {result?.durationMs !== undefined ? (
+                <span className="mono">{seconds(result.durationMs)} · </span>
+              ) : result?.exit === undefined ? null : (
+                <span className="mono">結束碼 {result.exit} · </span>
+              )}
+              <span className={`tool-step-result ${outcome?.tone ?? ""}`}>{label}</span>
+            </TraceDescription>
+          </TraceLine>
+        </TraceCollapsibleTrigger>
+        {/* The output wraps and never scrolls sideways: Code Block's own tab stop would add two
+            per open step that do nothing (impeccable audit). */}
+        <TraceCollapsibleContent className="tool-step-body">
           <div>
             <div className="tool-kv-label">指令參數{cut(call.truncated)}</div>
-            <pre className="tool-code-box">{call.input}</pre>
+            <CodeBlock size="sm">
+              <CodeBlockContent wrap tabIndex={-1}>
+                {call.input}
+              </CodeBlockContent>
+            </CodeBlock>
           </div>
           {result === undefined ? null : (
             <div>
@@ -112,7 +156,11 @@ function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undef
                 執行輸出（純文字，共 {lines.length} 行）{cut(result.truncated)}
                 {timed && result.exit !== undefined ? ` · 結束碼 ${result.exit}` : ""}
               </div>
-              <pre className="tool-code-box">{shown.join("\n")}</pre>
+              <CodeBlock size="sm">
+                <CodeBlockContent wrap tabIndex={-1}>
+                  {shown.join("\n")}
+                </CodeBlockContent>
+              </CodeBlock>
               {lines.length > OUTPUT_LINES ? (
                 <div className="btn-chip-row">
                   <button className="sg-btn sg-btn-sm" type="button" onClick={() => setFull(!full)}>
@@ -124,9 +172,9 @@ function ToolStep({ call, result }: { call: ToolCall; result: ToolResult | undef
               ) : null}
             </div>
           )}
-        </div>
-      ) : null}
-    </div>
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
+    </Trace>
   );
 }
 
@@ -394,6 +442,29 @@ function UsageLine({ item }: { item: Extract<WireItem, { kind: "usage" }> }) {
  * not start, or ended without the error item the local end writes for a failure, gets the card
  * here; one with its item has the card in the thread already.
  */
+/**
+ * The turn's status line as a Trace line. Trace adds no role: this one is the status, spoken as it
+ * changes. Working, TARS rolls and the words shimmer (not with reduced motion); waiting for the
+ * owner, TARS stands, still.
+ */
+function TurnLine({ working, text }: { working: boolean; text: string }) {
+  return (
+    <MessageScrollerItem className="turn-status" role="status">
+      <Trace>
+        <TraceLine {...(working ? { status: "running" as const } : {})}>
+          <TraceIcon className="turn-status-icon">
+            <span
+              className={working ? "tars-sprite wheel" : "tars-sprite idle"}
+              aria-hidden="true"
+            />
+          </TraceIcon>
+          <TraceTitle>{text}</TraceTitle>
+        </TraceLine>
+      </Trace>
+    </MessageScrollerItem>
+  );
+}
+
 function TurnEnd({
   turn,
   items,
@@ -405,24 +476,14 @@ function TurnEnd({
   provider: string | undefined;
   compacting: boolean;
 }) {
-  if (compacting)
-    return (
-      <MessageScrollerItem className="turn-status" role="status">
-        <span className="tars-sprite wheel" aria-hidden="true" />
-        <span>壓縮中…</span>
-      </MessageScrollerItem>
-    );
+  if (compacting) return <TurnLine working text="壓縮中…" />;
   if (turn === undefined) return null;
   if (turn.state === "started")
     return (
-      <MessageScrollerItem className="turn-status" role="status">
-        {/* Waiting for the owner: TARS stands; every phase that is working: TARS rolls. */}
-        <span
-          className={turn.phase === "waiting_approval" ? "tars-sprite idle" : "tars-sprite wheel"}
-          aria-hidden="true"
-        />
-        <span>{(turn.phase === undefined ? undefined : PHASE[turn.phase]) ?? "回覆中…"}</span>
-      </MessageScrollerItem>
+      <TurnLine
+        working={turn.phase !== "waiting_approval"}
+        text={(turn.phase === undefined ? undefined : PHASE[turn.phase]) ?? "回覆中…"}
+      />
     );
   const failed = turn.state === "failed" || turn.state === "interrupted";
   if (turn.state !== "rejected" && !failed) return null;

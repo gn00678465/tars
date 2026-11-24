@@ -1,7 +1,8 @@
 // The thread's scrolling in Chromium (M4-P3a), on scenes.ts's measuring scenes, at desktop width
 // with a mouse and at phone width with touch (CDP gestures: Playwright's touchscreen only taps).
 // While a reply streams in, a delta every 50–100 ms (fake.ts):
-//   (a) at the end it is followed: the gap to the end, every frame for 3 s;
+//   (a) at the end it is followed: the gap to the end, every frame for 3 s, judged by the frames'
+//       own time (no run over 24 px past 150 ms, at the end when it stops, never up by itself);
 //   (b) scrolled up 200 px mid-stream it is left there for 2 s, 捲到最新訊息 shows inside the
 //       thread and clear of the composer, and takes it back to following; and so when scrolled up
 //       with no wheel, touch or key (scrollTop -= 300, as the scrollbar or find in page do);
@@ -17,13 +18,13 @@
 //   node tools/visual/scroll.ts [--base <ref>]
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/scroll/.
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { type Browser, chromium, type Page } from "playwright-core";
 import { WIDTHS } from "./overlays.ts";
 import { buildTree, COLLECT, serve, type Violation, zodProbe } from "./page.ts";
-import { approval, SCENES } from "./scenes.ts";
+import { approval, SCENES, STREAM_TURN } from "./scenes.ts";
 
 const { values: args } = parseArgs({
   options: {
@@ -83,46 +84,185 @@ async function opened(
   return { context, page };
 }
 
-/** Every frame for `ms`: the gap to the end, and how often the thread went up by itself. */
-const follow = (page: Page, ms: number) =>
-  page.evaluate(async (ms) => {
-    const el = document.querySelector(".thread-scroll") as HTMLElement;
-    const gaps: number[] = [];
-    let up = 0;
-    let last = el.scrollTop;
-    const from = el.scrollHeight;
-    const until = performance.now() + ms;
-    await new Promise<void>((done) => {
-      const frame = () => {
-        gaps.push(el.scrollHeight - el.scrollTop - el.clientHeight);
-        if (el.scrollTop < last - 0.5) up += 1;
-        last = el.scrollTop;
-        if (performance.now() < until) requestAnimationFrame(frame);
-        else done();
+/**
+ * Away from the end, as a reader sees it: a run of frames over END_PX that lasts longer than
+ * this, by the frames' own clock. The scroller scrolls on the frame after a row grows (its
+ * ResizeObserver), so one frame, 17 ms at 60 fps, is away by design; a busy machine stretches
+ * that frame to 30–70 ms. A run past 150 ms is the end slipping, which a reader sees.
+ * Until M4-P3b the bar was a count of frames (2, then 3) and a single read in px after a press:
+ * both hit the frame behind now and then, by luck (README, scroll.ts).
+ */
+const AWAY_MS = 150;
+/** After 捲到最新訊息, the end within this (a smooth scroll), then followed. */
+const BACK_MS = 1_000;
+
+/** A frame: when (performance.now), the gap to the end, scrollHeight, scrollTop. */
+type Frame = { t: number; gap: number; h: number; top: number };
+
+/**
+ * Every frame for `ms`, read on requestAnimationFrame so a busy machine only spaces the samples,
+ * never skips one; and when `mark` (a selector) is first clicked, by the same clock.
+ */
+const frames = (page: Page, ms: number, mark?: string) =>
+  page.evaluate(
+    async ([ms, mark]) => {
+      const el = document.querySelector(".thread-scroll") as HTMLElement;
+      const out: { t: number; gap: number; h: number; top: number }[] = [];
+      let marked: number | null = null;
+      const on = () => {
+        marked ??= performance.now();
       };
-      requestAnimationFrame(frame);
-    });
-    // The longest run of frames away from the end: one frame is the scroller's (it scrolls on
-    // the frame after a row grows, from its ResizeObserver).
-    let run = 0;
-    let longest = 0;
-    for (const g of gaps) {
-      run = g > 24 ? run + 1 : 0;
-      longest = Math.max(longest, run);
+      const target = mark === undefined ? null : document.querySelector(mark);
+      target?.addEventListener("click", on, { capture: true });
+      const until = performance.now() + ms;
+      await new Promise<void>((done) => {
+        const frame = (t: number) => {
+          out.push({
+            t,
+            gap: el.scrollHeight - el.scrollTop - el.clientHeight,
+            h: el.scrollHeight,
+            top: el.scrollTop,
+          });
+          if (performance.now() < until) requestAnimationFrame(frame);
+          else done();
+        };
+        requestAnimationFrame(frame);
+      });
+      target?.removeEventListener("click", on, { capture: true });
+      return { fs: out, marked };
+    },
+    [ms, mark] as const,
+  );
+
+/** A run of frames over END_PX: from its first frame to the first frame back (or the last). */
+type Run = {
+  from: number;
+  to: number;
+  ms: number;
+  n: number;
+  max: number;
+  grewAt: boolean;
+  dtMax: number;
+};
+
+/** What a window of frames says, by time. */
+function judge(fs: Frame[]) {
+  const runs: Run[] = [];
+  let open: Run | null = null;
+  let up = 0;
+  for (let i = 0; i < fs.length; i++) {
+    const f = fs[i] as Frame;
+    const prev = fs[i - 1];
+    if (prev !== undefined && f.top < prev.top - 0.5) up += 1;
+    const dt = prev === undefined ? 0 : f.t - prev.t;
+    if (f.gap > END_PX) {
+      if (open === null)
+        open = {
+          from: i,
+          to: i,
+          ms: 0,
+          n: 0,
+          max: 0,
+          grewAt: prev !== undefined && f.h > prev.h,
+          dtMax: 0,
+        };
+      open.to = i;
+      open.n += 1;
+      open.max = Math.max(open.max, f.gap);
+      open.dtMax = Math.max(open.dtMax, dt);
+    } else if (open !== null) {
+      open.ms = f.t - (fs[open.from] as Frame).t;
+      open.dtMax = Math.max(open.dtMax, dt);
+      runs.push(open);
+      open = null;
     }
-    const sorted = [...gaps].sort((a, b) => a - b);
-    return {
-      frames: gaps.length,
-      max: sorted.at(-1) ?? 0,
-      p95: sorted[Math.floor(sorted.length * 0.95)] ?? 0,
-      away: gaps.filter((g) => g > 24).length,
-      longest,
-      up,
-      grew: el.scrollHeight - from,
-      // At the end in one of the last three frames: the last may be the scroller's frame behind.
-      end: Math.min(...gaps.slice(-3)),
-    };
-  }, ms);
+  }
+  const last = fs.at(-1);
+  if (open !== null && last !== undefined) {
+    open.ms = last.t - (fs[open.from] as Frame).t;
+    runs.push(open);
+  }
+  const dts = fs
+    .slice(1)
+    .map((f, i) => f.t - (fs[i] as Frame).t)
+    .sort((a, b) => a - b);
+  const longest = runs.reduce<Run | null>((a, r) => (a === null || r.ms > a.ms ? r : a), null);
+  const tail = last === undefined ? [] : fs.filter((f) => f.t >= last.t - AWAY_MS);
+  const gaps = fs.map((f) => f.gap).sort((a, b) => a - b);
+  return {
+    frames: fs.length,
+    grew: last === undefined ? 0 : last.h - (fs[0] as Frame).h,
+    max: gaps.at(-1) ?? 0,
+    p95: gaps[Math.floor(gaps.length * 0.95)] ?? 0,
+    runs,
+    longest,
+    up,
+    // At the end: a frame within the last AWAY_MS at it (the last may be the frame behind).
+    end: tail.length === 0 ? Infinity : Math.min(...tail.map((f) => f.gap)),
+    dtMedian: dts[Math.floor(dts.length / 2)] ?? 0,
+    dtMax: dts.at(-1) ?? 0,
+    slow: dts.filter((d) => d > 25).length,
+  };
+}
+type Judged = ReturnType<typeof judge>;
+
+/** Held at the end: no run away past AWAY_MS, at the end when it stops, never up by itself. */
+const held = (j: Judged) => (j.longest?.ms ?? 0) <= AWAY_MS && j.end <= END_PX && j.up === 0;
+
+/** In words, with where the longest run came from: a row grown, the machine's frames, or not. */
+const told = (j: Judged) => {
+  const l = j.longest;
+  const cause =
+    l === null
+      ? ""
+      : `（${l.grewAt ? "那格內容剛長高" : "內容沒長高"}，格距最長 ${round(l.dtMax)} ms）`;
+  return `${j.frames} 格（格距中位 ${round(j.dtMedian)} ms、最長 ${round(j.dtMax)} ms、超過 25 ms 的 ${j.slow} 格），內容長高 ${j.grew} px；離底最大 ${round(j.max)} px、p95 ${round(j.p95)} px；離底超過 ${END_PX} px ${j.runs.length} 段，最長 ${l === null ? 0 : `${round(l.ms)} ms／${l.n} 格`}${cause}；往上跳 ${j.up} 次；結束時離底 ${round(j.end)} px`;
+};
+
+/** Failures keep their frames: printed around the longest run, and the whole window on disk. */
+const traces: Record<string, Frame[]> = {};
+function trace(name: string, fs: Frame[], j: Judged) {
+  traces[name] = fs;
+  const l = j.longest;
+  if (l === null) return;
+  const t0 = (fs[0] as Frame).t;
+  // Its start and its end, 3 frames each side: a long run is told in 14 lines, not all of it.
+  const at = (from: number, to: number) =>
+    fs.slice(Math.max(0, from), Math.min(fs.length, to)).map((f) => {
+      const i = fs.indexOf(f);
+      const dt = i === 0 ? "" : ` +${round(f.t - (fs[i - 1] as Frame).t)}`;
+      return `    t=${round(f.t - t0)}${dt} 離底 ${round(f.gap)} 高 ${f.h}`;
+    });
+  const rows =
+    l.to - l.from <= 6
+      ? at(l.from - 3, l.to + 4)
+      : [...at(l.from - 3, l.from + 4), "    …", ...at(l.to - 3, l.to + 4)];
+  console.log(`  ${name}: 最長一段的開頭與結尾，前後各 3 格\n${rows.join("\n")}`);
+}
+
+/** Checks a window held; on failure its frames go to the log and .visual/scroll/traces.json. */
+function checkHeld(ok: boolean, name: string, text: string, fs: Frame[], j: Judged) {
+  check(ok, text);
+  if (!ok) trace(name, fs, j);
+}
+
+/**
+ * Presses 捲到最新訊息 and watches from the press: how long until the end (a smooth scroll), then
+ * whether the rest of the window is held.
+ */
+async function pressBack(page: Page, width: keyof typeof WIDTHS) {
+  const watching = frames(page, BACK_MS + 1_500, BUTTON);
+  await press(page, width);
+  const { fs, marked } = await watching;
+  const reached = marked === null ? undefined : fs.find((f) => f.t >= marked && f.gap <= END_PX);
+  const after = reached === undefined ? [] : fs.filter((f) => f.t >= reached.t);
+  return {
+    fs,
+    j: judge(after.length === 0 ? fs : after),
+    pressed: marked !== null,
+    backMs: reached === undefined || marked === null ? Infinity : reached.t - marked,
+  };
+}
 
 const top = (page: Page) => page.locator(".thread-scroll").evaluate((el) => el.scrollTop);
 const gap = (page: Page) =>
@@ -227,10 +367,14 @@ async function streaming(width: keyof typeof WIDTHS) {
   await page.waitForTimeout(500);
 
   // (a)
-  const a = await follow(page, 3_000);
-  check(
-    a.grew > 100 && a.end <= END_PX && a.longest <= 2 && a.up === 0,
-    `${where} (a) 在底部跟隨：3 秒 ${a.frames} 格，內容長高 ${a.grew} px；離底最大 ${round(a.max)} px、p95 ${round(a.p95)} px；超過 ${END_PX} px 的格 ${a.away} 格，最長連續 ${a.longest} 格；自己往上跳 ${a.up} 次；結束時離底 ${round(a.end)} px`,
+  const a = await frames(page, 3_000);
+  const aj = judge(a.fs);
+  checkHeld(
+    aj.grew > 100 && held(aj),
+    `${width} (a)`,
+    `${where} (a) 在底部跟隨 3 秒：${told(aj)}`,
+    a.fs,
+    aj,
   );
   await page.screenshot({ path: join(dir, `${width}-follow.png`) });
   // A screenshot at phone width redraws the page: let the thread settle first.
@@ -268,38 +412,37 @@ async function streaming(width: keyof typeof WIDTHS) {
   );
   await page.screenshot({ path: join(dir, `${width}-up.png`) });
   await page.waitForTimeout(500);
-  await press(page, width);
-  await page.waitForTimeout(800);
-  const back = await gap(page);
-  const again = await follow(page, 1_500);
+  const b = await pressBack(page, width);
   const hidden = (await buttonIs(page, false)).active;
-  check(
-    back <= END_PX && again.longest <= 2 && again.end <= END_PX && hidden === "false",
-    `${where} (b) 按捲到最新訊息：離底 ${round(back)} px，之後 1.5 秒又跟隨（最大 ${round(again.max)} px、最長連續 ${again.longest} 格，結束時離底 ${round(again.end)} px），鈕 data-active=${hidden}`,
+  checkHeld(
+    b.pressed && b.backMs <= BACK_MS && held(b.j) && hidden === "false",
+    `${width} (b) press`,
+    `${where} (b) 按捲到最新訊息：${round(b.backMs)} ms 回到底，之後 ${told(b.j)}；鈕 data-active=${hidden}`,
+    b.fs,
+    b.j,
   );
 
   // (b) with no wheel, touch or key: the scrollbar, find in page, a tap on the status bar.
-  const bar = await page.locator(".thread-scroll").evaluate(async (el) => {
+  // Each frame for 1.2 s after: the reply grows below, so the gap only grows; a frame where it
+  // shrinks is the thread taken back toward the end.
+  await page.locator(".thread-scroll").evaluate((el) => {
     el.scrollTop -= 300;
-    const gaps: number[] = [];
-    for (let i = 0; i < 8; i++) {
-      await new Promise((r) => setTimeout(r, 150));
-      gaps.push(Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
-    }
-    return gaps;
   });
+  const bar = await frames(page, 1_200);
+  const pulled = bar.fs.filter((f, i) => i > 0 && f.gap < (bar.fs[i - 1] as Frame).gap - 1).length;
+  const first = bar.fs[0]?.gap ?? 0;
   const barShown = await buttonIs(page, true);
   check(
-    (bar[0] ?? 0) >= 250 &&
-      bar.every((g, i) => i === 0 || g >= (bar[i - 1] ?? 0)) &&
-      barShown.active === "true",
-    `${where} (b) 串流中 scrollTop -= 300（沒有滾輪、觸控、按鍵）：之後每 150 ms 離底 ${bar.join(", ")} px；捲到最新訊息 data-active=${barShown.active}`,
+    first >= 250 && pulled === 0 && barShown.active === "true",
+    `${where} (b) 串流中 scrollTop -= 300（沒有滾輪、觸控、按鍵）：之後 1.2 秒 ${bar.fs.length} 格，離底 ${round(first)} → ${round(bar.fs.at(-1)?.gap ?? 0)} px，往底部拉回的格 ${pulled} 格；捲到最新訊息 data-active=${barShown.active}`,
   );
-  await press(page, width);
-  await page.waitForTimeout(800);
-  check(
-    (await gap(page)) <= END_PX,
-    `${where} (b) 之後按捲到最新訊息：離底 ${round(await gap(page))} px`,
+  const b2 = await pressBack(page, width);
+  checkHeld(
+    b2.pressed && b2.backMs <= BACK_MS && held(b2.j),
+    `${width} (b) press after scrollTop`,
+    `${where} (b) 之後按捲到最新訊息：${round(b2.backMs)} ms 回到底，之後 ${told(b2.j)}`,
+    b2.fs,
+    b2.j,
   );
 
   // A card while scrolled up.
@@ -359,6 +502,102 @@ async function streaming(width: keyof typeof WIDTHS) {
   await older(second.page, width, "overflow-anchor: none");
   await violations(second.page, where);
   await second.context.close();
+}
+
+/**
+ * M4-P3b: while the reply streams, a tool step comes and is opened (by its key: Enter on the
+ * focused line), then its long output in full. Trace opens by height over 200 ms; the thread
+ * stays at the end through it, and a drag up after it is still not taken back.
+ */
+async function toolOpened(width: keyof typeof WIDTHS) {
+  const { context, page } = await opened(browser, width, head.url, STREAM);
+  const where = width === "desktop" ? "桌面" : "手機";
+  await page.waitForSelector(".thread .streaming");
+  await page.waitForTimeout(500);
+  const push = (p: unknown) =>
+    page.evaluate((p) => (globalThis as { visualPush?: (m: unknown) => void }).visualPush?.(p), p);
+  const item = (i: object) => ({ kind: "item", conv: "c-stream", p: { item: i } });
+  await push(
+    item({
+      seq: 503,
+      turn: STREAM_TURN,
+      kind: "tool_call",
+      callId: "call-open",
+      name: "tars",
+      input: JSON.stringify({ argv: ["script", "run", "nas-log"] }),
+      truncated: false,
+    }),
+  );
+  await push(
+    item({
+      seq: 504,
+      turn: STREAM_TURN,
+      kind: "tool_result",
+      callId: "call-open",
+      status: "done",
+      exit: 0,
+      text: Array.from({ length: 60 }, (_, i) => `rsync IMG_${1000 + i}.heic`).join("\n"),
+      truncated: false,
+      durationMs: 900,
+    }),
+  );
+  const line = page.locator('.tool-step:has-text("nas-log") .tool-step-summary');
+  await line.waitFor();
+  await page.waitForTimeout(300);
+  const before = await gap(page);
+  // Two windows: the line opening, then the rest of the output at once.
+  let watching = frames(page, 1_200);
+  await line.focus();
+  await page.keyboard.press("Enter");
+  const opening = await watching;
+  watching = frames(page, 1_200);
+  await page.locator('.tool-step:has-text("nas-log") button:has-text("展開其餘")').click();
+  const rest = await watching;
+  const expanded = await line.getAttribute("aria-expanded");
+  const lines = await page
+    .locator('.tool-step:has-text("nas-log") [data-slot=code-block-code]')
+    .nth(1)
+    .evaluate((e) => e.textContent?.split("\n").length ?? 0);
+  // In the thread a step opens at once (app.css). Its 200 ms height slid the end up to 126 px
+  // for 117–150 ms, which AWAY_MS lets by: this holds the choice itself.
+  const slide = await page
+    .locator('.tool-step:has-text("nas-log") [data-slot=trace-collapsible-content]')
+    .evaluate((e) => getComputedStyle(e).transitionDuration);
+  check(slide === "0s", `${where} 對話串裡的工具列展開不做高度動畫：transition-duration ${slide}`);
+  const oj = judge(opening.fs);
+  const rj = judge(rest.fs);
+  checkHeld(
+    expanded === "true" && before <= END_PX && held(oj),
+    `${width} tool open`,
+    `${where} 串流中來了工具列，按 Enter 展開（aria-expanded=${expanded}）：${told(oj)}`,
+    opening.fs,
+    oj,
+  );
+  checkHeld(
+    lines === 60 && held(rj),
+    `${width} tool rest`,
+    `${where} 再按展開其餘（共 ${lines} 行）：${told(rj)}`,
+    rest.fs,
+    rj,
+  );
+  await page.screenshot({ path: join(dir, `${width}-tool-open.png`) });
+  await page.waitForTimeout(500);
+  let drags = 0;
+  let off = 0;
+  while (drags < 3 && off < 50) {
+    await up(page, width, 200);
+    drags += 1;
+    off = await gap(page);
+  }
+  const left = await top(page);
+  await page.waitForTimeout(2_000);
+  const after = await top(page);
+  check(
+    off >= 50 && Math.abs(after - left) <= 1,
+    `${where} 工具列展開後往上拖 200 px（${drags} 次），離底 ${round(off)} px：2 秒後 scrollTop ${round(left)} → ${round(after)}`,
+  );
+  await violations(page, where);
+  await context.close();
 }
 
 /** Up to the top, loads the older groups, and how far the row being read moved. */
@@ -432,6 +671,7 @@ const widths = (["desktop", "phone"] as const).filter(
 for (const width of widths) {
   try {
     await streaming(width);
+    await toolOpened(width);
     await compacted(width);
   } catch (e) {
     check(false, `${width}: ${(e as Error).message.split("\n")[0]}`);
@@ -511,6 +751,7 @@ if (!args["no-timing"]) {
   base.server.close();
 }
 
+if (Object.keys(traces).length > 0) writeFileSync(join(dir, "traces.json"), JSON.stringify(traces));
 await browser.close();
 head.server.close();
 console.log(`${results.length} ok, ${failures.length} failed`);

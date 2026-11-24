@@ -23,6 +23,8 @@ const ours = [
   "ConversationList.tsx",
   "wiki/SourceOverlay.tsx",
   "PullIndicator.tsx",
+  "NoticeItem.tsx",
+  "Thread.tsx",
 ].map((f) => join(dir, "..", f));
 
 /**

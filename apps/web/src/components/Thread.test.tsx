@@ -5,7 +5,7 @@ import { afterEach, expect, test } from "vite-plus/test";
 import { render } from "../render.ts";
 import { initial, type State } from "../state.ts";
 import { Thread as Rows } from "./Thread.tsx";
-import { inScroller } from "../testing.ts";
+import { inScroller, noticeTone } from "../testing.ts";
 
 /** The thread's rows are the scroller's (App.tsx). */
 const Thread = (props: Parameters<typeof Rows>[0]) => inScroller(<Rows {...props} />);
@@ -47,7 +47,26 @@ function steps(statuses: readonly (string | undefined)[]): State {
   return { ...initial, connection: "open", conv: "conv-1", items };
 }
 
-test("each end state of a tool call is a tag in Chinese; a refused call reads 已擋下", async () => {
+/** A tool step's line: who, its result in words, the words' tone, Trace's status, its icon. */
+const stepLine = (e: Element) => {
+  const result = e.querySelector(".tool-step-result");
+  const icon = e.querySelector(".tool-step-icon");
+  return [
+    e.querySelector(".tool-step-name")?.textContent,
+    result?.textContent,
+    [...(result?.classList ?? [])].filter((c) => c !== "tool-step-result").join(" "),
+    e.querySelector("[data-slot=trace-line]")?.getAttribute("data-status") ?? null,
+    icon?.querySelector(".tars-sprite")?.className ??
+      icon
+        ?.querySelector("svg")
+        ?.getAttribute("class")
+        ?.match(/lucide-[a-z-]+/)?.[0],
+  ];
+};
+
+// P3b: Trace's error status and the error tone are 失敗's alone (denied and expired were the
+// error tag before: neither failed). Each result has its words and an icon of its own.
+test("each end state of a tool call: its words, its own icon, error for 失敗 alone; a refused call reads 已擋下", async () => {
   const ends = [
     "done",
     "failed",
@@ -59,27 +78,25 @@ test("each end state of a tool call is a tag in Chinese; a refused call reads �
     "interrupted",
   ];
   const { root } = await render(<Thread state={steps([...ends, undefined])} after={() => null} />);
-  const cards = [...root.querySelectorAll(".tool-step")].map((e) => [
-    e.querySelector(".tool-step-left > span")?.textContent,
-    e.querySelector(".sg-tag")?.className,
-    e.querySelector(".sg-tag")?.textContent,
+  const lines = [...root.querySelectorAll(".tool-step")].map(stepLine);
+  expect(lines).toEqual([
+    ["tars", "完成", "ok", null, "lucide-check"],
+    ["tars", "失敗", "error", "error", "lucide-circle-x"],
+    ["tars", "已拒絕", "", null, "lucide-ban"],
+    ["tars", "已過期", "", null, "lucide-timer-off"],
+    ["tars", "已取消", "", null, "lucide-circle-minus"],
+    ["tars", "已略過", "", null, "lucide-skip-forward"],
+    ["已擋下", "沒有執行", "warn", null, "lucide-shield-exclamation-point"],
+    ["tars", "中斷（結果不明）", "warn", null, "lucide-circle-question-mark"],
+    ["tars", "執行中", "", "running", "tars-sprite wheel sm"],
   ]);
-  expect(cards).toEqual([
-    ["tars", "sg-tag ok", "完成"],
-    ["tars", "sg-tag error", "失敗"],
-    ["tars", "sg-tag error", "已拒絕"],
-    ["tars", "sg-tag error", "已過期"],
-    ["tars", "sg-tag ", "已取消"],
-    ["tars", "sg-tag ", "已略過"],
-    ["已擋下", "sg-tag warn", "沒有執行"],
-    ["tars", "sg-tag warn", "中斷（結果不明）"],
-    ["tars", "sg-tag active", "執行中"],
-  ]);
+  expect(new Set(lines.map((l) => l[4])).size).toBe(lines.length);
+  expect(root.querySelectorAll('[data-status="error"]')).toHaveLength(1);
 });
 
 test("a status this page does not know is shown as sent, not dropped", async () => {
   const { root } = await render(<Thread state={steps(["later_status"])} after={() => null} />);
-  expect(root.querySelector(".tool-step .sg-tag")?.textContent).toBe("later_status");
+  expect(root.querySelector(".tool-step .tool-step-result")?.textContent).toBe("later_status");
 });
 
 test("a carried conversation opens with where it came from and that model's label", async () => {
@@ -193,7 +210,7 @@ test("B3: a refused call says why when the local end does; 沒有執行 when it 
       ),
     };
     const { root } = await render(<Thread state={state} after={() => null} />);
-    return root.querySelector(".tool-step .sg-tag")?.textContent;
+    return root.querySelector(".tool-step .tool-step-result")?.textContent;
   };
   expect(await tags("not_offered")).toBe("這個入口不提供");
   expect(await tags("changed")).toBe("腳本已變更，沒有執行");
@@ -315,7 +332,7 @@ test("C3: an interrupted turn is a warn card, from its error item or, without on
   );
   const cards = withItem.root.querySelectorAll(".task-notice");
   expect(cards).toHaveLength(1);
-  expect(cards[0]?.className).toBe("task-notice warn");
+  expect(noticeTone(cards[0])).toBe("task-notice warn");
   expect(cards[0]?.querySelector(".task-notice-title")?.textContent).toBe("回合中斷（本機端重啟）");
   expect(cards[0]?.querySelector(".task-notice-desc")?.textContent).toBe(
     "腳本 bark-notify 的結果不明，系統沒有自動重跑。請先確認狀態再繼續。",
@@ -497,4 +514,123 @@ test("E3: 壓縮中 while it runs; its end, when not a summary, is a card saying
     expect(root.querySelector(".task-notice-title")?.textContent).toBe(title);
     expect(root.querySelector(".task-notice-desc")?.textContent).toBe(desc);
   }
+});
+
+const withOutput = (text: string): State => {
+  const s = steps(["done"]);
+  return {
+    ...s,
+    items: s.items.map((i) =>
+      i.kind === "tool_call"
+        ? ({ ...i, input: "<b>argv</b> **粗**" } as WireItem)
+        : i.kind === "tool_result"
+          ? ({ ...i, text } as WireItem)
+          : i,
+    ),
+  };
+};
+
+test("P3b: a tool step opens and closes on its own button, aria-expanded says which, nothing has a style", async () => {
+  const { root } = await render(<Thread state={withOutput("一\n二")} after={() => null} />);
+  const trigger = root.querySelector(".tool-step-summary") as HTMLButtonElement;
+  // A native button: Enter and Space press it, and it takes the focus ring (Trace's focus-visible).
+  expect([trigger.tagName, trigger.getAttribute("type")]).toEqual(["BUTTON", "button"]);
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(root.querySelector(".tool-step-body")).toBeNull();
+  await act(async () => trigger.click());
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  expect(trigger.getAttribute("aria-controls")).toBe(
+    root.querySelector("[data-slot=trace-collapsible-content]")?.id,
+  );
+  expect(root.querySelector(".tool-step-body")?.textContent).toContain(
+    "執行輸出（純文字，共 2 行）",
+  );
+  // No style of ours. Base UI's panel sets its own height variables from script (CSSOM, which
+  // the CSP allows; tools/visual/csp.ts opens one), and nothing else.
+  expect(root.querySelector("style")).toBeNull();
+  const styled = [...root.querySelectorAll("[style]")] as HTMLElement[];
+  expect(styled.map((e) => e.dataset["slot"])).toEqual(["trace-collapsible-content"]);
+  expect([...(styled[0]?.style ?? [])].sort()).toEqual([
+    "--collapsible-panel-height",
+    "--collapsible-panel-width",
+  ]);
+  await act(async () => trigger.click());
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+});
+
+// T11: what a tool sent is text: no tag of it becomes an element, no Markdown becomes bold.
+test("P3b: the argv and the output are plain text as sent (T11)", async () => {
+  const sent = '<script>alert(1)</script>\n**粗體**\n<img src=x onerror="alert(2)">';
+  const { root } = await render(<Thread state={withOutput(sent)} after={() => null} />);
+  await act(async () => (root.querySelector(".tool-step-summary") as HTMLButtonElement).click());
+  const codes = [...root.querySelectorAll(".tool-step-body [data-slot=code-block-code]")];
+  expect(codes.map((c) => c.textContent)).toEqual(["<b>argv</b> **粗**", sent]);
+  expect(
+    root.querySelector(".tool-step script, .tool-step img, .tool-step strong, .tool-step b"),
+  ).toBeNull();
+});
+
+test("P3b: more than 20 lines open the rest on a button and fold back", async () => {
+  const many = Array.from({ length: 25 }, (_, i) => `line ${i + 1}`).join("\n");
+  const { root } = await render(<Thread state={withOutput(many)} after={() => null} />);
+  await act(async () => (root.querySelector(".tool-step-summary") as HTMLButtonElement).click());
+  const out = () =>
+    root.querySelectorAll(".tool-step-body [data-slot=code-block-code]")[1]?.textContent;
+  const more = () => root.querySelector(".tool-step-body .sg-btn") as HTMLButtonElement;
+  expect([out()?.split("\n").length, more().textContent]).toEqual([20, "展開其餘 5 行"]);
+  await act(async () => more().click());
+  expect([out()?.split("\n").length, more().textContent]).toEqual([25, "收合至前 20 行"]);
+});
+
+test("P3b: the turn's line is a Trace line in our own role=status; it shimmers only while working, never under reduced motion", async () => {
+  const line = async (turn: State["turn"], compacting = false) => {
+    document.body.innerHTML = "";
+    const { root } = await render(
+      <Thread
+        state={{ ...turnState(turn), ...(compacting ? { compacting: true } : {}) }}
+        after={() => null}
+      />,
+    );
+    const status = root.querySelector(".turn-status");
+    return [
+      status?.getAttribute("role"),
+      status?.querySelector("[data-slot=trace-line]")?.getAttribute("data-status") ?? null,
+      status?.querySelector(".tars-sprite")?.className,
+      status
+        ?.querySelector("[data-slot=trace-title]")
+        ?.className.includes("motion-reduce:shimmer-none"),
+      status?.querySelector(".status-glyph") ?? null,
+    ];
+  };
+  expect(await line({ state: "started", turn: T, phase: "thinking" })).toEqual([
+    "status",
+    "running",
+    "tars-sprite wheel",
+    true,
+    null,
+  ]);
+  expect(await line({ state: "started", turn: T, phase: "waiting_approval" })).toEqual([
+    "status",
+    null,
+    "tars-sprite idle",
+    true,
+    null,
+  ]);
+  expect(await line(undefined, true)).toEqual([
+    "status",
+    "running",
+    "tars-sprite wheel",
+    true,
+    null,
+  ]);
+});
+
+test("P3b: an open step's argv and output are not tab stops: they wrap, nothing to scroll", async () => {
+  const { root } = await render(<Thread state={withOutput("一")} after={() => null} />);
+  await act(async () => (root.querySelector(".tool-step-summary") as HTMLButtonElement).click());
+  const pres = [...root.querySelectorAll(".tool-step-body pre")];
+  expect(pres.map((p) => [p.getAttribute("tabindex"), p.hasAttribute("data-wrap")])).toEqual([
+    ["-1", true],
+    ["-1", true],
+  ]);
 });
