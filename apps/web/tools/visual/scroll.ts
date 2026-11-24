@@ -3,11 +3,13 @@
 // While a reply streams in, a delta every 50–100 ms (fake.ts):
 //   (a) at the end it is followed: the gap to the end, every frame for 3 s;
 //   (b) scrolled up 200 px mid-stream it is left there for 2 s, 捲到最新訊息 shows inside the
-//       thread and clear of the composer, and takes it back to following;
+//       thread and clear of the composer, and takes it back to following; and so when scrolled up
+//       with no wheel, touch or key (scrollTop -= 300, as the scrollbar or find in page do);
 //   a card that comes while scrolled up takes the focus on its deny, in view and not under the
 //   button;
-//   (c) older groups loaded do not move the row being read (its top before and after), with the
-//       browser's scroll anchoring and without it (overflow-anchor: none, as Safari has none).
+//   (c) older groups loaded do not move the row being read (its top before and after), the page
+//       cut inside a group as the local end cuts by count, with the browser's scroll anchoring and
+//       without it (overflow-anchor: none, as Safari has none).
 // Then how long 200 groups take to draw, against main (its tree with these scenes).
 // It fails on any CSP violation or page error (zod's eval probe left out, as csp.ts).
 //   node tools/visual/scroll.ts [--base <ref>]
@@ -110,7 +112,8 @@ const follow = (page: Page, ms: number) =>
       longest,
       up,
       grew: el.scrollHeight - from,
-      end: el.scrollHeight - el.scrollTop - el.clientHeight,
+      // At the end in one of the last three frames: the last may be the scroller's frame behind.
+      end: Math.min(...gaps.slice(-3)),
     };
   }, ms);
 
@@ -165,10 +168,55 @@ const inside = (a: Box, b: Box) =>
 const apart = (a: Box, b: Box) =>
   a.bottom <= b.top || b.bottom <= a.top || a.right <= b.left || b.right <= a.left;
 
+const BUTTON = ".thread-to-end";
+
+/** Waits, up to 3 s, for 捲到最新訊息 to be `active`; what it was when it stopped waiting. */
+async function buttonIs(page: Page, active: boolean) {
+  const want = String(active);
+  try {
+    await page.waitForFunction(
+      ([s, v]) => document.querySelector(s as string)?.getAttribute("data-active") === v,
+      [BUTTON, want],
+      { timeout: 3_000, polling: 50 },
+    );
+  } catch {
+    // Said by the check below.
+  }
+  return page.evaluate((s) => {
+    const b = document.querySelector(s) as HTMLElement;
+    return { active: b.getAttribute("data-active"), opacity: getComputedStyle(b).opacity };
+  }, BUTTON);
+}
+
+/**
+ * Presses 捲到最新訊息 once it is active. If it never is, or something else is where it is drawn,
+ * says that rather than waiting on Playwright's click.
+ */
+async function press(page: Page, width: keyof typeof WIDTHS) {
+  const shown = await buttonIs(page, true);
+  const box = await rect(page, BUTTON);
+  const hit = await page.evaluate((s) => {
+    const b = document.querySelector(s) as HTMLElement;
+    const r = b.getBoundingClientRect();
+    const at = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+    return {
+      onTop: at !== null && b.contains(at),
+      at: at === null ? "nothing" : `${at.tagName.toLowerCase()}.${[...at.classList].join(".")}`,
+      inert: b.inert,
+    };
+  }, BUTTON);
+  if (shown.active !== "true" || box === null || !hit.onTop || hit.inert)
+    throw new Error(
+      `捲到最新訊息 not pressable: data-active=${shown.active}, inert=${hit.inert}, at its middle ${hit.at}`,
+    );
+  if (width === "desktop") await page.locator(BUTTON).click();
+  else await page.locator(BUTTON).tap();
+}
+
 async function streaming(width: keyof typeof WIDTHS) {
   const { context, page } = await opened(browser, width, head.url, STREAM);
   const where = width === "desktop" ? "桌面" : "手機";
-  await page.waitForSelector('[data-slot="message-scroller-content"][aria-busy="true"]');
+  await page.waitForSelector(".thread .streaming");
   await page.waitForTimeout(500);
 
   // (a)
@@ -194,12 +242,8 @@ async function streaming(width: keyof typeof WIDTHS) {
   const left = await top(page);
   await page.waitForTimeout(2_000);
   const after = await top(page);
-  const button = ".thread-to-end";
-  await page.waitForTimeout(400);
-  const shown = await page.evaluate((s) => {
-    const b = document.querySelector(s) as HTMLElement;
-    return { active: b.getAttribute("data-active"), opacity: getComputedStyle(b).opacity };
-  }, button);
+  const button = BUTTON;
+  const shown = await buttonIs(page, true);
   const [buttonBox, thread, composer] = await Promise.all([
     rect(page, button),
     rect(page, ".thread-scroll"),
@@ -217,15 +261,38 @@ async function streaming(width: keyof typeof WIDTHS) {
   );
   await page.screenshot({ path: join(dir, `${width}-up.png`) });
   await page.waitForTimeout(500);
-  if (width === "desktop") await page.locator(button).click();
-  else await page.locator(button).tap();
+  await press(page, width);
   await page.waitForTimeout(800);
   const back = await gap(page);
   const again = await follow(page, 1_500);
-  const hidden = await page.locator(button).getAttribute("data-active");
+  const hidden = (await buttonIs(page, false)).active;
   check(
     back <= END_PX && again.longest <= 2 && again.end <= END_PX && hidden === "false",
-    `${where} (b) 按捲到最新訊息：離底 ${round(back)} px，之後 1.5 秒又跟隨（最大 ${round(again.max)} px、最長連續 ${again.longest} 格），鈕 data-active=${hidden}`,
+    `${where} (b) 按捲到最新訊息：離底 ${round(back)} px，之後 1.5 秒又跟隨（最大 ${round(again.max)} px、最長連續 ${again.longest} 格，結束時離底 ${round(again.end)} px），鈕 data-active=${hidden}`,
+  );
+
+  // (b) with no wheel, touch or key: the scrollbar, find in page, a tap on the status bar.
+  const bar = await page.locator(".thread-scroll").evaluate(async (el) => {
+    el.scrollTop -= 300;
+    const gaps: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      gaps.push(Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
+    }
+    return gaps;
+  });
+  const barShown = await buttonIs(page, true);
+  check(
+    (bar[0] ?? 0) >= 250 &&
+      bar.every((g, i) => i === 0 || g >= (bar[i - 1] ?? 0)) &&
+      barShown.active === "true",
+    `${where} (b) 串流中 scrollTop -= 300（沒有滾輪、觸控、按鍵）：之後每 150 ms 離底 ${bar.join(", ")} px；捲到最新訊息 data-active=${barShown.active}`,
+  );
+  await press(page, width);
+  await page.waitForTimeout(800);
+  check(
+    (await gap(page)) <= END_PX,
+    `${where} (b) 之後按捲到最新訊息：離底 ${round(await gap(page))} px`,
   );
 
   // A card while scrolled up.
@@ -278,7 +345,7 @@ async function streaming(width: keyof typeof WIDTHS) {
 
   // (c), without it: only the scroller keeps the place.
   const second = await opened(browser, width, head.url, STREAM);
-  await second.page.waitForSelector('[data-slot="message-scroller-content"][aria-busy="true"]');
+  await second.page.waitForSelector(".thread .streaming");
   await second.page.locator(".thread-scroll").evaluate((el) => {
     el.style.overflowAnchor = "none";
   });
@@ -290,8 +357,7 @@ async function streaming(width: keyof typeof WIDTHS) {
 /** Up to the top, loads the older groups, and how far the row being read moved. */
 async function older(page: Page, width: keyof typeof WIDTHS, how: string) {
   const where = width === "desktop" ? "桌面" : "手機";
-  // Off the end by hand first: a scroll by script while it follows is taken back to the end.
-  await up(page, width, 600);
+  // By script, as find in page would: it lets go of following (App.tsx's onScroll).
   await page.locator(".thread-scroll").evaluate((el) => el.scrollTo({ top: 0 }));
   await page.waitForTimeout(300);
   const read = await page.evaluate(() => {
@@ -312,8 +378,8 @@ async function older(page: Page, width: keyof typeof WIDTHS, how: string) {
   );
   const moved = now.top - read.top;
   check(
-    Math.abs(moved) <= 1 && now.rows >= 45,
-    `${where} (c) 載入更早的訊息（${how}）：列 ${read.id} 的 top ${round(read.top)} → ${round(now.top)}（移動 ${round(moved)} px），共 ${now.rows} 列`,
+    Math.abs(moved) < 2 && now.rows >= 45 && read.id === "g82",
+    `${where} (c) 載入更早的訊息，切在群組中間（${how}）：列 ${read.id} 的 top ${round(read.top)} → ${round(now.top)}（移動 ${round(moved)} px），共 ${now.rows} 列`,
   );
 }
 

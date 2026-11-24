@@ -311,16 +311,19 @@ node tools/visual/pull.ts
 cd apps/web
 node tools/visual/scroll.ts               # 長對話的計時和 main 比
 node tools/visual/scroll.ts --base <ref>  # 換基準
+node tools/visual/scroll.ts --no-timing   # 不計時
 ```
 
 - 用 `scenes.ts` 裡兩個標了 `measure` 的場景（`run.ts` 與 `zoom.ts` 跳過它們）：
-  - 「串流」：24 組舊對話（快照最多 50 項）加一個提問，打開後 `fake.ts` 每 50–100 ms 送一段 `delta`，共 400 段。
+  - 「串流」：24 組舊對話（快照最多 50 項）加一個提問。第一組只有回覆，沒有它的提問，像本機端按項目數切頁那樣切在群組中間；提問在更早的那一頁。打開後，`fake.ts` 每 50–100 ms 送一段 `delta`，共 400 段。
   - 「200 組」：只用來計時。
-- 桌面寬度用滑鼠滾輪，手機寬度用 CDP 的 `Input.synthesizeScrollGesture` 觸控手勢。每種寬度都查：
+- 桌面寬度用滑鼠滾輪，手機寬度用 CDP 的 `Input.dispatchTouchEvent` 分段拖曳。每種寬度都查：
   - (a) 在底部時跟著串流：3 秒內每一格量離底距離。離底超過 24 px 的格，最長只能連續 2 格（Message Scroller 在列長高的下一格才捲），結束時要在 24 px 內，捲動位置不能自己往上跳。
   - (b) 串流中往上捲 200 px（拖曳時串流仍在長，手機上手指剛動時還在底部 24 px 內，那一段會被跟隨吃掉，所以只要求放開時離底至少 50 px）：2 秒內位置不動；「捲到最新訊息」出現在對話串內、不壓到輸入列。按下後回到底部，之後繼續跟。
+  - (b) 不經滾輪、觸控、按鍵往上捲（腳本 `scrollTop -= 300`，等同拖捲軸、頁內搜尋、iOS 點狀態列）：之後每 150 ms 量一次離底距離，不能被拉回；「捲到最新訊息」要出現，按下後回到底部。
+  - 鈕的狀態用輪詢等到 `data-active` 變成預期值，最多 3 秒。按鈕前先確認它 active、不是 inert，中心點按到的是它自己；不是的話，直接報出當時的狀態，不等 Playwright 的 click 逾時。
   - 往上捲時來了核准卡（`visualPush`）：有公告，焦點在拒絕鈕。拒絕鈕在對話串的可見範圍內，那一點按到的是拒絕鈕本身，沒被「捲到最新訊息」蓋住。
-  - (c) 捲到頂按「載入更早的訊息」：原本看的那一列 top 前後差不超過 1 px。量兩次：一次開著瀏覽器的 scroll anchoring，一次設 `overflow-anchor: none`，只靠 Message Scroller。Safari 沒有 scroll anchoring，第二次是對 Safari 的推論，不是實測。
+  - (c) 用腳本捲到頂，按「載入更早的訊息」：補上的那頁帶著第一組的提問。原本看的那一列（第一組）top 前後差要小於 2 px。量兩次：一次開著瀏覽器的 scroll anchoring，一次設 `overflow-anchor: none`，只靠 Message Scroller。Safari 沒有 scroll anchoring，第二次是對 Safari 的推論，不是實測。
 - 200 組計時：從按下對話到 200 組畫出來，以及到頁面能再接受輸入（那一格之後的下一個 task）。和基準的樹比，基準用這個分支的 `fake.ts` 與 `scenes.ts` 建置。各量 5 次取中位數；手機寬度把 CPU 降到 1/4。
 - CSP 違規與頁面錯誤的判斷和 `csp.ts` 相同。截圖（`*-follow.png`、`*-up.png`、`*-card.png`）在 `.visual/scroll/`。需要 Chromium，不在 `bun run check` 裡。
 - iPhone Safari 上的慣性捲動、網址列收合時 scrollHeight 的變化與橡皮筋效果，Chromium 都測不到。

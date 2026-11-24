@@ -595,11 +595,13 @@ export const SCENES: Scene[] = [
             m.p.before === undefined
               ? {
                   epoch: EPOCH,
-                  items: [...talk(40, 24), ...STREAM_ASKED],
+                  // Cut inside group 40, as the local end cuts by count: its reply without its
+                  // message, which the older page brings.
+                  items: [...talk(40, 24).slice(1), ...STREAM_ASKED],
                   more: true,
                   running: { turn: STREAM_TURN, text: "", truncated: false, phase: "replying" },
                 }
-              : { epoch: EPOCH, items: talk(20, 20), more: false },
+              : { epoch: EPOCH, items: [...talk(20, 20), ...talk(40, 1).slice(0, 1)], more: false },
         },
       ],
     },
