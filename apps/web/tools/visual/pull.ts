@@ -2,7 +2,8 @@
 // touchscreen only taps). At phone width: the page above the composer follows the finger, damped
 // and capped; short of the rest it eases back to 0; past it, let go, it settles at the rest and
 // the indicator's box and text do not move from 放開重新整理 to 重新整理中…, then the page
-// reloads, in a conversation and on the knowledge base; a finger dragging a scrolled thread
+// reloads, in a conversation and on the knowledge base, and comes back to the same conversation or
+// page; a finger dragging a scrolled thread
 // scrolls it both ways, as before. With each of P2's overlays open (overlays.ts), at phone width
 // and at desktop width with touch (an iPad), a pull does not reload. A card announced in the middle
 // of a pull is still in the accessibility tree beside the bar. At desktop width a mouse drag does
@@ -278,6 +279,24 @@ try {
       `${where}：三態指示盒 y／高 ${boxes.map(([b]) => `${b?.y}/${b?.h}`).join("、")}，文字 y／高／x ${boxes.map(([, t]) => `${t?.y}/${t?.h}/${t?.x.toFixed(1)}`).join("、")}（單行 20 px）`,
     );
     check((await reloaded) && p.loads() === 2, `${where}：重新載入（載入 ${p.loads()} 次）`);
+    // Back in the same conversation (kept.ts): its rows, not the empty state.
+    const back = await page
+      .waitForFunction(
+        () => document.querySelector(".thread .tool-step-summary") !== null,
+        undefined,
+        {
+          timeout: 5_000,
+        },
+      )
+      .then(
+        () => true,
+        () => false,
+      );
+    const kept = await page.evaluate(() => sessionStorage.getItem("tars.page"));
+    check(
+      back && (await page.locator(".empty-state").count()) === 0,
+      `${where}：重新載入後還在同一個對話（${kept}）`,
+    );
     await page.waitForTimeout(300);
     await violations(page, `${where}（重新載入後）`);
     await p.context.close();
@@ -299,6 +318,28 @@ try {
       () => false,
     );
     check(ok, `${where}：拉 ${FULL} px 放開，重新載入`);
+    // Back on the knowledge base and its page once wiki.status answers (kept.ts); the page asked
+    // for again (the scene answers every page with the same one).
+    const page = await p.page
+      .waitForFunction(
+        // Before the page's answer the title is its path's name: wait for the page itself.
+        () => {
+          const t = document.querySelector(".wiki-workspace .wiki-page-title")?.textContent;
+          return t === "NAS 備份腳本" ? t : "";
+        },
+        undefined,
+        { timeout: 5_000 },
+      )
+      .then(
+        async (h) => String(await h.jsonValue()),
+        () => "",
+      );
+    const kept = await p.page.evaluate(() => sessionStorage.getItem("tars.page"));
+    check(
+      page === "NAS 備份腳本" && kept?.includes('"selected":"projects/nas-backup"') === true,
+      `${where}：重新載入後回到知識庫的同一頁「${page}」（${kept}）`,
+    );
+    await violations(p.page, `${where}（重新載入後）`);
     await p.context.close();
   }
 
