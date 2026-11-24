@@ -964,30 +964,6 @@ button:disabled:not(:where([data-slot])) {
   padding: 4px 0;
 }
 
-.status-glyph {
-  display: inline-flex;
-  gap: 2.5px;
-  align-items: center;
-  height: 12px;
-}
-
-.status-glyph span {
-  width: 2.5px;
-  height: 10px;
-  border-radius: 1px;
-  background: var(--status-active);
-  opacity: 0.85;
-}
-
-.status-glyph span:nth-child(2) {
-  height: 7px;
-  opacity: 0.55;
-}
-.status-glyph span:nth-child(3) {
-  height: 12px;
-  opacity: 0.95;
-}
-
 /* Tool Step Card */
 .tool-step {
   border-radius: var(--radius-card);

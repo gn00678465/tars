@@ -238,14 +238,20 @@ test("the sprites: the wheel while thinking, idle while waiting for an approval 
   expect(sprite?.getAttribute("aria-hidden")).toBe("true");
   expect(thinking.root.querySelector("[style], style")).toBeNull();
   thinking.unmount();
-  const replying = await render(
-    <Thread
-      state={turnState({ state: "started", turn: T, phase: "replying" })}
-      after={() => null}
-    />,
-  );
-  expect(replying.root.querySelector(".tars-sprite")).toBeNull();
-  replying.unmount();
+  // Every working phase is TARS rolling, none the old three bars (the owner: 回覆中 showed them).
+  for (const phase of ["replying", "running_script", undefined] as const) {
+    const working = await render(
+      <Thread
+        state={turnState({ state: "started", turn: T, ...(phase === undefined ? {} : { phase }) })}
+        after={() => null}
+      />,
+    );
+    expect(working.root.querySelector(".turn-status .tars-sprite")?.className).toBe(
+      "tars-sprite wheel",
+    );
+    expect(working.root.querySelector(".status-glyph")).toBeNull();
+    working.unmount();
+  }
   const waiting = await render(
     <Thread
       state={turnState({ state: "started", turn: T, phase: "waiting_approval" })}
@@ -463,6 +469,8 @@ test("E3: 壓縮中 while it runs; its end, when not a summary, is a card saying
     <Thread state={{ ...compacted(), compacting: true }} after={() => null} />,
   );
   expect(line.root.querySelector(".turn-status")?.textContent).toBe("壓縮中…");
+  expect(line.root.querySelector(".turn-status .tars-sprite")?.className).toBe("tars-sprite wheel");
+  expect(line.root.querySelector(".status-glyph")).toBeNull();
   const ends: [NonNullable<State["compactEnd"]>, string, string][] = [
     [
       { state: "skipped" },
