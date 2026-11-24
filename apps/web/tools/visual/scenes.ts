@@ -41,6 +41,12 @@ export interface Scene {
   readonly steps?: readonly Step[];
   /** At phone width, in place of steps. */
   readonly phone?: readonly Step[];
+  /**
+   * Another scene whose data the page draws, by its number: a scene that only adds steps to it.
+   * The page reads that data from its own tree's scenes.ts, so a base without this scene draws
+   * it too; this scene's own relay and answers go unused.
+   */
+  readonly data?: number;
 }
 
 const conv = (id: string, title: string, model: string, ago: number): WireConv => ({
@@ -482,5 +488,32 @@ export const SCENES: Scene[] = [
       { fill: 'input[role="combobox"]', text: "Food" },
       { wait: 300 },
     ),
+  },
+  // M4-P2: each overlay open, at both widths, on an earlier scene's data. The rest are above:
+  // the status sheet (6, 8), the model menu and the phone's model sheet (7), the effort menu and
+  // sheet (12), the context sheet on a desktop (13) and the drawer (2).
+  {
+    name: "上下文面板：從花費面板開啟（手機是底部面板）",
+    data: 13,
+    relay: online,
+    answers: answers({}),
+    // The thread's hint has a 開啟壓縮 too.
+    ...both("SQLite FTS5 的中文斷詞", sheet, { click: '.sheet-foot button:has-text("開啟壓縮")' }),
+  },
+  {
+    name: "以另一個模型接續：模型面板",
+    data: 9,
+    relay: online,
+    answers: answers({}),
+    ...both("上個月的帳單", { click: 'button:has-text("以另一個模型接續")' }),
+  },
+  {
+    name: "知識庫：原始對話出處對證",
+    data: 15,
+    relay: online,
+    answers: answers({}),
+    // The page is open already; a press on it in the list draws it again.
+    steps: [{ click: 'button:has-text("個人知識庫")' }, { click: ".wiki-cite-pill:visible" }],
+    phone: [{ click: 'button:has-text("個人知識庫")' }, { click: ".wiki-cite-pill:visible" }],
   },
 ];

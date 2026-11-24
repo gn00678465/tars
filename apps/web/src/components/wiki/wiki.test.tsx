@@ -217,8 +217,10 @@ test("no query, no tracks; with one, both tracks and the phone's two tabs", asyn
 test("the source overlay: the turn, its quotes, and the way to it", async () => {
   const closed = vi.fn();
   const jumps: string[] = [];
-  const { root } = await render(
+  // The overlay is a popup under document.body, not in the element it was rendered into.
+  await render(
     <SourceOverlay
+      phone={false}
       source={{
         ref: REF,
         result: {
@@ -238,6 +240,7 @@ test("the source overlay: the turn, its quotes, and the way to it", async () => 
       onJump={(c) => jumps.push(c)}
     />,
   );
+  const root = document.body;
   expect(root.querySelector("#sheet-title")?.textContent).toBe("原始對話出處對證");
   expect(root.textContent).toContain(`[[source:${REF}]]`);
   expect(root.querySelector(".task-notice.active")?.textContent).toBe(
@@ -250,14 +253,16 @@ test("the source overlay: the turn, its quotes, and the way to it", async () => 
 });
 
 test("a mark with no turn behind it says so and offers no way to a conversation", async () => {
-  const { root } = await render(
+  await render(
     <SourceOverlay
+      phone={false}
       source={{ ref: REF, result: { ref: REF, found: false } }}
       now={NOW}
       onClose={() => {}}
       onJump={() => {}}
     />,
   );
+  const root = document.body;
   expect(root.textContent).toContain("找不到這個回合");
   expect(buttons(root).some((b) => b.textContent === "前往原對話")).toBe(false);
 });

@@ -1,10 +1,11 @@
 import type { WireStatus } from "@tars/protocol";
+import type { Ref } from "react";
 import { about, contextPct, type State, versionText } from "../state.ts";
-import { useRef } from "react";
 import { ContextRing } from "./ContextSheet.tsx";
 import { PriceNotices, PriceTable, priceButtonText, updatedText } from "./Prices.tsx";
 import { Icon } from "./Icon.tsx";
-import { useModal } from "./modal.ts";
+import { Panel } from "./Panel.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { timeText } from "./time.ts";
 
 type Provider = WireStatus["providers"][number];
@@ -140,6 +141,10 @@ export function TopBar(props: {
   onSheet: () => void;
   /** Opens the context sheet; absent when the page has no context to show. */
   onContext?: () => void;
+  /** Whether the context sheet is open. */
+  contextOpen: boolean;
+  /** The context ring, which the context sheet drops from. */
+  ringRef?: Ref<HTMLButtonElement>;
 }) {
   const c = connection(props.state);
   const spend = spendButton(props.state);
@@ -147,17 +152,19 @@ export function TopBar(props: {
   return (
     <header className="topbar">
       <div className="topbar-left">
-        <button
-          className={
-            props.menuHidden ? "sg-icon-btn btn-open-sidebar-desktop-hidden" : "sg-icon-btn"
-          }
-          type="button"
-          aria-label="展開對話列表"
-          title="展開對話列表"
-          onClick={props.onMenu}
-        >
-          <Icon name="menu" size={17} />
-        </button>
+        {/* The button's name, shown on hover and on focus as its title was. */}
+        <Tooltip>
+          <TooltipTrigger
+            className={
+              props.menuHidden ? "sg-icon-btn btn-open-sidebar-desktop-hidden" : "sg-icon-btn"
+            }
+            aria-label="展開對話列表"
+            onClick={props.onMenu}
+          >
+            <Icon name="menu" size={17} />
+          </TooltipTrigger>
+          <TooltipContent side="bottom">展開對話列表</TooltipContent>
+        </Tooltip>
         <div className={`conn-pill ${c.pill}`} role="status">
           <span className={`status-dot ${c.tone}`} />
           <span>{c.text}</span>
@@ -187,7 +194,12 @@ export function TopBar(props: {
           )}
         </button>
         {props.state.context === undefined || props.onContext === undefined ? null : (
-          <ContextRing context={props.state.context} onOpen={props.onContext} />
+          <ContextRing
+            context={props.state.context}
+            onOpen={props.onContext}
+            open={props.contextOpen}
+            ref={props.ringRef}
+          />
         )}
         <button
           className="sg-btn mobile-only"
@@ -205,141 +217,25 @@ export function TopBar(props: {
   );
 }
 
-/** The status sheet: a dialog on desktop, a bottom sheet on a phone (the CSS decides). */
+/** The status sheet: a dialog on desktop, a drawer from the bottom on a phone. */
 export function StatusSheet(props: {
   state: State;
+  phone: boolean;
   onClose: () => void;
   /** Opens the context sheet (13-12); absent when the page has no context to show. */
   onCompact?: () => void;
 }) {
-  const panel = useRef<HTMLElement>(null);
-  useModal(panel, true, props.onClose);
   const { status, context } = props.state;
   const c = connection(props.state);
   return (
-    <div
-      className="overlay-backdrop"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) props.onClose();
-      }}
-    >
-      <section
-        ref={panel}
-        className="sheet-panel sg-popover wide"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="sheet-title"
-      >
-        <div className="sheet-head">
-          <h2 id="sheet-title">花費、模型清單與價目表（唯讀）</h2>
-          <button className="sg-icon-btn" type="button" aria-label="關閉" onClick={props.onClose}>
-            <Icon name="close" size={15} />
-          </button>
-        </div>
-        <div className="sheet-body">
-          <div className="provider-group">
-            <div className="provider-group-head">
-              <span>連線</span>
-            </div>
-            <div className="model-option">
-              <span>
-                <span className={`status-dot ${c.tone}`} /> {c.text}
-              </span>
-              {props.state.localSince === undefined ? null : (
-                <span className="mono">這一次連上 {timeText(props.state.localSince)}</span>
-              )}
-            </div>
-            <div className="model-option">
-              <span>往返延遲</span>
-              <span className="mono">
-                {props.state.rtt === undefined ? "量測中" : `${Math.round(props.state.rtt)} ms`}
-              </span>
-            </div>
-          </div>
-          <div className="provider-group">
-            <div className="provider-group-head">
-              <span>三家 Provider 花費</span>
-            </div>
-            {status === undefined ? (
-              <div className="model-option">
-                <span>還沒有收到本機端的狀態</span>
-              </div>
-            ) : (
-              status.providers.map((p) => {
-                const l = level(p);
-                return (
-                  <div className="model-option" key={p.name}>
-                    <span>
-                      {label(p)}
-                      {l === "error" ? <span className="sg-tag error">已達停用門檻</span> : null}
-                      {l === "warn" ? <span className="sg-tag warn">已過提醒門檻</span> : null}
-                    </span>
-                    <span className="mono">{spendFigure(p)}</span>
-                  </div>
-                );
-              })
-            )}
-          </div>
-          {status === undefined ? null : (
-            <PriceNotices status={status} catalog={props.state.catalog} />
-          )}
-          {props.state.catalog === undefined || props.state.catalog.entries.length === 0 ? null : (
-            <PriceTable catalog={props.state.catalog} warns={status?.prices ?? []} />
-          )}
-          {context === undefined ? null : (
-            <div className="provider-group">
-              <div className="provider-group-head">
-                <span>目前對話</span>
-              </div>
-              <div className="model-option">
-                <span>上下文用量</span>
-                <span className="mono">
-                  {about(context)}
-                  {contextPct(context)}%
-                  {context.cacheHitPct === undefined ? "" : `（快取 ${context.cacheHitPct}%）`}
-                </span>
-              </div>
-            </div>
-          )}
-          {status === undefined ? null : (
-            <div className="provider-group">
-              <div className="provider-group-head">
-                <span>其他</span>
-              </div>
-              <div className="model-option">
-                <span>通知</span>
-                <span>{status.notify === "ok" ? "已設定" : "未設定"}</span>
-              </div>
-              <div className="model-option">
-                <span>待核准</span>
-                <span className="num">{status.pendingApprovals}</span>
-              </div>
-              {status.certExpiresAt === undefined ? null : (
-                <div className="model-option">
-                  <span>
-                    本機端憑證
-                    {(certDays(status) ?? 0) < CERT_WARN_DAYS ? (
-                      <span className="sg-tag warn">{CERT_WARN_DAYS} 天內到期</span>
-                    ) : null}
-                  </span>
-                  <span className="mono">
-                    到期 {timeText(status.certExpiresAt)}（剩 {certDays(status)} 天）
-                  </span>
-                </div>
-              )}
-              {/* A local end older than prices says only that some are old. */}
-              {status.pricesWarn && status.prices === undefined ? (
-                <div className="task-notice warn">
-                  <div className="task-notice-body">
-                    <div className="task-notice-title">價目表過期</div>
-                    <div className="task-notice-desc">請在本機終端更新模型清單與價目。</div>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          )}
-        </div>
-        <div className="sheet-foot">
+    <Panel
+      phone={props.phone}
+      title="花費、模型清單與價目表（唯讀）"
+      titleId="sheet-title"
+      wide
+      onClose={props.onClose}
+      foot={
+        <>
           <span>模型啟用、單價與額度只能在本機終端修改</span>
           <div className="sheet-foot-actions">
             {context === undefined || props.onCompact === undefined ? null : (
@@ -351,8 +247,108 @@ export function StatusSheet(props: {
               關閉
             </button>
           </div>
+        </>
+      }
+    >
+      <div className="provider-group">
+        <div className="provider-group-head">
+          <span>連線</span>
         </div>
-      </section>
-    </div>
+        <div className="model-option">
+          <span>
+            <span className={`status-dot ${c.tone}`} /> {c.text}
+          </span>
+          {props.state.localSince === undefined ? null : (
+            <span className="mono">這一次連上 {timeText(props.state.localSince)}</span>
+          )}
+        </div>
+        <div className="model-option">
+          <span>往返延遲</span>
+          <span className="mono">
+            {props.state.rtt === undefined ? "量測中" : `${Math.round(props.state.rtt)} ms`}
+          </span>
+        </div>
+      </div>
+      <div className="provider-group">
+        <div className="provider-group-head">
+          <span>三家 Provider 花費</span>
+        </div>
+        {status === undefined ? (
+          <div className="model-option">
+            <span>還沒有收到本機端的狀態</span>
+          </div>
+        ) : (
+          status.providers.map((p) => {
+            const l = level(p);
+            return (
+              <div className="model-option" key={p.name}>
+                <span>
+                  {label(p)}
+                  {l === "error" ? <span className="sg-tag error">已達停用門檻</span> : null}
+                  {l === "warn" ? <span className="sg-tag warn">已過提醒門檻</span> : null}
+                </span>
+                <span className="mono">{spendFigure(p)}</span>
+              </div>
+            );
+          })
+        )}
+      </div>
+      {status === undefined ? null : <PriceNotices status={status} catalog={props.state.catalog} />}
+      {props.state.catalog === undefined || props.state.catalog.entries.length === 0 ? null : (
+        <PriceTable catalog={props.state.catalog} warns={status?.prices ?? []} />
+      )}
+      {context === undefined ? null : (
+        <div className="provider-group">
+          <div className="provider-group-head">
+            <span>目前對話</span>
+          </div>
+          <div className="model-option">
+            <span>上下文用量</span>
+            <span className="mono">
+              {about(context)}
+              {contextPct(context)}%
+              {context.cacheHitPct === undefined ? "" : `（快取 ${context.cacheHitPct}%）`}
+            </span>
+          </div>
+        </div>
+      )}
+      {status === undefined ? null : (
+        <div className="provider-group">
+          <div className="provider-group-head">
+            <span>其他</span>
+          </div>
+          <div className="model-option">
+            <span>通知</span>
+            <span>{status.notify === "ok" ? "已設定" : "未設定"}</span>
+          </div>
+          <div className="model-option">
+            <span>待核准</span>
+            <span className="num">{status.pendingApprovals}</span>
+          </div>
+          {status.certExpiresAt === undefined ? null : (
+            <div className="model-option">
+              <span>
+                本機端憑證
+                {(certDays(status) ?? 0) < CERT_WARN_DAYS ? (
+                  <span className="sg-tag warn">{CERT_WARN_DAYS} 天內到期</span>
+                ) : null}
+              </span>
+              <span className="mono">
+                到期 {timeText(status.certExpiresAt)}（剩 {certDays(status)} 天）
+              </span>
+            </div>
+          )}
+          {/* A local end older than prices says only that some are old. */}
+          {status.pricesWarn && status.prices === undefined ? (
+            <div className="task-notice warn">
+              <div className="task-notice-body">
+                <div className="task-notice-title">價目表過期</div>
+                <div className="task-notice-desc">請在本機終端更新模型清單與價目。</div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Panel>
   );
 }

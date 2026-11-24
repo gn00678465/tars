@@ -1,12 +1,15 @@
 /* The owner's signed-off prototype (M3/prototype/styles.css, sha256 57ebbd77a8287932), copied as is.
  * S4 renders its markup with the same classes; the prototype-only scene switcher (.proto-*) is unused. */
-/* Four changes since, so shadcn's components keep their size and borders beside it (M4-P0,
- * m4_web_stack_design.md 5.3, the owner's decision 6). Tailwind's sizes are rem: font-size 14px
- * moved from html to body (no rule here uses rem). The element rules for button, input and
- * textarea are in @layer base, under a component's classes: unlayered, they took a shadcn
- * button's border, background and padding. The disabled button's look stays out of the layer
- * and skips shadcn's components (the rule says why). Nothing else here is in a layer: the
- * rest wins over Tailwind's rules, and the screens keep their look. */
+/* Five changes since, so shadcn's components keep their size, borders and focus ring beside it
+ * (M4-P0, m4_web_stack_design.md 5.3, the owner's decision 6; M4-P2). Tailwind's sizes are rem:
+ * font-size 14px moved from html to body (no rule here uses rem). The element rules for button,
+ * input and textarea are in @layer base, under a component's classes: unlayered, they took a
+ * shadcn button's border, background and padding. The :focus-visible outline is in that layer
+ * too (M4-P2): unlayered, it drew a second ring on every shadcn control over its own (outline-none
+ * and a ring); in the layer a component's utilities win, and the rules here that set an outline
+ * already outranked it. The disabled button's look stays out of the layer and skips shadcn's
+ * components (the rule says why). Nothing else here is in a layer: the rest wins over Tailwind's
+ * rules, and the screens keep their look. */
 /*
  * TARS Web Console Prototype v2 — Solid Glass Dark-First Instrument Aesthetic
  * Audited via Impeccable Dual-Agent Critique & Technical Audit:
@@ -151,12 +154,12 @@ body {
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
-:focus-visible {
-  outline: 2px solid var(--focus-line);
-  outline-offset: 2px;
-}
-
 @layer base {
+  :focus-visible {
+    outline: 2px solid var(--focus-line);
+    outline-offset: 2px;
+  }
+
   button,
   input,
   textarea {

@@ -9,12 +9,14 @@ import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 /**
- * Under this much JS a first visit loads, gzipped: main's 138,115 bytes after M4-P1 plus 2 kB for
- * pull to refresh (m4_web_stack_design.md 7 raises it phase by phase).
+ * Under this much JS a first visit loads, gzipped: M4-P2's 222,099 bytes (measured at 2659980)
+ * plus 2 kB for pull to refresh. P2 put Base UI's overlays on the first load (main was 138,115):
+ * the design's estimate was about 210 kB; the phone's Drawer is 11.8 kB of it and the one tooltip
+ * 4 kB (m4_web_stack_design.md 7 raises it phase by phase).
  * Measured by this file's own build, which leaves out the Cloudflare and _headers plugins: they
  * do not change the page's chunks.
  */
-const FIRST_LOAD_LIMIT = 138_115 + 2_000;
+const FIRST_LOAD_LIMIT = 222_099 + 2_000;
 
 /** Strings only zod 3 has, and only zod 4 has (research/a2ui_proto_result.md, Zod 4 (4)). */
 const ZOD3 = "Unrecognized key(s) in object";

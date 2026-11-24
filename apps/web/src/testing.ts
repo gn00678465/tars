@@ -119,6 +119,13 @@ export const server = (
   extra: { conv?: string; re?: string } = {},
 ) => ({ v: PROTOCOL_VERSION, id: `s-${++seq}`, kind, ...extra, p }) as ServerMessage;
 
+/**
+ * Waits for the next animation frame: Base UI moves the focus into a popup it opened on one, so a
+ * test that checks where the focus is waits for it.
+ */
+export const frame = () =>
+  act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+
 /** Lets React, Base UI's effects and Lit's microtasks settle. */
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)));
 

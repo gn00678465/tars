@@ -150,9 +150,11 @@ test("a source mark opens its turn from agent.db; 前往原對話 goes there", a
     assistant: "",
     quotes: [],
   });
-  expect(p.root.querySelector("[role=dialog] #sheet-title")?.textContent).toBe("原始對話出處對證");
-  await act(async () => button(p.root, "前往原對話").click());
-  expect(p.root.querySelector("[role=dialog]")).toBeNull();
+  expect(document.querySelector("[role=dialog] #sheet-title")?.textContent).toBe(
+    "原始對話出處對證",
+  );
+  await act(async () => button(document.body, "前往原對話").click());
+  expect(document.querySelector("[role=dialog]")).toBeNull();
   expect(p.root.querySelector(".wiki-workspace")).toBeNull();
   expect(p.asked("conv.open")?.conv).toBe(CONV.id);
   p.unmount();
@@ -163,12 +165,14 @@ test("by keyboard: a source pill opens the check, Esc closes it and the focus go
   const pill = button(p.root, `[[source:${REF}]]`);
   pill.focus();
   await act(async () => pill.click());
-  const dialog = p.root.querySelector("[role=dialog]") as HTMLElement;
+  const dialog = document.querySelector("[role=dialog]") as HTMLElement;
+  // Base UI moves the focus in on the next frame, and this file's timers are fake.
+  await act(async () => void vi.advanceTimersByTime(20));
   expect(dialog.contains(document.activeElement)).toBe(true);
   await act(async () =>
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
   );
-  expect(p.root.querySelector("[role=dialog]")).toBeNull();
+  expect(document.querySelector("[role=dialog]")).toBeNull();
   expect(document.activeElement).toBe(pill);
   p.unmount();
 });

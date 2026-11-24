@@ -21,7 +21,11 @@ test("E1: the ring turns at the local end's warn and stop lines", async () => {
   const tone = async (used: number) => {
     document.body.innerHTML = "";
     const { root } = await render(
-      <ContextRing context={{ ...context, contextUsed: used }} onOpen={() => undefined} />,
+      <ContextRing
+        context={{ ...context, contextUsed: used }}
+        onOpen={() => undefined}
+        open={false}
+      />,
     );
     return root.querySelector(".context-ring-fill")?.getAttribute("class");
   };
@@ -41,9 +45,12 @@ test("E2, E3: no cache figure or compaction yet, auto off; a blocked or too long
         {...(focus === undefined ? {} : { focus })}
         onCompact={(f) => asked.push(f)}
         onClose={() => undefined}
+        phone={false}
       />,
     );
-  const { root } = await sheet(undefined);
+  // The sheet is a popup under document.body, not in the element it was rendered into.
+  await sheet(undefined);
+  const root = document.body;
   expect([...root.querySelectorAll("dd")].map((d) => d.textContent)).toEqual([
     "48,200 / 200,000 tokens（24%）",
     "還沒有回合",
@@ -54,13 +61,40 @@ test("E2, E3: no cache figure or compaction yet, auto off; a blocked or too long
   await act(async () => button(root, "立即壓縮").click());
   expect(asked).toEqual([undefined]);
   document.body.innerHTML = "";
-  const busy = await sheet("回合進行中");
-  expect(button(busy.root, "立即壓縮").disabled).toBe(true);
-  expect(busy.root.querySelector(".composer-disabled-reason")?.textContent).toBe("回合進行中");
+  await sheet("回合進行中");
+  expect(button(document.body, "立即壓縮").disabled).toBe(true);
+  expect(document.body.querySelector(".composer-disabled-reason")?.textContent).toBe("回合進行中");
   document.body.innerHTML = "";
-  const long = await sheet(undefined, "字".repeat(501));
-  expect(button(long.root, "立即壓縮").disabled).toBe(true);
-  expect(long.root.querySelector(".composer-disabled-reason")?.textContent).toBe(
+  await sheet(undefined, "字".repeat(501));
+  expect(button(document.body, "立即壓縮").disabled).toBe(true);
+  expect(document.body.querySelector(".composer-disabled-reason")?.textContent).toBe(
     "要保留的說明最多 500 字，目前 501 字",
   );
+});
+
+test("the bar says the share used, at the ring's tone, and caps at 100", async () => {
+  const bar = async (used: number) => {
+    document.body.innerHTML = "";
+    await render(
+      <ContextSheet
+        context={{ ...context, contextUsed: used }}
+        conv="0123456789abcdef"
+        blocked={undefined}
+        onCompact={() => undefined}
+        onClose={() => undefined}
+        phone={false}
+      />,
+    );
+    const p = document.body.querySelector('[role="progressbar"]') as HTMLElement;
+    return [
+      p.getAttribute("aria-label"),
+      p.getAttribute("aria-valuenow"),
+      p.getAttribute("aria-valuetext"),
+      p.closest(".context-progress.warn") !== null,
+      p.closest(".context-progress.error") !== null,
+    ];
+  };
+  expect(await bar(48_200)).toEqual(["上下文使用量", "24", "24%", false, false]);
+  expect(await bar(150_000)).toEqual(["上下文使用量", "75", "75%", true, false]);
+  expect(await bar(260_000)).toEqual(["上下文使用量", "100", "100%", false, true]);
 });

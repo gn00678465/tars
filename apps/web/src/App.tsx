@@ -109,6 +109,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState(false);
+  // What the desktop's context and model sheets drop from.
+  const ring = useRef<HTMLButtonElement>(null);
+  const modelButton = useRef<HTMLButtonElement>(null);
   /** The context sheet, with what to keep already typed after /compact when it was too long. */
   const [contextSheet, setContextSheet] = useState<{ focus: string } | undefined>(undefined);
   const live = state.connection === "open";
@@ -368,6 +371,10 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const cert = certTag(state.status);
   // With messages, another model is a continuation (D17).
   const pickModel = () => setPicking(source === undefined ? "new" : "continue");
+  const modelSheet =
+    picking !== undefined &&
+    models !== undefined &&
+    !(picking === "continue" && sourceConv === undefined);
   const levels = target?.effortLevels ?? [];
   const wanted =
     effortPick ??
@@ -444,11 +451,6 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
         {state.spoken ?? ""}
       </div>
       <div className="app-shell">
-        <div
-          className={drawer ? "drawer-scrim visible" : "drawer-scrim"}
-          aria-hidden="true"
-          onClick={() => setDrawer(false)}
-        />
         <ConversationList
           convs={state.convs}
           listed={state.listed === true}
@@ -456,6 +458,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           current={state.conv}
           waiting={waiting}
           collapsed={collapsed && !compact}
+          compact={compact}
           drawerOpen={drawer && compact}
           onOpen={open}
           onCollapse={() => (compact ? setDrawer(false) : setCollapsed(true))}
@@ -479,13 +482,20 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               }
             : {})}
         />
-        <div className="workspace">
+        {/* aria-live="off" is the default and announces nothing; it is here for Base UI. A modal
+            overlay marks the page outside it aria-hidden, keeping only live regions and what
+            holds them, when it opens. An approval card that comes while one is open lands here
+            and takes the focus (ApprovalCard); hidden, iPhone's VoiceOver would not read it. So
+            the workspace stays exposed, as it was before the overlays were Base UI's. */}
+        <div className="workspace" aria-live="off">
           <TopBar
             state={state}
             menuHidden={!collapsed && !compact}
             onMenu={() => (compact ? setDrawer(true) : setCollapsed(false))}
             onSheet={() => setSheet(true)}
             onContext={() => setContextSheet({ focus: "" })}
+            contextOpen={contextSheet !== undefined}
+            ringRef={ring}
           />
           {targetRef === undefined ? null : (
             <div className="conv-header-bar">
@@ -514,6 +524,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                     className="sg-btn sg-btn-ghost"
                     type="button"
                     aria-haspopup="dialog"
+                    aria-expanded={modelSheet && picking === "continue"}
                     // As the prototype (9-06): there is nothing to carry yet; the composer's model
                     // control switches in place.
                     disabled={state.conv === undefined}
@@ -748,7 +759,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                               source === undefined
                                 ? "這個對話還沒有訊息，可以直接換模型。送出第一則訊息後，模型就綁在對話上。"
                                 : "模型綁在對話上。這個對話已有訊息，選另一個模型會開新對話接續。",
-                            open: modelOpen,
+                            // A phone's model button opens the sheet, not the menu.
+                            open: phone ? modelSheet : modelOpen,
+                            trigger: modelButton,
                             ...(locked === undefined ? {} : { disabled: locked }),
                             onOpen: (o) => (phone ? o && pickModel() : setModelOpen(o)),
                             onChoose: (model) => {
@@ -779,6 +792,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
         {sheet ? (
           <StatusSheet
             state={state}
+            phone={phone}
             onClose={() => setSheet(false)}
             {...(canCompact
               ? {
@@ -797,6 +811,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             context={state.context}
             conv={state.conv}
             focus={contextSheet.focus}
+            phone={phone}
+            at={ring}
             blocked={compactBlocked}
             onCompact={compactNow}
             onClose={() => setContextSheet(undefined)}
@@ -806,6 +822,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           <SourceOverlay
             source={wiki.source}
             now={today}
+            phone={phone}
             onClose={() => toWiki({ type: "source", ref: undefined })}
             onJump={(c) => {
               toWiki({ type: "source", ref: undefined });
@@ -816,11 +833,11 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
         {phone && effort !== undefined && effortOpen && levels.length > 0 ? (
           <EffortSheet effort={effort} modelLabel={target?.label ?? nextLabel} />
         ) : null}
-        {picking === undefined ||
-        models === undefined ||
-        (picking === "continue" && sourceConv === undefined) ? null : (
+        {!modelSheet || models === undefined ? null : (
           <ModelSheet
             models={models}
+            phone={phone}
+            at={modelButton}
             picked={picking === "continue" ? (forkPick ?? chosen?.model) : chosen?.model}
             spend={spend}
             {...(picking === "continue" && source !== undefined && sourceConv !== undefined

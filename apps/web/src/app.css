@@ -442,15 +442,6 @@ th[aria-sort="descending"] .md-sort-mark::after {
   color: var(--foreground);
 }
 
-/*
- * shadcn's input group shows focus as a ring around the whole field; styles.css's unlayered
- * :focus-visible outline would draw a second box around the input inside it, and no layered
- * utility can undo an unlayered rule. P2 decides that rule for every component.
- */
-.ui-form-body [data-slot="input-group-control"]:focus-visible {
-  outline: none;
-}
-
 /* Sent, or on its way: inert, and faded so it does not look like it still takes input. */
 .ui-form-body[inert] {
   opacity: 0.6;
@@ -485,6 +476,143 @@ th[aria-sort="descending"] .md-sort-mark::after {
 
 .ui-form-fallback {
   margin-bottom: 6px;
+}
+
+/*
+ * The prototype's sheets and menus on shadcn's popups (Panel.tsx, RunSetup.tsx,
+ * ConversationList.tsx). The prototype's classes give the look; these undo what the popups' own
+ * utilities add on top of it, and size and place them as the prototype's overlay did.
+ */
+.sheet-panel[data-slot],
+.sidebar[data-slot],
+.model-popover[data-slot],
+.effort-popover[data-slot] {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+/* The title keeps styles.css's size and weight; the popups' title sets its own face and leading. */
+.sheet-head h2[data-slot] {
+  font-family: inherit;
+  line-height: inherit;
+}
+.sheet-panel[data-slot],
+.sidebar[data-slot] {
+  padding: 0;
+  gap: 0;
+}
+/* The overlay padded the sheet 16px from each edge and held it to 85% of what was left. */
+.sheet-panel[data-slot="dialog-content"],
+.sheet-panel[data-slot="popover-content"] {
+  width: min(560px, 100vw - 32px);
+  max-width: none;
+}
+.sheet-panel.wide[data-slot="dialog-content"],
+.sheet-panel.wide[data-slot="popover-content"] {
+  width: min(880px, 100vw - 32px);
+}
+.sheet-panel[data-slot="dialog-content"] {
+  max-height: calc((100dvh - 32px) * 0.85);
+  /* Centred by layout, as the overlay's flex did: translate(-50%) lands an odd size on a half
+   * pixel, and the text blurs. */
+  inset: 0;
+  margin: auto;
+  height: fit-content;
+  translate: none;
+}
+.sheet-panel[data-slot="popover-content"] {
+  max-height: min(85dvh, var(--available-height));
+}
+/* At rest, drawn as the prototype's sheet was: will-change keeps it on its own layer, where the
+ * text loses its subpixel smoothing. A swipe still moves it by transform. */
+.sheet-panel[data-slot="drawer-popup"] {
+  will-change: auto;
+}
+[data-slot="dialog-overlay"],
+[data-slot="drawer-overlay"],
+[data-slot="sheet-overlay"] {
+  background: var(--scrim);
+  backdrop-filter: none;
+}
+
+/* The drawer below 1024px: open, above its overlay; closed, at styles.css's 30, under the slash
+ * menu as before. styles.css slides it by .mobile-open. */
+.sidebar[data-slot][data-open] {
+  z-index: 50;
+}
+/* Closed, Base UI marks it hidden, and Tailwind's preflight hides that with !important in the
+ * base layer, which no unlayered rule outranks. It stays drawn off the left edge, as before:
+ * its shadow edges the screen, and inert keeps it out of reach (ConversationList.tsx). */
+@layer base {
+  .sidebar[data-slot][hidden] {
+    display: flex !important;
+  }
+}
+
+/* The menus: placed by Base UI, not under their button as the prototype's were. */
+.model-popover[data-slot],
+.effort-popover[data-slot] {
+  position: static;
+}
+.model-menu-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.effort-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.model-menu-option[data-slot],
+.effort-option[data-slot] {
+  /* Room for shadcn's check, which sits where the prototype's did. */
+  padding-right: 34px;
+  font-size: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+.model-menu-option [data-slot$="indicator"],
+.effort-option [data-slot$="indicator"] {
+  right: 10px;
+}
+.model-menu-option [data-slot$="indicator"] svg,
+.effort-option [data-slot$="indicator"] svg {
+  width: 14px;
+  height: 14px;
+}
+.model-menu-head[data-slot] {
+  line-height: inherit;
+}
+/* A menu's button carries shadcn's data-slot, which styles.css's disabled look skips. */
+.run-seg:disabled {
+  background: var(--surface-sub);
+  border-color: var(--glass-edge);
+  color: var(--subtle-foreground);
+  box-shadow: none;
+}
+
+/* The context sheet's bar: the ring's track and tones. */
+.context-progress [data-slot="progress-track"] {
+  height: 4px;
+}
+.context-progress [data-slot="progress-indicator"] {
+  background: var(--status-ok);
+}
+.context-progress.warn [data-slot="progress-indicator"] {
+  background: var(--status-warn);
+}
+.context-progress.error [data-slot="progress-indicator"] {
+  background: var(--status-error);
+}
+
+/* A field in a phone's sheet at 16px: under that, iPhone Safari zooms the page in on focus. */
+@media (max-width: 767px) {
+  .sheet-panel input,
+  .sheet-panel textarea {
+    font-size: 16px;
+  }
 }
 
 /*
