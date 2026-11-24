@@ -120,6 +120,8 @@ export function ApprovalCard(props: {
   blocked?: string;
   /** Takes the focus when this becomes true; false for all but the oldest card to decide. */
   focus?: boolean;
+  /** The focus comes without scrolling: it moves on from the card the user just decided. */
+  quiet?: boolean;
   /** The page's clock, as the ack's time was taken. */
   pageNow?: number;
 }) {
@@ -141,7 +143,7 @@ export function ApprovalCard(props: {
   useEffect(() => {
     if (props.focus === false) return;
     if (document.activeElement?.closest(".composer") != null) return;
-    deny.current?.focus();
+    deny.current?.focus(props.quiet === true ? { preventScroll: true } : undefined);
   }, [props.focus]);
   const left = props.localNow === undefined ? undefined : a.expiresAt - props.localNow;
   const external = a.effects === "external-write";

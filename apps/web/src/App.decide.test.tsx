@@ -5,7 +5,7 @@
 // the second click of a double click, or a second Enter, lands on the other card. jsdom lays
 // nothing out, so the second press is sent to the button it would land on.
 import { act } from "react";
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
 import { render } from "./render.ts";
 import { server, socketHarness } from "./testing.ts";
@@ -82,8 +82,9 @@ async function twoCards(layout: "pinned" | "thread") {
         const p = m.p as { approvalId: string; decision: string };
         return `${p.decision}@${p.approvalId}`;
       });
-  const status = (card: number) => cards()[card]?.querySelector(".sg-tag")?.textContent;
-  return { h, ...r, cards, press, decisions, status };
+  /** The card as drawn: a press held back must leave it as it was, to the byte. */
+  const html = (card: number) => cards()[card]?.innerHTML;
+  return { h, ...r, cards, press, decisions, html };
 }
 
 describe.each(["pinned", "thread"] as const)("two cards waiting, %s", (layout) => {
@@ -101,10 +102,11 @@ describe.each(["pinned", "thread"] as const)("two cards waiting, %s", (layout) =
       const t = await twoCards(layout);
       await t.press(0, "approve");
       await act(async () => t.h.advance(gap));
+      const before = t.html(1);
       await t.press(1, "approve");
       expect(t.decisions()).toEqual(["approved@approval-1"]);
       // Nothing about the second card changed: it waits, and can be decided.
-      expect(t.status(1)).toBe("等待核准");
+      expect(t.html(1)).toBe(before);
       t.unmount();
     },
   );
@@ -113,20 +115,55 @@ describe.each(["pinned", "thread"] as const)("two cards waiting, %s", (layout) =
     const t = await twoCards(layout);
     await t.press(0, "deny");
     await act(async () => t.h.advance(30));
+    const before = t.html(1);
     await act(async () => (document.activeElement as HTMLButtonElement).click());
     expect(t.decisions()).toEqual(["denied@approval-1"]);
-    expect(t.status(1)).toBe("等待核准");
+    expect(t.html(1)).toBe(before);
     t.unmount();
   });
 
-  test("the press held back is not lost: 1000 ms on, the other card's decision is sent", async () => {
+  test("a press held back starts the wait again: 999 ms after it, still held; 1000 ms, sent", async () => {
     const t = await twoCards(layout);
     await t.press(0, "approve");
     await act(async () => t.h.advance(100));
     await t.press(1, "approve");
-    await act(async () => t.h.advance(900));
+    await act(async () => t.h.advance(999));
+    await t.press(1, "approve");
+    expect(t.decisions()).toEqual(["approved@approval-1"]);
+    await act(async () => t.h.advance(1000));
     await t.press(1, "approve");
     expect(t.decisions()).toEqual(["approved@approval-1", "approved@approval-2"]);
+    t.unmount();
+  });
+
+  test("five presses 330 ms apart, or Enter held (a press each 33 ms for 1.5 s): only the first card", async () => {
+    const t = await twoCards(layout);
+    await t.press(0, "approve");
+    for (let i = 0; i < 4; i++) {
+      await act(async () => t.h.advance(330));
+      await t.press(1, "approve");
+    }
+    expect(t.decisions()).toEqual(["approved@approval-1"]);
+    const u = await twoCards(layout);
+    await u.press(0, "deny");
+    for (let i = 0; i < 45; i++) {
+      await act(async () => u.h.advance(33));
+      await act(async () => (document.activeElement as HTMLButtonElement).click());
+    }
+    expect(u.decisions()).toEqual(["denied@approval-1"]);
+    t.unmount();
+    u.unmount();
+  });
+
+  test("the focus moves on from a decision without scrolling; a card that comes scrolls into sight", async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    const t = await twoCards(layout);
+    // The first card came with nothing decided: it is brought into sight.
+    expect(focus.mock.calls.at(-1)).toEqual([undefined]);
+    await t.press(0, "approve");
+    expect(t.cards()[1]?.contains(document.activeElement)).toBe(true);
+    expect(focus.mock.calls.at(-1)).toEqual([{ preventScroll: true }]);
+    focus.mockRestore();
     t.unmount();
   });
 

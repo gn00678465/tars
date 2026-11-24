@@ -155,8 +155,10 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [sheet, setSheet] = useState(false);
   // What the desktop's context and model sheets drop from.
   const ring = useRef<HTMLButtonElement>(null);
-  /** The last decision sent: which card, and when on `now`. */
+  /** The last decision sent, or press held back: which card was decided, and when on `now`. */
   const lastDecided = useRef<{ approvalId: string; at: number }>(undefined);
+  /** The card the user decided last, for where the focus goes next. */
+  const [decided, setDecided] = useState<string>();
   const modelButton = useRef<HTMLButtonElement>(null);
   /** The context sheet, with what to keep already typed after /compact when it was too long. */
   const [contextSheet, setContextSheet] = useState<{ focus: string } | undefined>(undefined);
@@ -310,25 +312,30 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     dispatch({ type: "archive_sent", conv, undo, ...(id === undefined ? {} : { id }) });
   };
   const decide = (card: (typeof state.cards)[number], decision: "approved" | "denied") => {
-    // A decision sent moves the focus to the next card's deny button, and the browser scrolls that
-    // card's buttons to where the first card's were: the second click of a double click, or a
-    // second Enter, would decide a card not yet read (p4_review.md 5, 6). So, soon after one
-    // card's decision, another card's is not sent, and nothing about it changes. The same card's
-    // is: a decision refused may go again at once.
+    // A decision sent moves the focus to the next card's deny button: a second click, a second
+    // Enter or a held one would decide a card not yet read (p4_review.md 5, 6;
+    // double_decide_review.md 4). So another card's decision is sent only once the presses have
+    // stopped for OTHER_CARD_MS: one held back is not sent, changes no card, and starts the wait
+    // again. The same card's goes at once: a decision refused may go again.
     const at = now();
     const last = lastDecided.current;
     if (
       last !== undefined &&
       last.approvalId !== card.approval.approvalId &&
       at - last.at < OTHER_CARD_MS
-    )
+    ) {
+      lastDecided.current = { ...last, at };
       return;
+    }
     const id = socket.send("approval.decide", {
       approvalId: card.approval.approvalId,
       decision,
       hash: card.approval.hash,
     });
-    if (id !== undefined) lastDecided.current = { approvalId: card.approval.approvalId, at };
+    if (id !== undefined) {
+      lastDecided.current = { approvalId: card.approval.approvalId, at };
+      setDecided(card.approval.approvalId);
+    }
     dispatch(
       id === undefined
         ? { type: "decide_failed", approvalId: card.approval.approvalId }
@@ -377,6 +384,10 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // when that one is sent.
   const first = pending.find((c) => c.deciding === undefined && c.acked !== true)?.approval
     .approvalId;
+  // While the card just decided waits for its result, the focus moves on without scrolling: its
+  // buttons, now 「等待本機回應…」 and disabled, stay under the pointer, and the next card's do
+  // not slide there. A card that comes otherwise is scrolled into sight as it takes the focus.
+  const quiet = pending.some((c) => c.approval.approvalId === decided);
   const blocked =
     state.connection !== "open" || !state.relay.online ? "離線，無法送出決定" : undefined;
   const waiting = new Set(pending.map((c) => c.approval.conv));
@@ -500,6 +511,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
       localNow={localNow(state, tick)}
       onDecide={(d) => decide(c, d)}
       focus={c.approval.approvalId === first}
+      quiet={quiet}
       pageNow={tick}
       {...(blocked === undefined ? {} : { blocked })}
     />
@@ -758,6 +770,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                       localNow={localNow(state, tick)}
                       onDecide={(d) => decide(card, d)}
                       focus={card.approval.approvalId === first}
+                      quiet={quiet}
                       pageNow={tick}
                       {...(blocked === undefined ? {} : { blocked })}
                       origin={{

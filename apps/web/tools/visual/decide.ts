@@ -78,7 +78,10 @@ async function open(w: (typeof WIDTHS)[number], problems: string[]) {
   const page = await context.newPage();
   page.on("pageerror", (e) => problems.push(`error: ${e.message}`));
   await page.addInitScript(COLLECT);
+  // Stopped: only runFor moves the page's time, so a gap is what the run says, however slow the
+  // machine (with install alone it went on with the wall clock; double_decide_review.md 3).
   await page.clock.install({ time: NOW });
+  await page.clock.pauseAt(NOW + 1_000);
   await page.goto(`${url}/?scene=${scene}`, { waitUntil: "load" });
   await page.clock.runFor(400);
   await page.evaluate(
@@ -100,32 +103,39 @@ const result = (name: string, got: string[], want: string[]) => {
   console.log(`${ok ? "ok  " : "FAIL"} ${name}: ${got.length} decision(s) ${JSON.stringify(got)}`);
 };
 
+/** The presses at one spot after the first: the gaps before each, in ms. */
+const RUNS = [
+  ...GAPS.map((gap) => ({ name: `×2, ${gap} ms`, gaps: [gap] })),
+  { name: "again 1.35 s on", gaps: [1_350] },
+  { name: "×5, 330 ms apart", gaps: [330, 330, 330, 330] },
+];
+
 for (const w of WIDTHS)
   for (const press of ["approve", "deny"] as const)
-    for (const gap of GAPS) {
+    for (const run of RUNS) {
       const problems: string[] = [];
       const { context, page } = await open(w, problems);
       const box = await button(page, 0, press).boundingBox();
       if (box === null) throw new Error(`${w.name}: no ${press} button`);
       const x = box.x + box.width / 2;
       const y = box.y + box.height / 2;
-      // Two presses at one spot, as a hand gives them: what is under it the second time is
-      // whatever the page has moved there.
-      for (const i of [0, 1]) {
-        if (i === 1) await page.clock.runFor(gap);
+      // Presses at one spot, as a hand gives them: what is under it each time is whatever the
+      // page has put there.
+      for (const gap of [0, ...run.gaps]) {
+        await page.clock.runFor(gap);
         if (w.hasTouch) await page.touchscreen.tap(x, y);
         else await page.mouse.click(x, y);
       }
       const decision = press === "approve" ? "approved" : "denied";
-      const name = `${w.name} ${press} ×2, ${gap} ms`;
+      const name = `${w.name} ${press} ${run.name}`;
       result(name, await sent(page), [`${decision}@${FIRST}`]);
-      await page.screenshot({ path: join(shots, `${w.name}-${press}-${gap}.png`) });
-      // 1000 ms after the first, the second card's own press is sent. A second card already
-      // decided by the double press has no button to press: that run has failed above.
+      await page.screenshot({ path: join(shots, `${w.name}-${press}-${run.name}.png`) });
+      // 1000 ms after the last press, the second card's own press is sent. A second card already
+      // decided by then has no button to press: that run has failed above.
       await page.clock.runFor(1_000);
       if (await button(page, 1, press).isEnabled()) {
         await button(page, 1, press).click();
-        result(`${name}, then the second card at 1000 ms`, await sent(page), [
+        result(`${name}, then the second card 1000 ms on`, await sent(page), [
           `${decision}@${FIRST}`,
           `${decision}@${SECOND}`,
         ]);
@@ -134,21 +144,63 @@ for (const w of WIDTHS)
       await context.close();
     }
 
-// The keyboard: the focus on the first card's deny button, Enter twice.
+// The keyboard: the focus on the first card's deny button, Enter twice, then Enter held for
+// 1.5 s (a keydown each 33 ms, as auto-repeat sends them).
+for (const w of WIDTHS)
+  for (const held of [false, true]) {
+    const problems: string[] = [];
+    const { context, page } = await open(w, problems);
+    await button(page, 0, "deny").focus();
+    await page.keyboard.press("Enter");
+    await page.clock.runFor(30);
+    const second = await page.evaluate(
+      () => document.activeElement?.closest(".approval-card") !== null,
+    );
+    if (held) {
+      await page.keyboard.down("Enter");
+      for (let i = 0; i < 45; i++) {
+        await page.clock.runFor(33);
+        await page.keyboard.down("Enter");
+      }
+      await page.keyboard.up("Enter");
+    } else await page.keyboard.press("Enter");
+    const name = `${w.name} Enter ${held ? "held 1.5 s" : "×2"} on deny (focus moved to a card: ${second})`;
+    result(name, await sent(page), [`denied@${FIRST}`]);
+    for (const p of [...problems, ...(await violations(page))]) bad.push(`${name}: ${p}`);
+    await context.close();
+  }
+
+// Not a check (double_decide_review.md, task A3): after the first card's result comes, what is
+// under the spot the first press was made at.
+const UNDER = ([x, y]: [number, number]) => {
+  const b = document.elementFromPoint(x, y)?.closest("button");
+  const card = b?.closest(".approval-card");
+  const all = [...document.querySelectorAll(".pinned-approvals .approval-card")];
+  return b == null
+    ? `no button (${document.elementFromPoint(x, y)?.className ?? "nothing"})`
+    : `card ${card == null ? "-" : all.indexOf(card) + 1} 「${b.textContent}」${b.disabled ? " disabled" : ""}`;
+};
 for (const w of WIDTHS) {
   const problems: string[] = [];
   const { context, page } = await open(w, problems);
-  await button(page, 0, "deny").focus();
-  await page.keyboard.press("Enter");
-  await page.clock.runFor(30);
-  const second = await page.evaluate(
-    () => document.activeElement?.closest(".approval-card") !== null,
+  const box = await button(page, 0, "approve").boundingBox();
+  if (box === null) throw new Error(`${w.name}: no approve button`);
+  const spot: [number, number] = [box.x + box.width / 2, box.y + box.height / 2];
+  if (w.hasTouch) await page.touchscreen.tap(...spot);
+  else await page.mouse.click(...spot);
+  await page.clock.runFor(100);
+  const pressed = await page.evaluate(UNDER, spot);
+  await page.evaluate(
+    (m) => (globalThis as { visualPush?: (m: unknown) => void }).visualPush?.(m),
+    { kind: "approval.resolved", p: { approvalId: FIRST, state: "approved", via: "remote" } },
   );
-  await page.keyboard.press("Enter");
-  result(`${w.name} Enter ×2 on deny (focus moved to a card: ${second})`, await sent(page), [
-    `denied@${FIRST}`,
-  ]);
-  for (const p of [...problems, ...(await violations(page))]) bad.push(`${w.name} Enter: ${p}`);
+  await page.clock.runFor(300);
+  const cards = await page.locator(".pinned-approvals .approval-card").count();
+  const resolved = await page.evaluate(UNDER, spot);
+  await page.screenshot({ path: join(shots, `${w.name}-after-result.png`) });
+  console.log(
+    `info ${w.name}: under the spot after the press: ${pressed}; after the result: ${resolved}; ${cards} card(s) in the dock`,
+  );
   await context.close();
 }
 
