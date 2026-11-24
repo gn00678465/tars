@@ -505,45 +505,6 @@ button:disabled:not(:where([data-slot])) {
   color: var(--foreground);
 }
 
-.tars-monolith {
-  display: inline-flex;
-  gap: 2px;
-  align-items: center;
-  height: 15px;
-}
-
-.tars-monolith span {
-  width: 2.5px;
-  height: 14px;
-  border-radius: 1px;
-  background: var(--foreground);
-  opacity: 0.88;
-}
-
-.tars-monolith span:nth-child(2) {
-  height: 11px;
-  opacity: 0.58;
-}
-.tars-monolith span:nth-child(4) {
-  height: 12px;
-  opacity: 0.74;
-}
-
-.tars-monolith.lg {
-  height: 24px;
-  margin-bottom: 4px;
-}
-.tars-monolith.lg span {
-  width: 4px;
-  height: 22px;
-}
-.tars-monolith.lg span:nth-child(2) {
-  height: 17px;
-}
-.tars-monolith.lg span:nth-child(4) {
-  height: 19px;
-}
-
 .sidebar-actions {
   padding: 12px;
   flex-shrink: 0;

@@ -321,6 +321,14 @@
   background-image: url("./assets/tars-sprite-idle.svg");
   animation-duration: 1.333s;
 }
+/* The brand mark in the sidebar header: frame 1 of the idle sprite, not played. */
+.tars-mark {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  background: url("./assets/tars-sprite-idle.svg") no-repeat 0 0 / 96px 24px;
+}
 .empty-state .tars-sprite {
   width: 64px;
   height: 64px;

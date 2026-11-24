@@ -33,6 +33,15 @@ test("connects, asks for the list after hello, and shows what the relay says", a
   unmount();
 });
 
+test("the sidebar header carries the TARS mark (the idle sprite's first frame), not the old bars", async () => {
+  const h = socketHarness();
+  const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);
+  await act(async () => h.last().ready());
+  expect(root.querySelectorAll(".sidebar-header .brand-mark .tars-mark")).toHaveLength(1);
+  expect(root.querySelector(".tars-monolith")).toBeNull();
+  unmount();
+});
+
 test("the pill as scene 5: which reconnect in a warn pill; a version mismatch says which side to update", async () => {
   const h = socketHarness();
   const { root, unmount } = await render(<App socket={h.socket} now={h.now} />);

@@ -1,7 +1,7 @@
 import type { WireConv } from "@tars/protocol";
 import type { ReactNode } from "react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { Icon, Monolith } from "./Icon.tsx";
+import { BrandMark, Icon } from "./Icon.tsx";
 import { listTime } from "./time.ts";
 
 const titleOf = (c: WireConv) => (c.title === "" ? "（沒有標題）" : c.title);
@@ -54,7 +54,7 @@ export function ConversationList(props: {
     <>
       <div className="sidebar-header">
         <div className="brand-mark">
-          <Monolith />
+          <BrandMark />
           <span>TARS</span>
         </div>
         <button
