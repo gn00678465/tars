@@ -418,6 +418,8 @@ function TurnEnd({
       <div className="turn-status" role="status">
         {turn.phase === "thinking" ? (
           <span className="tars-sprite wheel" aria-hidden="true" />
+        ) : turn.phase === "waiting_approval" ? (
+          <span className="tars-sprite idle" aria-hidden="true" />
         ) : (
           <span className="status-glyph" aria-hidden="true">
             <span />

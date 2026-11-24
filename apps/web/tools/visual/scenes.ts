@@ -291,6 +291,8 @@ const answers = (o: {
   status?: WireStatus;
   context?: WireContext;
   models?: WireModel[];
+  /** A turn under way in this conversation, as its snapshot says (a page opened mid-turn). */
+  running?: { readonly conv: string; readonly phase: string };
 }): Answers => ({
   "conv.list": [{ kind: "conv.list.result", p: { convs: o.convs ?? CONVS } }],
   "status.get": [{ kind: "status", p: o.status ?? STATUS }],
@@ -309,7 +311,14 @@ const answers = (o: {
     {
       kind: "conv.snapshot",
       conv: m.conv,
-      p: { epoch: EPOCH, items: items[m.conv ?? ""] ?? [], more: false },
+      p: {
+        epoch: EPOCH,
+        items: items[m.conv ?? ""] ?? [],
+        more: false,
+        ...(o.running?.conv === m.conv
+          ? { running: { turn: "turn-9", text: "", truncated: false, phase: o.running?.phase } }
+          : {}),
+      },
     },
     { kind: "conv.context", conv: m.conv, p: o.context ?? CONTEXT },
   ],
@@ -456,6 +465,17 @@ export const SCENES: Scene[] = [
     steps: [{ click: 'button:has-text("個人知識庫")' }, { click: "text=NAS 備份腳本" }],
     // A phone opens on the page already.
     phone: [{ click: 'button:has-text("個人知識庫")' }],
+  },
+  {
+    name: "回合狀態：等待核准（TARS 站著的圖）",
+    relay: online,
+    pushes: [pending("c-backup", "call-1")],
+    answers: answers({
+      status: { ...STATUS, pendingApprovals: 1 },
+      running: { conv: "c-backup", phase: "waiting_approval" },
+    }),
+    // The click scrolls the status line into view, and fails when its TARS picture is missing.
+    ...both("整理 NAS 備份腳本", { click: ".turn-status .tars-sprite.idle" }),
   },
   {
     // Only this scene lists the conversation, so the other scenes' lists stay as they were.

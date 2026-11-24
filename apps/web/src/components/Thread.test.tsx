@@ -251,7 +251,7 @@ test("D1: a started turn's line names its phase, and is gone once the turn ends"
 });
 
 // The no-inline-style check covers only these two Thread views, not the whole App.
-test("the sprites: the wheel while thinking, idle on the empty page; neither view has a style", async () => {
+test("the sprites: the wheel while thinking, idle while waiting for an approval and on the empty page; no view has a style", async () => {
   const thinking = await render(
     <Thread
       state={turnState({ state: "started", turn: T, phase: "thinking" })}
@@ -273,6 +273,19 @@ test("the sprites: the wheel while thinking, idle on the empty page; neither vie
   );
   expect(replying.root.querySelector(".tars-sprite")).toBeNull();
   replying.unmount();
+  const waiting = await render(
+    <Thread
+      state={turnState({ state: "started", turn: T, phase: "waiting_approval" })}
+      onOlder={() => undefined}
+      after={() => null}
+    />,
+  );
+  const waitSprite = waiting.root.querySelector(".turn-status .tars-sprite");
+  expect(waitSprite?.className).toBe("tars-sprite idle");
+  expect(waitSprite?.getAttribute("aria-hidden")).toBe("true");
+  expect(waiting.root.querySelector(".turn-status")?.textContent).toContain("等待核准");
+  expect(waiting.root.querySelector("[style], style")).toBeNull();
+  waiting.unmount();
   const empty = await render(
     <Thread
       state={{ ...initial, connection: "open" }}
