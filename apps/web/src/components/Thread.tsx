@@ -493,6 +493,19 @@ function rowIds(all: readonly Group[], ids: Map<number, string>): string[] {
   });
 }
 
+/**
+ * The line over a compacted conversation's first rows, which the model no longer sees. Above the
+ * rows with Older, not a row: older ones come in before the first row, and the scroller keeps its
+ * place only while the row that was first stays (a line there was drawn anew with the group it
+ * opened, and the place jumped by the whole page).
+ */
+export function HiddenLine({ items }: { items: readonly WireItem[] }) {
+  const all = groups(items);
+  return all.length > 0 && placed(all, items).faded > 0 ? (
+    <div className="compacted-notice-line">模型已看不到以下的原文，只看得到摘要</div>
+  ) : null;
+}
+
 /** Above the rows, so older ones come in before the first row (the scroller keeps its place). */
 export function Older({ onOlder }: { onOlder: () => void }) {
   return (
@@ -591,11 +604,6 @@ export function Thread(props: {
         const id = ids[i] as string;
         return (
           <Fragment key={id}>
-            {i === 0 && faded > 0 ? (
-              <MessageScrollerItem className="compacted-notice-line">
-                模型已看不到以下的原文，只看得到摘要
-              </MessageScrollerItem>
-            ) : null}
             {latest !== undefined && i === faded ? dividers : null}
             <MessageScrollerItem
               messageId={id}

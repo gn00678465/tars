@@ -243,6 +243,58 @@ test("a page cut inside a group: when the group's first half comes, its row keep
   expect(p.el.scrollTop).toBeGreaterThan(0);
 });
 
+test("E4 in the page: a compacted conversation's line is above the rows, not one; older groups loaded do not move what is read", async () => {
+  const p = await page();
+  const compaction = {
+    seq: 41,
+    turn: "turn-c",
+    kind: "compaction",
+    text: "摘要",
+    truncated: false,
+    trigger: "manual",
+    beforeTokens: 96_000,
+    count: 14,
+    firstKeptSeq: 33,
+  };
+  // Groups 10–15 summarized, 16–19 kept.
+  await p.open(A, [...groups(10, 19), compaction], true);
+  const head = p.el.querySelector(".thread-head") as HTMLElement;
+  const order = [
+    ...p.el.querySelectorAll(".compacted-notice-line, .msg-group, .compaction-divider"),
+  ].map((e) =>
+    e.classList.contains("compacted-notice-line")
+      ? "line"
+      : e.classList.contains("compaction-divider")
+        ? "divider"
+        : `${e.classList.contains("compacted-old") ? "old" : "kept"}:${e.querySelector(".msg-user")?.textContent}`,
+  );
+  expect(order).toEqual([
+    "line",
+    ...[10, 11, 12, 13, 14, 15].map((g) => `old:問題 ${g}`),
+    "divider",
+    ...[16, 17, 18, 19].map((g) => `kept:問題 ${g}`),
+  ]);
+  const line = p.el.querySelector(".compacted-notice-line") as HTMLElement;
+  expect(line.parentElement).toBe(head);
+  expect(line.textContent).toBe("模型已看不到以下的原文，只看得到摘要");
+  // After 載入更早的訊息 in the head.
+  expect(line.previousElementSibling?.textContent).toBe("載入更早的訊息");
+  await p.up(250);
+  const before = p.rows();
+  const seen = before.find((r) => r.getBoundingClientRect().bottom > 0) as HTMLElement;
+  const top = seen.getBoundingClientRect().top;
+  await act(async () => button(p.root, "載入更早的訊息").click());
+  await p.receive(
+    server("conv.snapshot", { epoch: "epoch-1", more: false, items: groups(4, 9) }, { conv: A }),
+  );
+  await frame();
+  expect(p.rows().slice(-before.length)).toEqual(before);
+  expect(seen.getBoundingClientRect().top).toBe(top);
+  // Still one line, above the older groups, which are summarized too.
+  expect(p.el.querySelectorAll(".compacted-notice-line")).toHaveLength(1);
+  expect(p.el.querySelector(".msg-group")?.classList.contains("compacted-old")).toBe(true);
+});
+
 test("another conversation opened while scrolled up goes to its end; so does a message the owner sends", async () => {
   const p = await page();
   await p.open(A, groups(0, 9));

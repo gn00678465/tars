@@ -26,7 +26,7 @@ import {
   effortNote,
   RunSetup,
 } from "./components/RunSetup.tsx";
-import { Older, Thread } from "./components/Thread.tsx";
+import { HiddenLine, Older, Thread } from "./components/Thread.tsx";
 import { SourceOverlay } from "./components/wiki/SourceOverlay.tsx";
 import { WikiSideList, WikiTabs } from "./components/wiki/WikiSidebar.tsx";
 import { WikiWorkspace } from "./components/wiki/WikiWorkspace.tsx";
@@ -641,6 +641,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                         }}
                       />
                     ) : null}
+                    <HiddenLine items={state.items} />
                   </div>
                 )}
                 {/* The finished reply is spoken once by the polite region below (state.spoken):

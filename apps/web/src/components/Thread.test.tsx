@@ -409,8 +409,8 @@ test("E4: the dividers sit where the latest summary ends; what it summarized is 
           `${e.classList.contains("compacted-old") ? "msg-group compacted-old" : "msg-group"}:${e.querySelector(".msg-user")?.textContent}`
         : "line",
   );
+  // The line above them is the page's, over the rows (App.scroll.test.tsx).
   expect(order).toEqual([
-    "line",
     "msg-group compacted-old:u1",
     "msg-group compacted-old:u3",
     `divider:${new Date(0).getHours().toString().padStart(2, "0")}:00 自動壓縮（早期 8 則）`,

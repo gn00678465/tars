@@ -11,7 +11,7 @@ import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 /**
  * Under this much JS a first visit loads, gzipped: main's 224,351 bytes at M4-P3a (82467ac) plus
  * 9 kB for the thread's Message Scroller (@shadcn/react) and its message shells; P3a measured
- * 232,562. P3b sets its own.
+ * 232,578. P3b sets its own.
  * main's count has the screen readout in the status sheet, about 1 kB: it is for finding the
  * iPhone's bottom gap, and goes when that is found.
  * P2 put Base UI's overlays on the first load (main was 138,115): the design's estimate was about
