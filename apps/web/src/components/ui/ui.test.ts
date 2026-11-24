@@ -22,6 +22,7 @@ const ours = [
   "RunSetup.tsx",
   "ConversationList.tsx",
   "wiki/SourceOverlay.tsx",
+  "PullIndicator.tsx",
 ].map((f) => join(dir, "..", f));
 
 /**
@@ -38,12 +39,42 @@ const WRITES = [
   /cssText/,
 ];
 
+/** The ways `code` writes a style; `pullY` lets through the one call usePullToRefresh.ts makes. */
+const writes = (code: string, pullY = false) => {
+  const rest = pullY ? code.replace(PULL_Y, "") : code;
+  return WRITES.filter((w) => w.test(rest)).map(String);
+};
+/**
+ * The one exception (M4 pull to refresh): the page follows the finger by the pixel, through the
+ * CSSOM, one custom property. Only this call, with this property, in this file.
+ */
+const PULL_FILE = join(dir, "..", "..", "usePullToRefresh.ts");
+const PULL_Y = /\.style\.setProperty\("--pull-y", /g;
+
 test("the shadcn components and the files using them write no style", () => {
   expect(copied.length).toBeGreaterThan(10);
-  for (const f of [...copied, ...ours]) {
-    const code = readFileSync(f, "utf8");
-    for (const w of WRITES) expect(code, `${f}: ${w}`).not.toMatch(w);
-  }
+  for (const f of [...copied, ...ours]) expect(writes(readFileSync(f, "utf8")), f).toEqual([]);
+});
+
+test("usePullToRefresh.ts writes --pull-y by setProperty, once, and no other style", () => {
+  const code = readFileSync(PULL_FILE, "utf8");
+  expect(code.match(PULL_Y)).toHaveLength(1);
+  expect(writes(code, true)).toEqual([]);
+  // Without the exception the file fails; with it, any other write still does.
+  expect(writes(code)).not.toEqual([]);
+  for (const other of [
+    'page.style.setProperty("--other", "1px")',
+    'page.style.setProperty("transform", "none")',
+    "page.style.setProperty('--pull-y', '1px')",
+    'page.style.removeProperty("--pull-y")',
+    'page.style.transform = "none"',
+    "page.style.cssText = ''",
+    'page.setAttribute("style", "")',
+    "<div style={{ top: 0 }} />",
+  ])
+    expect(writes(`page.style.setProperty("--pull-y", "1px");\n${other}`, true), other).not.toEqual(
+      [],
+    );
 });
 
 /**

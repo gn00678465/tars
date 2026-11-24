@@ -205,7 +205,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   }, [state.items, state.running, state.turn, state.cards]);
   // Whether the composer holds unsent text: a pull does not reload over it.
   const draft = useRef(false);
-  const pull = usePullToRefresh(thread, { draft: () => draft.current });
+  const workspace = useRef<HTMLDivElement>(null);
+  const pull = usePullToRefresh(thread, { page: workspace, draft: () => draft.current });
   const [opened, setOpened] = useState(0);
   useEffect(() => {
     if (opened > 0) thread.current?.focus();
@@ -487,7 +488,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             holds them, when it opens. An approval card that comes while one is open lands here
             and takes the focus (ApprovalCard); hidden, iPhone's VoiceOver would not read it. So
             the workspace stays exposed, as it was before the overlays were Base UI's. */}
-        <div className="workspace" aria-live="off">
+        <div className="workspace" ref={workspace} aria-live="off">
           <TopBar
             state={state}
             menuHidden={!collapsed && !compact}

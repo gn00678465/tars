@@ -1,6 +1,8 @@
 // Pull to refresh in Chromium, with real touches (CDP Input.dispatchTouchEvent: Playwright's
-// touchscreen only taps). At phone width: a pull short of the threshold does nothing; past it the
-// page reloads, in a conversation and on the knowledge base; a finger dragging a scrolled thread
+// touchscreen only taps). At phone width: the page above the composer follows the finger, damped
+// and capped; short of the rest it eases back to 0; past it, let go, it settles at the rest and
+// the indicator's box and text do not move from 放開重新整理 to 重新整理中…, then the page
+// reloads, in a conversation and on the knowledge base; a finger dragging a scrolled thread
 // scrolls it both ways, as before. With each of P2's overlays open (overlays.ts), at phone width
 // and at desktop width with touch (an iPad), a pull does not reload. A card announced in the middle
 // of a pull is still in the accessibility tree beside the bar. At desktop width a mouse drag does
@@ -39,6 +41,8 @@ async function violations(page: Page, where: string) {
   if (probes > 1) failures.push(`${where}: zod's probe ${probes} times, not once`);
 }
 
+/** A finger's way past the rest (56 px of page at 0.5 of the finger). */
+const FULL = 140;
 const scroller = (page: Page) => page.locator("main.thread-scroll");
 const scrollTop = (page: Page) => scroller(page).evaluate((el) => el.scrollTop);
 const bar = (page: Page) =>
@@ -46,6 +50,45 @@ const bar = (page: Page) =>
     const b = document.querySelector(".pull-indicator");
     return b === null ? null : `${b.getAttribute("data-pull")} ${b.textContent}`;
   });
+
+/** One finger down at (x, from) and moved to (x, to), kept down. */
+async function hold(cdp: CDPSession, x: number, from: number, to: number) {
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x, y: from, id: 1 }],
+  });
+  await moveTo(cdp, x, from, to);
+}
+async function moveTo(cdp: CDPSession, x: number, from: number, to: number) {
+  for (let i = 1; i <= 10; i++)
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x, y: from + ((to - from) * i) / 10, id: 1 }],
+    });
+}
+const lift = (cdp: CDPSession) =>
+  cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+
+/** Where the moved parts, the composer and the indicator are, as page y and size. */
+const LAYOUT = () => {
+  const box = (s: string) => {
+    const r = document.querySelector(s)?.getBoundingClientRect();
+    return r === undefined ? null : { x: r.x, y: r.y, w: r.width, h: r.height };
+  };
+  return {
+    topbar: box(".topbar"),
+    thread: box("main.thread-scroll"),
+    dock: box(".composer-dock"),
+    bar: box(".pull-indicator"),
+    text: box(".pull-indicator .pull-text"),
+    pull: document.querySelector(".pull-indicator")?.getAttribute("data-pull") ?? "none",
+    words: document.querySelector(".pull-indicator .pull-text")?.textContent ?? "",
+  };
+};
+const layout = (page: Page) => page.evaluate(LAYOUT);
+type Layout = Awaited<ReturnType<typeof layout>>;
+const down = (a: Layout, b: Layout, k: "topbar" | "thread" | "dock") =>
+  Math.round(((b[k]?.y ?? 0) - (a[k]?.y ?? 0)) * 10) / 10;
 
 /** One finger from (x, from) to (x, to) in steps; `before` runs while it is still down. */
 async function drag(
@@ -57,11 +100,7 @@ async function drag(
 ) {
   const at = (y: number) => [{ x, y, id: 1 }];
   await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: at(from) });
-  for (let i = 1; i <= 10; i++)
-    await cdp.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: at(from + ((to - from) * i) / 10),
-    });
+  await moveTo(cdp, x, from, to);
   await before();
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 }
@@ -163,17 +202,82 @@ try {
     );
     await page.screenshot({ path: join(dir, "short.png") });
 
-    await violations(page, where);
-    const reloaded = page.waitForEvent("load", { timeout: 5000 });
-    await drag(cdp, x, top, top + 120, async () => {
-      seen = String(await bar(page));
-      await page.screenshot({ path: join(dir, "ready.png") });
-    });
-    await reloaded;
+    // Short of the rest: eased back, then not moved.
+    const still = await layout(page);
+    await hold(cdp, x, top, top + 60);
+    const half = await layout(page);
+    await page.screenshot({ path: join(dir, "pull-half.png") });
+    await lift(cdp);
+    await page.waitForTimeout(80);
+    const easing = await layout(page);
+    await page.waitForTimeout(400);
+    const rested = await layout(page);
     check(
-      seen === "ready 放開重新整理" && p.loads() === 2,
-      `${where}：拉 120 px 放開：放開前「${seen}」，載入 ${p.loads()} 次`,
+      down(still, half, "topbar") === 30 &&
+        down(still, half, "thread") === 30 &&
+        down(still, half, "dock") === 0 &&
+        half.pull === "pulling",
+      `${where}：手指 60 px：標題列與對話串下移 ${down(still, half, "topbar")}／${down(still, half, "thread")} px，輸入列 ${down(still, half, "dock")} px，${half.pull}`,
     );
+    check(
+      down(still, easing, "topbar") > 0 &&
+        down(still, easing, "topbar") < 30 &&
+        down(still, rested, "topbar") === 0 &&
+        rested.pull === "idle" &&
+        p.loads() === 1,
+      `${where}：未過門檻放開：80 ms 時 ${down(still, easing, "topbar")} px，之後 ${down(still, rested, "topbar")} px（${rested.pull}），沒有重新載入`,
+    );
+
+    // Past the rest: the cap, then let go; the page eases to the rest, where it is when the reload
+    // starts (SETTLE_MS, 200 ms, after the release). Read halfway, before the reload: the easing's
+    // end, from the transition itself.
+    await violations(page, where);
+    await hold(cdp, x, top, top + 60);
+    const pulling = await layout(page);
+    await moveTo(cdp, x, top + 60, top + 400);
+    const capped = await layout(page);
+    await moveTo(cdp, x, top + 400, top + FULL);
+    const ready = await layout(page);
+    await page.screenshot({ path: join(dir, "pull-ready.png") });
+    const reloaded = page.waitForEvent("load", { timeout: 5000 }).then(
+      () => true,
+      () => false,
+    );
+    await lift(cdp);
+    await page.waitForTimeout(90);
+    const busy = await layout(page);
+    const end = await page.evaluate(() => {
+      const effect = document.querySelector(".topbar")?.getAnimations()[0]?.effect;
+      return String(
+        effect instanceof KeyframeEffect ? effect.getKeyframes().at(-1)?.transform : "",
+      );
+    });
+    await page.screenshot({ path: join(dir, "pull-released.png") });
+    check(
+      down(still, capped, "topbar") === 120 && down(still, ready, "topbar") === FULL / 2,
+      `${where}：手指 400 px 時下移 ${down(still, capped, "topbar")} px（上限 120），${FULL} px 時 ${down(still, ready, "topbar")} px「${ready.words}」`,
+    );
+    const at = down(still, busy, "topbar");
+    check(
+      end === "translate3d(0px, 56px, 0px)" &&
+        at > 56 &&
+        at < FULL / 2 &&
+        busy.pull === "busy" &&
+        busy.words === "重新整理中…",
+      `${where}：過門檻放開：90 ms 時在 ${at} px，往 ${end} 收（停在 56 px）「${busy.words}」`,
+    );
+    const boxes = [pulling, ready, busy].map((l) => [l.bar, l.text]);
+    const same = (k: "y" | "h") =>
+      new Set(boxes.flatMap(([b, t]) => [`${b?.[k]}:${t?.[k]}`])).size === 1;
+    const xs = boxes.map(([, t]) => t?.x ?? 0);
+    check(
+      same("y") &&
+        same("h") &&
+        boxes.every(([, t]) => t?.h === 20) &&
+        Math.max(...xs) - Math.min(...xs) < 1,
+      `${where}：三態指示盒 y／高 ${boxes.map(([b]) => `${b?.y}/${b?.h}`).join("、")}，文字 y／高／x ${boxes.map(([, t]) => `${t?.y}/${t?.h}/${t?.x.toFixed(1)}`).join("、")}（單行 20 px）`,
+    );
+    check((await reloaded) && p.loads() === 2, `${where}：重新載入（載入 ${p.loads()} 次）`);
     await page.waitForTimeout(300);
     await violations(page, `${where}（重新載入後）`);
     await p.context.close();
@@ -189,12 +293,12 @@ try {
     );
     await violations(p.page, where);
     const reloaded = p.page.waitForEvent("load", { timeout: 5000 });
-    await drag(p.cdp, p.x, p.top, p.top + 120);
+    await drag(p.cdp, p.x, p.top, p.top + FULL);
     const ok = await reloaded.then(
       () => true,
       () => false,
     );
-    check(ok, `${where}：拉 120 px 放開，重新載入`);
+    check(ok, `${where}：拉 ${FULL} px 放開，重新載入`);
     await p.context.close();
   }
 
@@ -253,11 +357,11 @@ try {
           },
           [slot, x, y] as const,
         );
-        await drag(cdp, x, y, y + 120);
+        await drag(cdp, x, y, y + FULL);
         await page.waitForTimeout(1_500);
         check(
           seen.open === 1 && seen.marked === "root" && loads === 1,
-          `${where}：開著（${slot}，#root 標記 ${seen.marked ?? "無"}，手指落在 ${seen.under}）拉 120 px，載入 ${loads} 次`,
+          `${where}：開著（${slot}，#root 標記 ${seen.marked ?? "無"}，手指落在 ${seen.under}）拉 ${FULL} px，載入 ${loads} 次`,
         );
         await violations(page, where);
       } catch (e) {

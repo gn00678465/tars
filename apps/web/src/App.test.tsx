@@ -6,7 +6,10 @@ import { App } from "./App.tsx";
 import { button, buttons, render } from "./render.ts";
 import { shortTime } from "./components/time.ts";
 import { drag, frame, server, socketHarness, touch } from "./testing.ts";
-import { PULL_PX } from "./usePullToRefresh.ts";
+import { DAMPING, REST_PX } from "./usePullToRefresh.ts";
+
+/** A finger's way that moves the page past the rest. */
+const PULL_PX = REST_PX / DAMPING;
 
 afterEach(() => {
   document.body.innerHTML = "";

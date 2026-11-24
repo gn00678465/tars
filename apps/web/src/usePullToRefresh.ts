@@ -4,20 +4,28 @@ import { type RefObject, useEffect, useRef, useState } from "react";
  * Pull to refresh for the home-screen app (M4): iOS gives a standalone PWA no pull of its own,
  * so a new deploy needed the app closed. Touch only: a mouse or trackpad fires no touch events.
  * The page reloads; turns and waiting approvals live at the local end and come back with the
- * snapshot.
+ * snapshot. As iOS's own pull, the page above the composer follows the finger down and the
+ * indicator is in the space it leaves at the top.
  */
-export type Pull = "idle" | "pulling" | "ready" | "busy" | "blocked";
+export type Pull = "idle" | "pulling" | "ready" | "blocked" | "busy" | "back";
 
 export interface PullState {
   /** A finger has touched the scroller: until then nothing is drawn. */
   touched: boolean;
+  /** busy: let go past the rest, settling there, then the reload; back: settling to 0. */
   pull: Pull;
-  /** How far, in steps: the indicator's height comes from the class, not the finger. */
-  step: 0 | 1 | 2 | 3;
 }
 
-/** Pulled this far and let go, the page reloads. */
-export const PULL_PX = 70;
+/** The page moves this much of the finger's way, up to MAX_PX. */
+export const DAMPING = 0.5;
+export const MAX_PX = 120;
+/**
+ * Where the page rests while it reloads: the indicator's height (app.css). Moved this far, the
+ * indicator is all in sight and letting go reloads.
+ */
+export const REST_PX = 56;
+/** The settle to REST_PX or back to 0; app.css's transition is as long. */
+export const SETTLE_MS = 200;
 /** A finger moved less than this has not chosen up, down or sideways yet. */
 const SLOP_PX = 8;
 
@@ -54,18 +62,19 @@ function mayStart(el: HTMLElement, target: EventTarget | null) {
   );
 }
 
-const stepOf = (dy: number): PullState["step"] => (dy < 24 ? 1 : dy < 48 ? 2 : 3);
+const reduced = () =>
+  typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /**
- * Watches `scroller` for a one-finger pull down from its top. `draft` says whether the composer
- * holds unsent text: then a pull says so and letting go does nothing, as a reload would lose it.
- * `reload` is the page's, for tests.
+ * Watches `scroller` for a one-finger pull down from its top, and moves `page` with the finger.
+ * `draft` says whether the composer holds unsent text: then a pull says so and letting go does
+ * nothing, as a reload would lose it. `reload` is the page's, for tests.
  */
 export function usePullToRefresh(
   scroller: RefObject<HTMLElement | null>,
-  options: { draft: () => boolean; reload?: () => void },
+  options: { page: RefObject<HTMLElement | null>; draft: () => boolean; reload?: () => void },
 ): PullState {
-  const [state, setState] = useState<PullState>({ touched: false, pull: "idle", step: 0 });
+  const [state, setState] = useState<PullState>({ touched: false, pull: "idle" });
   // The listeners are added once; what they read changes each render.
   const opts = useRef(options);
   opts.current = options;
@@ -76,18 +85,46 @@ export function usePullToRefresh(
     let finger: { id: number; x: number; y: number } | undefined;
     let pulling = false;
     let ready = false;
-    const show = (pull: Pull, step: PullState["step"]) =>
-      setState((s) =>
-        s.pull === pull && s.step === step && s.touched ? s : { touched: true, pull, step },
-      );
-    const stop = () => {
+    let busy = false;
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const show = (pull: Pull) =>
+      setState((s) => (s.pull === pull && s.touched ? s : { touched: true, pull }));
+    /**
+     * The one style this file writes, and the only exception to "no style in the source"
+     * (components/ui/ui.test.ts checks it is this call and this variable only): the page's
+     * offset follows the finger by the pixel, which no set of classes can. It is the CSSOM, which
+     * the CSP lets through (as Base UI's own, tools/visual/csp.ts), not a style attribute. app.css
+     * turns it into a transform only while a pull is on.
+     */
+    const moveTo = (y: number) =>
+      opts.current.page.current?.style.setProperty("--pull-y", `${y}px`);
+    /** Back to 0, eased unless the owner asked for less motion; then nothing is drawn moved. */
+    const back = () => {
       finger = undefined;
+      clearTimeout(settle);
+      const was = pulling;
       pulling = false;
       ready = false;
-      show("idle", 0);
+      moveTo(0);
+      if (!was || reduced()) return show("idle");
+      show("back");
+      settle = setTimeout(() => {
+        settle = undefined;
+        show("idle");
+      }, SETTLE_MS);
     };
     const start = (e: TouchEvent) => {
-      stop();
+      if (busy) return;
+      finger = undefined;
+      // A new touch while the page settles back: it is at 0 from here.
+      if (pulling || settle !== undefined) {
+        clearTimeout(settle);
+        settle = undefined;
+        pulling = false;
+        ready = false;
+        moveTo(0);
+      }
+      show("idle");
       const t = e.touches[0];
       if (e.touches.length !== 1 || t === undefined) return;
       if (!mayStart(el, e.target)) return;
@@ -95,10 +132,10 @@ export function usePullToRefresh(
     };
     const move = (e: TouchEvent) => {
       if (finger === undefined) return;
-      if (e.touches.length !== 1) return stop();
+      if (e.touches.length !== 1) return back();
       const id = finger.id;
       const t = [...e.touches].find((x) => x.identifier === id);
-      if (t === undefined) return stop();
+      if (t === undefined) return back();
       const dy = t.clientY - finger.y;
       const dx = t.clientX - finger.x;
       if (!pulling) {
@@ -110,36 +147,44 @@ export function usePullToRefresh(
         }
         pulling = true;
       }
-      if (dy <= 0) return stop();
+      if (dy <= 0) return back();
       // Only now, and only down: iOS's own bounce would fight the pull.
       e.preventDefault();
-      if (opts.current.draft()) return show("blocked", stepOf(dy));
-      ready = dy >= PULL_PX;
-      show(ready ? "ready" : "pulling", ready ? 3 : stepOf(dy));
+      const y = Math.min(dy * DAMPING, MAX_PX);
+      moveTo(y);
+      if (opts.current.draft()) {
+        ready = false;
+        return show("blocked");
+      }
+      ready = y >= REST_PX;
+      show(ready ? "ready" : "pulling");
     };
     const end = (e: TouchEvent) => {
       if (finger === undefined) return;
       const id = finger.id;
       if (![...e.changedTouches].some((x) => x.identifier === id)) return;
-      if (!ready) return stop();
+      if (!ready) return back();
       finger = undefined;
-      show("busy", 3);
+      busy = true;
+      moveTo(REST_PX);
+      show("busy");
+      // At rest first, so 重新整理中… is still where it was when the reload starts.
+      settle = setTimeout(
+        () => (opts.current.reload ?? (() => location.reload()))(),
+        reduced() ? 0 : SETTLE_MS,
+      );
     };
     el.addEventListener("touchstart", start, { passive: true });
     el.addEventListener("touchmove", move, { passive: false });
     el.addEventListener("touchend", end);
-    el.addEventListener("touchcancel", stop);
+    el.addEventListener("touchcancel", back);
     return () => {
+      clearTimeout(settle);
       el.removeEventListener("touchstart", start);
       el.removeEventListener("touchmove", move);
       el.removeEventListener("touchend", end);
-      el.removeEventListener("touchcancel", stop);
+      el.removeEventListener("touchcancel", back);
     };
   }, [scroller]);
-
-  // After the commit, so "重新整理中…" is on the page while the reload starts.
-  useEffect(() => {
-    if (state.pull === "busy") (opts.current.reload ?? (() => location.reload()))();
-  }, [state.pull]);
   return state;
 }

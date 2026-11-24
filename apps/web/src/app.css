@@ -640,42 +640,59 @@ th[aria-sort="descending"] .md-sort-mark::after {
 }
 
 /*
- * Pull to refresh (src/usePullToRefresh.ts). The bar's height goes by state and step, never by
- * the finger: no inline style. The thread keeps its own bounce from reaching the page.
+ * Pull to refresh (src/usePullToRefresh.ts). While a pull is on, everything in the workspace but
+ * the composer moves down by --pull-y, which the hook sets as the finger goes, and the indicator
+ * is in the space left at the top, under the safe area's padding (.app-viewport). Idle, nothing is
+ * moved or layered: the page is as without it. The thread keeps its own bounce from the page.
  */
 .thread-scroll {
   overscroll-behavior-y: contain;
 }
 .pull-indicator {
-  flex: none;
-  height: 0;
-  overflow: hidden;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 0;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   color: var(--muted-foreground);
   font-size: 12.5px;
-  transition: height 0.15s ease-out;
+  line-height: 20px;
+  white-space: nowrap;
+  pointer-events: none;
 }
-.pull-indicator[data-step="1"] {
-  height: 16px;
+.pull-indicator .pull-mark {
+  visibility: hidden;
+  animation: none;
 }
-.pull-indicator[data-step="2"] {
-  height: 28px;
-}
-.pull-indicator[data-step="3"] {
-  height: 40px;
-}
-.pull-indicator[data-pull="ready"],
-.pull-indicator[data-pull="busy"] {
-  height: 48px;
+.pull-indicator[data-pull="idle"],
+.pull-indicator[data-pull="back"] .pull-text {
+  visibility: hidden;
 }
 .pull-indicator[data-pull="blocked"] {
   color: var(--foreground);
 }
+.workspace:has(> .pull-indicator:not([data-pull="idle"])) > :not(.pull-indicator, .composer-dock) {
+  position: relative;
+  z-index: 1;
+  transform: translate3d(0, var(--pull-y, 0px), 0);
+  will-change: transform;
+}
+.workspace:has(> .pull-indicator:not([data-pull="idle"])) > .composer-dock {
+  position: relative;
+  z-index: 2;
+}
+.workspace:has(> .pull-indicator:is([data-pull="busy"], [data-pull="back"]))
+  > :not(.pull-indicator, .composer-dock) {
+  transition: transform 0.2s ease-out;
+}
 @media (prefers-reduced-motion: reduce) {
-  .pull-indicator {
+  .workspace:has(> .pull-indicator:is([data-pull="busy"], [data-pull="back"]))
+    > :not(.pull-indicator, .composer-dock) {
     transition: none;
   }
 }
