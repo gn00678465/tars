@@ -156,6 +156,13 @@ describe("the Worker's paths", () => {
     const { env: e } = env();
     expect(await (await handle(new Request(`https://${APP}/c/abc`), e)).text()).toBe("asset");
   });
+
+  test("a missing file under /assets/ is 404, not the page that _headers would cache a year", async () => {
+    const { env: e } = env();
+    const r = await handle(new Request(`https://${APP}/assets/A2uiCard-old12345.js`), e);
+    expect(r.status).toBe(404);
+    expect(await (await handle(new Request(`https://${APP}/assetsx`), e)).text()).toBe("asset");
+  });
 });
 
 test("wrangler.jsonc's vars are exactly the four the design lists", () => {

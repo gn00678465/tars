@@ -50,6 +50,10 @@ export async function handle(request: Request, env: Env): Promise<Response> {
       return forbidden();
     return toRelay(request, env, { [ROLE_HEADER]: "local" });
   }
+  // A file under /assets/ that exists is served before the Worker runs, so this one is missing:
+  // an old page's chunk after a deploy. The assets' SPA fallback would answer with index.html,
+  // and _headers caches /assets/* a year: that URL would keep the HTML if the file came back.
+  if (url.pathname.startsWith("/assets/")) return notFound();
   return env.ASSETS.fetch(request);
 }
 
