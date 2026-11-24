@@ -431,7 +431,16 @@ function message(s: State, m: ServerMessage, at: number): State {
       const base =
         m.p.compacting === true ? { ...loaded, compacting: true as const } : compactOver(loaded);
       const r = m.p.running;
-      if (r === undefined) return base;
+      // The snapshot is the local end's word on now. No turn running: a started one here ended
+      // while the page was away (iOS freezes a page, and its socket drops), and so did its cards:
+      // an approval waits only inside a running turn. They are dropped, not given an end the
+      // page does not know; the thread's tool row says how the call ended. One sent and not yet
+      // started is `submitting`, which stays.
+      if (r === undefined)
+        return {
+          ...(s.turn?.state === "started" ? withoutKeys(base, "turn") : base),
+          cards: base.cards.filter((c) => c.approval.conv !== m.conv || c.resolved !== undefined),
+        };
       // A page opened mid-turn: the turn is under way, in the phase the snapshot says.
       const turn =
         s.turn?.state === "started" && (s.turn.turn === undefined || s.turn.turn === r.turn)
