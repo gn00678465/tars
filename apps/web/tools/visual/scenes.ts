@@ -607,6 +607,54 @@ export const SCENES: Scene[] = [
     },
     ...both("串流量測"),
   },
+  ...(["邊界", "中間"] as const).map((cut): Scene => ({
+    // A compacted conversation: groups 40–54 are what the model no longer sees, so the first row
+    // is the line saying so. The page is cut at group 40's start, or inside it.
+    name: `壓縮過：載入更早，切在群組${cut}（量測用）`,
+    measure: true,
+    relay: online,
+    answers: {
+      ...answers({
+        convs: [conv(`c-compact-${cut}`, `壓縮量測${cut}`, "claude-sonnet-5-5", 0), ...CONVS],
+      }),
+      "conv.open": (m) => [
+        {
+          kind: "conv.snapshot",
+          conv: m.conv,
+          p:
+            m.p.before === undefined
+              ? {
+                  epoch: EPOCH,
+                  items: [
+                    ...talk(40, 20).slice(cut === "邊界" ? 0 : 1),
+                    {
+                      seq: 121,
+                      turn: "turn-compact",
+                      kind: "compaction",
+                      text: "1. 擁有者在整理備份腳本。\n2. 已決定拆成兩個步驟。",
+                      truncated: false,
+                      at: NOW - HOUR,
+                      trigger: "manual",
+                      beforeTokens: 96_000,
+                      keptTokens: 8_000,
+                      count: 30,
+                      costUsd: 0.02,
+                      firstKeptSeq: 111,
+                    },
+                    ...talk(61, 3),
+                  ],
+                  more: true,
+                }
+              : {
+                  epoch: EPOCH,
+                  items: [...talk(20, 20), ...(cut === "邊界" ? [] : talk(40, 1).slice(0, 1))],
+                  more: false,
+                },
+        },
+      ],
+    },
+    ...both(`壓縮量測${cut}`),
+  })),
   {
     name: "長對話：200 組（量測用）",
     measure: true,

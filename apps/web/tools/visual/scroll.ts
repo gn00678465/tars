@@ -9,7 +9,9 @@
 //   button;
 //   (c) older groups loaded do not move the row being read (its top before and after), the page
 //       cut inside a group as the local end cuts by count, with the browser's scroll anchoring and
-//       without it (overflow-anchor: none, as Safari has none).
+//       without it (overflow-anchor: none, as Safari has none); and so in a compacted
+//       conversation, whose first row is the line saying the model no longer sees what follows,
+//       cut at a group's start and inside one.
 // Then how long 200 groups take to draw, against main (its tree with these scenes).
 // It fails on any CSP violation or page error (zod's eval probe left out, as csp.ts).
 //   node tools/visual/scroll.ts [--base <ref>]
@@ -63,7 +65,13 @@ async function violations(page: Page, where: string) {
     failures.push(`${where}: CSP ${JSON.stringify(v)}`);
 }
 
-async function opened(browser: Browser, width: keyof typeof WIDTHS, url: string, scene: number) {
+async function opened(
+  browser: Browser,
+  width: keyof typeof WIDTHS,
+  url: string,
+  scene: number,
+  title = scene === STREAM ? "串流量測" : "兩百組",
+) {
   const context = await browser.newContext({ ...WIDTHS[width], locale: "zh-TW" });
   await context.addInitScript(COLLECT);
   const page = await context.newPage();
@@ -71,7 +79,6 @@ async function opened(browser: Browser, width: keyof typeof WIDTHS, url: string,
   page.on("pageerror", (e) => failures.push(`${width}: page error: ${e.message}`));
   await page.goto(`${url}/?scene=${scene}`, { waitUntil: "load" });
   if (width === "phone") await page.locator('[aria-label="展開對話列表"]').click();
-  const title = scene === STREAM ? "串流量測" : "兩百組";
   await page.locator(`.conv-list >> text=${title}`).first().click();
   return { context, page };
 }
@@ -355,7 +362,13 @@ async function streaming(width: keyof typeof WIDTHS) {
 }
 
 /** Up to the top, loads the older groups, and how far the row being read moved. */
-async function older(page: Page, width: keyof typeof WIDTHS, how: string) {
+async function older(
+  page: Page,
+  width: keyof typeof WIDTHS,
+  how: string,
+  first = "g82",
+  label = "切在群組中間",
+) {
   const where = width === "desktop" ? "桌面" : "手機";
   // By script, as find in page would: it lets go of following (App.tsx's onScroll).
   await page.locator(".thread-scroll").evaluate((el) => el.scrollTo({ top: 0 }));
@@ -365,7 +378,11 @@ async function older(page: Page, width: keyof typeof WIDTHS, how: string) {
     const row = [...document.querySelectorAll<HTMLElement>(".thread [data-message-id]")].find(
       (r) => r.getBoundingClientRect().bottom > view.top + 1,
     );
-    return { id: row?.dataset.messageId ?? "", top: row?.getBoundingClientRect().top ?? 0 };
+    return {
+      id: row?.dataset.messageId ?? "",
+      top: row?.getBoundingClientRect().top ?? 0,
+      rows: document.querySelectorAll(".thread [data-message-id]").length,
+    };
   });
   await page.locator('button:has-text("載入更早的訊息")').click();
   await page.waitForTimeout(800);
@@ -378,9 +395,35 @@ async function older(page: Page, width: keyof typeof WIDTHS, how: string) {
   );
   const moved = now.top - read.top;
   check(
-    Math.abs(moved) < 2 && now.rows >= 45 && read.id === "g82",
-    `${where} (c) 載入更早的訊息，切在群組中間（${how}）：列 ${read.id} 的 top ${round(read.top)} → ${round(now.top)}（移動 ${round(moved)} px），共 ${now.rows} 列`,
+    Math.abs(moved) < 2 && now.rows >= read.rows + 20 && read.id === first,
+    `${where} (c) 載入更早的訊息，${label}（${how}）：列 ${read.id} 的 top ${round(read.top)} → ${round(now.top)}（移動 ${round(moved)} px），${read.rows} → ${now.rows} 列`,
   );
+}
+
+/** (c) in a compacted conversation: its first row is the line, not a group. */
+async function compacted(width: keyof typeof WIDTHS) {
+  for (const cut of ["邊界", "中間"] as const) {
+    const scene =
+      SCENES.findIndex((s) => s.name.startsWith(`壓縮過：載入更早，切在群組${cut}`)) + 1;
+    if (scene === 0) throw new Error(`no compacted scene (${cut})`);
+    for (const anchoring of [true, false]) {
+      const { context, page } = await opened(browser, width, head.url, scene, `壓縮量測${cut}`);
+      await page.waitForSelector(".thread-scroll .compacted-notice-line");
+      if (!anchoring)
+        await page.locator(".thread-scroll").evaluate((el) => {
+          el.style.overflowAnchor = "none";
+        });
+      await older(
+        page,
+        width,
+        anchoring ? "瀏覽器的 scroll anchoring 開著" : "overflow-anchor: none",
+        cut === "邊界" ? "g81" : "g82",
+        `壓縮過的對話、第一列是提示行、切在群組${cut}`,
+      );
+      await violations(page, width);
+      await context.close();
+    }
+  }
 }
 
 const widths = (["desktop", "phone"] as const).filter(
@@ -389,6 +432,7 @@ const widths = (["desktop", "phone"] as const).filter(
 for (const width of widths) {
   try {
     await streaming(width);
+    await compacted(width);
   } catch (e) {
     check(false, `${width}: ${(e as Error).message.split("\n")[0]}`);
   }
