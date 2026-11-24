@@ -1,6 +1,7 @@
 import type { ClientKind } from "@tars/protocol";
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { dirname } from "node:path";
+import type { Provider } from "../../core/secrets.ts";
 import type { ProviderErrorKind } from "./provider.ts";
 import type {
   ApprovalState,
@@ -22,6 +23,8 @@ export type LogEvent =
   | "approval"
   | "reconcile"
   | "warning"
+  /** A model's tool call whose arguments were not JSON: how the stream sent it (M4-G). */
+  | "invalid_arguments"
   /** tars serve: the link connection, a browser connection, a notification. */
   | "link"
   | "conn"
@@ -76,6 +79,12 @@ export interface LogFields {
   readonly kind?: ClientKind;
   /** An Error's name, word characters only: never its message, which may hold anything. */
   readonly errorName?: string;
+  readonly provider?: Provider;
+  /** invalid_arguments: the stream's shape; see InvalidArguments. */
+  readonly index?: number;
+  readonly ids?: number;
+  readonly calls?: number;
+  readonly interleaved?: boolean;
 }
 
 export type LinkState = "connecting" | "connected" | "keyring" | "replaced";

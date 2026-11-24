@@ -8,6 +8,8 @@ export type Effort = (typeof EFFORTS)[number];
 
 export const TOOL_NAMES = ["skill_load", "file_read", "tars", "ui_show"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
+export const isToolName = (name: string): name is ToolName =>
+  (TOOL_NAMES as readonly string[]).includes(name);
 
 export interface SystemBlock {
   readonly text: string;
@@ -71,6 +73,19 @@ export const totalInputTokens = (u: InputUsage) =>
 
 export type StopReason = "end" | "tool_use" | "max_tokens" | "other";
 
+/** The stream's shape behind arguments that were not JSON (M4-G): counts, no content. */
+export interface InvalidArguments {
+  /** The chunks' index, 0 when none was sent. */
+  readonly index: number;
+  /** The distinct ids the chunks on that index carried. */
+  readonly ids: number;
+  /** The calls that index was split into. */
+  readonly calls: number;
+  /** A second call came on it while the earlier one's arguments were not yet JSON. */
+  readonly interleaved: boolean;
+  readonly bytes: number;
+}
+
 export type ProviderEvent =
   /** usage absent: the endpoint does not report input tokens when the stream starts. */
   | { readonly type: "start"; readonly usage?: InputUsage }
@@ -81,6 +96,8 @@ export type ProviderEvent =
       readonly providerCallId: string;
       readonly name: string;
       readonly input: unknown;
+      /** Arguments that were not JSON: how the call came in, for the log. Never its content. */
+      readonly invalid?: InvalidArguments;
     }
   | {
       readonly type: "end";

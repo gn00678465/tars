@@ -726,6 +726,11 @@ async function failure(
 }
 
 const endOf = (evs: ProviderEvent[]) => evs.at(-1) as Extract<ProviderEvent, { type: "end" }>;
+interface ChatCall {
+  id: string;
+  function: { name: string; arguments: string };
+  extra_content?: { google: { thought_signature: string } };
+}
 const callsOf = (evs: ProviderEvent[]) =>
   evs.filter((e): e is Extract<ProviderEvent, { type: "tool_call" }> => e.type === "tool_call");
 
@@ -1005,6 +1010,190 @@ describe("Gemini signatures coming in", () => {
     }
     expect(err).toMatchObject({ kind: "bad_request", status: 400 });
     expect((err as ProviderError).detail).toContain("thought_signature");
+  });
+});
+
+// M4-G: Gemini's parallel calls came in as one, and the history it left failed every request
+// after. The fake's data is made up; the shapes are the owner's conversation's.
+describe("parallel calls in one slot", () => {
+  const TARS = { argv: ["script", "show", "a-script"] };
+  const READ = { path: "notes/a.md" };
+  const seen = (evs: ProviderEvent[]) =>
+    callsOf(evs).map((c) => [c.providerCallId, c.name, c.input]);
+  const replay = (evs: ProviderEvent[]) =>
+    (endOf(evs).native[0] as { tool_calls: ChatCall[] }).tool_calls.map((c) => [
+      c.id,
+      c.function.name,
+      c.function.arguments,
+      c.extra_content?.google.thought_signature,
+    ]);
+  const both = [
+    ["p1", "tars", JSON.stringify(TARS), "sig-a"],
+    ["p2", "file_read", JSON.stringify(READ), "sig-b"],
+  ];
+
+  test("a: two calls on the same index stay two, each with its own name, input and signature", async () => {
+    const evs = await events("gemini", {
+      kind: "message",
+      toolCalls: [
+        { id: "p1", name: "tars", args: TARS, index: 0, signature: "sig-a" },
+        { id: "p2", name: "file_read", args: READ, index: 0, signature: "sig-b" },
+      ],
+    });
+    expect(seen(evs)).toEqual([
+      ["p1", "tars", TARS],
+      ["p2", "file_read", READ],
+    ]);
+    expect(replay(evs)).toEqual(both);
+  });
+
+  test("b: the second call sent without an index is its own call", async () => {
+    const evs = await events("gemini", {
+      kind: "message",
+      toolCalls: [
+        { id: "p1", name: "tars", args: TARS, index: 0, signature: "sig-a" },
+        { id: "p2", name: "file_read", args: READ, index: null, signature: "sig-b" },
+      ],
+    });
+    expect(seen(evs)).toEqual([
+      ["p1", "tars", TARS],
+      ["p2", "file_read", READ],
+    ]);
+    expect(replay(evs)).toEqual(both);
+  });
+
+  test("c: the same name on the same index with another id is another call", async () => {
+    const evs = await events("gemini", {
+      kind: "message",
+      toolCalls: [
+        { id: "p1", name: "tars", args: TARS, index: 0 },
+        { id: "p2", name: "tars", args: { argv: ["cost"] }, index: 0 },
+      ],
+    });
+    expect(seen(evs)).toEqual([
+      ["p1", "tars", TARS],
+      ["p2", "tars", { argv: ["cost"] }],
+    ]);
+  });
+
+  test("d: one call's arguments in pieces stay one call, with or without the id repeated", async () => {
+    for (const repeatId of [false, true]) {
+      const evs = await events("openrouter", {
+        kind: "message",
+        toolCalls: [{ id: "p1", name: "tars", args: TARS, index: 0, repeatId }],
+      });
+      expect(seen(evs)).toEqual([["p1", "tars", TARS]]);
+      expect(endOf(evs).callBytes).toBe(utf8Bytes("tars") + utf8Bytes(JSON.stringify(TARS)));
+    }
+  });
+
+  test("e: two calls on their own indexes keep their own signatures", async () => {
+    const evs = await events("gemini", {
+      kind: "message",
+      toolCalls: [
+        { id: "p1", name: "tars", args: TARS, signature: "sig-a" },
+        { id: "p2", name: "file_read", args: READ, signature: "sig-b" },
+      ],
+    });
+    expect(replay(evs)).toEqual(both);
+  });
+
+  test("no id and the same name on the same index: taken as more of the same call [unconfirmed]", async () => {
+    const evs = await events("gemini", {
+      kind: "message",
+      toolCalls: [
+        { id: "p1", name: "tars", args: TARS, index: 0 },
+        { id: "", name: "tars", args: { argv: ["cost"] }, index: 0 },
+      ],
+    });
+    const raw = JSON.stringify(TARS) + JSON.stringify({ argv: ["cost"] });
+    expect(seen(evs)).toEqual([["p1", "tars", { _invalid_arguments: raw }]]);
+    expect(callsOf(evs)[0]?.invalid).toEqual({
+      index: 0,
+      ids: 1,
+      calls: 1,
+      interleaved: false,
+      bytes: utf8Bytes(raw),
+    });
+  });
+
+  test("no id and another name on the same index: another call, dropped like any call without an id", async () => {
+    const evs = await events("gemini", {
+      kind: "message",
+      toolCalls: [
+        { id: "p1", name: "tars", args: TARS, index: 0 },
+        { id: "", name: "file_read", args: READ, index: 0 },
+      ],
+    });
+    expect(seen(evs)).toEqual([["p1", "tars", TARS]]);
+    expect(callsOf(evs)[0]).not.toHaveProperty("invalid");
+  });
+
+  test("calls split apart carry no diagnosis; valid ones never do", async () => {
+    const evs = await events("gemini", {
+      kind: "message",
+      toolCalls: [
+        { id: "p1", name: "tars", args: TARS, index: 0 },
+        { id: "p2", name: "file_read", args: READ, index: 0 },
+      ],
+    });
+    for (const c of callsOf(evs)) expect(c).not.toHaveProperty("invalid");
+  });
+
+  // The owner's conversation: one call holding two calls' arguments, signed, its tool failed,
+  // then another message from the user.
+  const glued = JSON.stringify(TARS) + JSON.stringify(READ);
+  const broken = [
+    user(1, "記一筆帳"),
+    assistant(2, "", [
+      callMessage({
+        id: "p1",
+        type: "function",
+        function: { name: "file_read", arguments: glued },
+        extra_content: { google: { thought_signature: "sig-x" } },
+      }),
+    ]),
+    toolCall(3, "c1", "p1"),
+    {
+      ...toolResult(4, "c1", "path 必須是非空的字串"),
+      body: { callId: "c1", status: "failed", text: "path 必須是非空的字串", truncated: false },
+    } as Item,
+    user(5, "再試一次"),
+  ];
+  const sent = (history: Item[]) =>
+    toChatMessages(request({ history })).flatMap((m) =>
+      "tool_calls" in m ? (m.tool_calls ?? []) : [],
+    );
+
+  test("arguments that are not JSON go back as the JSON the tool was given", () => {
+    const [call] = sent(broken);
+    expect(call?.function.arguments).toBe(JSON.stringify({ _invalid_arguments: glued }));
+    expect(JSON.parse(call?.function.arguments as string)).toEqual({ _invalid_arguments: glued });
+    expect(call?.id).toBe("p1");
+    expect(call?.function.name).toBe("file_read");
+  });
+
+  test("in a finished turn such a call goes without its signature; in the current turn with it", () => {
+    expect(sent(broken)[0]).not.toHaveProperty("extra_content");
+    const current = sent(broken.slice(0, 4))[0];
+    expect(current?.extra_content).toEqual({ google: { thought_signature: "sig-x" } });
+  });
+
+  test("valid arguments go back byte for byte, signature and all", () => {
+    const fine = signed("p9", "sig-9");
+    const history = [user(1, "a"), assistant(2, "", [callMessage(fine)]), toolCall(3, "c9", "p9")];
+    expect(sent([...history, toolResult(4, "c9"), user(5, "b")])).toEqual([fine]);
+  });
+
+  test("the owner's conversation: the next message is answered, not refused", async () => {
+    // A handler, not the queue: a refused request leaves nothing queued for the tests after.
+    fakes.gemini.handler = () => compatText("記好了");
+    for (const history of [broken, broken.slice(0, 4)]) {
+      const evs: ProviderEvent[] = [];
+      const stream = adapters.gemini.stream(request({ history }), new AbortController().signal);
+      for await (const ev of stream) evs.push(ev);
+      expect(endOf(evs).stop).toBe("end");
+    }
   });
 });
 
