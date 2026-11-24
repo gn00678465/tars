@@ -486,3 +486,20 @@ th[aria-sort="descending"] .md-sort-mark::after {
 .ui-form-fallback {
   margin-bottom: 6px;
 }
+
+/*
+ * iOS Safari zooms the page when a form control under 16px gets focus, and it stays zoomed:
+ * the page is then wider than the screen and the send button is off it. So on a touch device
+ * every control the keyboard types into is 16px, whatever size its component class says.
+ * !important is the point: this is a rule over the component sizes, not one of them.
+ * tools/visual/zoom.ts opens every scene as a touch device and fails on a control under 16px.
+ */
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="hidden"], [type="button"], [type="submit"]),
+  textarea,
+  select,
+  [contenteditable=""],
+  [contenteditable="true"] {
+    font-size: 16px !important;
+  }
+}
