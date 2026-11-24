@@ -4,7 +4,7 @@ import type { Plugin } from "vite-plus";
 const HOST = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 
 /**
- * Cloudflare's _headers for every asset. connect-src names the host, which is not in the repo,
+ * Cloudflare's _headers: the CSP for every asset, a year's caching for the hashed ones. connect-src names the host, which is not in the repo,
  * so the file is made at build time. 'self' and wss://<APP_HOST> both: whether 'self' covers a
  * same-host wss:// on mobile Safari is unverified (P1 (i)).
  */
@@ -22,7 +22,12 @@ export function headersFile(appHost: string | undefined): string {
     "frame-ancestors 'none'",
     "base-uri 'none'",
   ].join("; ");
-  return `/*\n  Content-Security-Policy: ${csp}\n`;
+  // Every file under /assets/ is Vite's, named by its content's hash (bundle.test.ts checks), so a
+  // year is safe; index.html and public/ keep Cloudflare's default (revalidate each time), so a
+  // deploy reaches the page. A path matching both rules takes the headers of both; only this
+  // rule sets Cache-Control, so it replaces the default rather than being joined to another
+  // (developers.cloudflare.com/workers/static-assets/headers/).
+  return `/*\n  Content-Security-Policy: ${csp}\n/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n`;
 }
 
 /**

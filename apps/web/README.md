@@ -147,6 +147,12 @@ npx wrangler deploy \
 ```
 
 - 建置時要有 `APP_HOST`。網頁的 CSP（`_headers`）在建置時由它產生，沒設就建置失敗。
+- 快取（`headers.ts`）：
+  - `_headers` 有兩條規則。`/*` 只放 CSP；`/assets/*` 另加 `Cache-Control: public, max-age=31536000, immutable`。
+  - `assets/` 下只有 Vite 的產物，檔名帶內容的雜湊：內容一變，檔名就變，所以可以快取一年。回訪時瀏覽器不必逐一確認 108 個字體切片、JS 與 CSS。`bundle.test.ts` 檢查每個檔名都帶雜湊、`public/` 沒有東西落在 `assets/`。
+  - `index.html` 與 `public/` 的檔（favicon、manifest、圖示）檔名不變，維持 Cloudflare 的預設 `public, max-age=0, must-revalidate`。部署後頁面才會拿到新的 `index.html`，進而載入新的雜湊檔。
+  - Cloudflare 的規則（https://developers.cloudflare.com/workers/static-assets/headers/ ）：一個路徑符合多條規則時，繼承每一條的標頭；同一個標頭設兩次會用逗號串起來。`_headers` 設的標頭取代 Cloudflare 原本送的。所以 `/assets/*` 同時有 CSP 與長快取，而只有這一條設 `Cache-Control`，不會和別的值串在一起。規則上限 100 條，每行 2,000 字元。
+  - `assets/` 下不存在的檔：符合的靜態檔不經過 Worker，所以進到 Worker 的 `/assets/*` 一定是缺的，例如部署後舊頁面要載入的舊 chunk。Worker 回 404。不這樣做的話，SPA 備援會回 `index.html`，而 `/assets/*` 的長快取也套在它上面，這個網址會被瀏覽器記成那份 HTML 一年（`wrangler dev` 實測）。導覽請求（在網址列直接打這種網址）不經過 Worker，仍然拿到 `index.html` 與長快取；頁面本身不會這樣請求。
 - 〔未確認〕`wrangler deploy --var` 能不能蓋過建置產生的設定裡的佔位符，沒有試過。部署後在控制台看 Worker 的變數是不是實際的值。
 
 ### 圖示
