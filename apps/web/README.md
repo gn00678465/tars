@@ -293,6 +293,8 @@ node tools/visual/pull.ts
   - 回到頂端拉 40 px 放開，不重新載入。
   - 拉 120 px，放開前顯示「放開重新整理」，放開後重新載入。
   - 知識庫的頁面拉 120 px 放開，也重新載入。
+  - `tools/visual/overlays.ts` 的每種浮層開著時拉 120 px，都不重新載入。手機寬度和桌面寬度各測一次；桌面寬度也用觸控，模擬 iPad。同時確認 Base UI 在 `#root` 加了 `data-base-ui-inert`，下拉的判斷就是讀這個標記。
+  - 下拉中來了核准卡：`role=alert` 的公告和指示列的 `role=status` 都在無障礙樹裡。
 - 桌面寬度：滑鼠拖曳與滾輪不出現指示列，也不重新載入。
 - CSP 違規與頁面錯誤的判斷和 `csp.ts` 相同。截圖在 `.visual/pull/`。需要 Chromium，不在 `bun run check` 裡。
 - iPhone Safari 的橡皮筋效果和 `preventDefault` 怎麼互動，Chromium 測不到，要在手機上試。

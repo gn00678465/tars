@@ -1,22 +1,20 @@
 // Pull to refresh in Chromium, with real touches (CDP Input.dispatchTouchEvent: Playwright's
 // touchscreen only taps). At phone width: a pull short of the threshold does nothing; past it the
 // page reloads, in a conversation and on the knowledge base; a finger dragging a scrolled thread
-// scrolls it both ways, as before. At desktop width a mouse drag does nothing. It fails on any CSP
-// violation or page error (zod's eval probe left out, as csp.ts).
+// scrolls it both ways, as before. With each of P2's overlays open (overlays.ts), at phone width
+// and at desktop width with touch (an iPad), a pull does not reload. A card announced in the middle
+// of a pull is still in the accessibility tree beside the bar. At desktop width a mouse drag does
+// nothing. It fails on any CSP violation or page error (zod's eval probe left out, as csp.ts).
 //   node tools/visual/pull.ts
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/pull/.
 import { join, resolve } from "node:path";
 import { type CDPSession, chromium, type Page } from "playwright-core";
 import { buildTree, COLLECT, serve, type Violation, zodProbe } from "./page.ts";
-import { NOW, SCENES } from "./scenes.ts";
+import { OVERLAYS, WIDTHS, sceneOf } from "./overlays.ts";
+import { NOW } from "./scenes.ts";
 
 const web = resolve(import.meta.dirname, "../..");
 const dir = join(web, ".visual", "pull");
-const sceneOf = (name: string) => {
-  const n = SCENES.findIndex((s) => s.name.startsWith(name)) + 1;
-  if (n === 0) throw new Error(`no scene ${name} in scenes.ts`);
-  return n;
-};
 
 await buildTree(web, dir, true);
 const { url, server } = await serve(dir);
@@ -84,7 +82,20 @@ async function phone(scene: number, open: (page: Page) => Promise<void>, where: 
   await page.clock.setFixedTime(NOW);
   await page.goto(`${url}/?scene=${scene}`, { waitUntil: "load" });
   await open(page);
-  await page.waitForTimeout(300);
+  // main's .conv-header-bar is 14 px wider than a phone (P2): a click can leave the workspace
+  // scrolled sideways, and the thread with it. Not this tool's to check; put back.
+  await page.evaluate(() => document.querySelector(".workspace")?.scrollTo(0, 0));
+  // A Sheet closed a moment ago fades its backdrop over the thread: wait for the thread to be
+  // where it stays and the one a finger at its top touches.
+  await page.waitForFunction(
+    () => {
+      const r = document.querySelector("main.thread-scroll")?.getBoundingClientRect();
+      if (r === undefined || r.x !== 0) return false;
+      return document.elementFromPoint(r.x + 6, r.y + 40)?.closest("main.thread-scroll") != null;
+    },
+    undefined,
+    { timeout: 3_000 },
+  );
   const box = await scroller(page).boundingBox();
   if (box === null) throw new Error(`${where}: no thread`);
   // The thread's own padding, left of the messages: the finger is on no control.
@@ -184,6 +195,149 @@ try {
       () => false,
     );
     check(ok, `${where}：拉 120 px 放開，重新載入`);
+    await p.context.close();
+  }
+
+  // Each overlay open: a pull does not reload. A phone, and a desktop's width with touch, as an
+  // iPad. The finger lands where the thread's top is; what it lands on is said, as the backdrop
+  // usually takes it before the thread could.
+  const touchWidths = {
+    phone: WIDTHS.phone,
+    desktop: { ...WIDTHS.desktop, hasTouch: true },
+  };
+  for (const [width, options] of Object.entries(touchWidths) as [keyof typeof WIDTHS, object][]) {
+    for (const o of OVERLAYS) {
+      const slot = o.slot[width];
+      if (slot === undefined) continue;
+      const where = `${width === "phone" ? "手機" : "桌面觸控"} ${o.name}`;
+      const context = await browser.newContext({ ...options, locale: "zh-TW" });
+      await context.addInitScript(COLLECT);
+      const page = await context.newPage();
+      page.on("pageerror", (e) => failures.push(`${where}: page error: ${e.message}`));
+      let loads = 0;
+      page.on("load", () => loads++);
+      const cdp = await context.newCDPSession(page);
+      try {
+        await page.clock.setFixedTime(NOW);
+        await page.goto(`${url}/?scene=${o.scene}`, { waitUntil: "load" });
+        await page.waitForTimeout(400);
+        for (const c of o.before[width]) {
+          await page.locator(c).first().click({ timeout: 5_000 });
+          await page.waitForTimeout(300);
+        }
+        if (o.from !== undefined && width === "phone") {
+          await page.locator(o.from).first().click();
+          await page.waitForTimeout(400);
+        }
+        await page
+          .locator(`${o.button[width] as string} >> visible=true`)
+          .first()
+          .click();
+        await page.waitForTimeout(500);
+        await page.evaluate(() => document.querySelector(".workspace")?.scrollTo(0, 0));
+        const box = await scroller(page).boundingBox();
+        if (box === null || box.x < 0) throw new Error(`the thread is at ${box?.x}`);
+        const [x, y] = [box.x + 6, box.y + 40];
+        const seen = await page.evaluate(
+          ([slot, x, y]) => {
+            const at = document.elementFromPoint(x as number, y as number);
+            return {
+              open: document.querySelectorAll(`[data-slot="${slot}"][data-open]`).length,
+              marked: document.querySelector("main.thread-scroll")?.closest("[data-base-ui-inert]")
+                ?.id,
+              under:
+                at === null
+                  ? "nothing"
+                  : (at.getAttribute("data-slot") ?? (at.closest("main") ? "thread" : at.tagName)),
+            };
+          },
+          [slot, x, y] as const,
+        );
+        await drag(cdp, x, y, y + 120);
+        await page.waitForTimeout(1_500);
+        check(
+          seen.open === 1 && seen.marked === "root" && loads === 1,
+          `${where}：開著（${slot}，#root 標記 ${seen.marked ?? "無"}，手指落在 ${seen.under}）拉 120 px，載入 ${loads} 次`,
+        );
+        await violations(page, where);
+      } catch (e) {
+        failures.push(`${where}: ${(e as Error).message.split("\n")[0]}`);
+      }
+      await context.close();
+    }
+  }
+
+  // A card announced while a pull is held: the alert and the bar are two regions, both read.
+  {
+    const where = "公告";
+    const p = await phone(
+      sceneOf("對話進行中"),
+      async (page) => {
+        await page.locator('[aria-label="展開對話列表"]').click();
+        await page.locator(".conv-list >> text=整理 NAS 備份腳本").first().click();
+      },
+      where,
+    );
+    const { page, cdp, x, top } = p;
+    let seen = { alert: "", bar: "", tree: [] as string[] };
+    await drag(cdp, x, top, top + 40, async () => {
+      await page.evaluate(
+        (m) => (globalThis as { visualPush?: (m: unknown) => void }).visualPush?.(m),
+        {
+          kind: "approval.request",
+          p: {
+            approval: {
+              approvalId: "approval-00000009",
+              conv: "c-ledger",
+              hash: "a".repeat(64),
+              action: "run_script",
+              script: "s9",
+              version: "v1",
+              summary: "推播",
+              effects: "external-write",
+              domains: [],
+              secret: null,
+              argv: [],
+              expiresAt: NOW + 600_000,
+            },
+          },
+        },
+      );
+      await page.waitForTimeout(800);
+      const dom = await page.evaluate(() => ({
+        alert: document.querySelector('[role="alert"][aria-live="assertive"]')?.textContent ?? "",
+        bar: document.querySelector('.pull-indicator[role="status"]')?.textContent ?? "",
+      }));
+      const { nodes } = (await cdp.send("Accessibility.getFullAXTree")) as {
+        nodes: { ignored: boolean; role?: { value: string }; name?: { value: unknown } }[];
+      };
+      const tree = nodes
+        .filter((n) => !n.ignored && ["alert", "status"].includes(String(n.role?.value)))
+        .map((n) => `${n.role?.value}`);
+      const texts = nodes
+        .filter((n) => !n.ignored)
+        .map((n) => (typeof n.name?.value === "string" ? n.name.value : ""));
+      seen = {
+        ...dom,
+        tree: [
+          ...tree,
+          ...(texts.some((t) => t.includes("需要核准")) ? ["需要核准"] : []),
+          ...(texts.some((t) => t === "下拉重新整理") ? ["下拉重新整理"] : []),
+        ],
+      };
+    });
+    await page.waitForTimeout(400);
+    check(
+      seen.alert.includes("需要核准") &&
+        seen.bar === "下拉重新整理" &&
+        seen.tree.includes("alert") &&
+        seen.tree.includes("status") &&
+        seen.tree.includes("需要核准") &&
+        seen.tree.includes("下拉重新整理") &&
+        p.loads() === 1,
+      `${where}：下拉中來了核准卡：alert「${seen.alert}」、status「${seen.bar}」，無障礙樹有 ${seen.tree.join("、")}`,
+    );
+    await violations(page, where);
     await p.context.close();
   }
 

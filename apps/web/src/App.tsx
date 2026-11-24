@@ -205,7 +205,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   }, [state.items, state.running, state.turn, state.cards]);
   // Whether the composer holds unsent text: a pull does not reload over it.
   const draft = useRef(false);
-  const pull = usePullToRefresh(thread, { draft: () => draft.current, off: drawer });
+  const pull = usePullToRefresh(thread, { draft: () => draft.current });
   const [opened, setOpened] = useState(0);
   useEffect(() => {
     if (opened > 0) thread.current?.focus();

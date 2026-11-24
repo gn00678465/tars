@@ -5,7 +5,8 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
 import { button, buttons, render } from "./render.ts";
 import { shortTime } from "./components/time.ts";
-import { frame, server, socketHarness } from "./testing.ts";
+import { drag, frame, server, socketHarness, touch } from "./testing.ts";
+import { PULL_PX } from "./usePullToRefresh.ts";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -666,6 +667,68 @@ describe("the sidebar and the open conversation", () => {
     },
   );
 
+  /** A full pull on the thread's top; whether it took the drag, and what the bar says. */
+  const pullOn = (root: HTMLElement) => {
+    const moves = drag(scroll(root), PULL_PX + 20, true);
+    const pull = root.querySelector(".pull-indicator")?.getAttribute("data-pull");
+    touch(scroll(root), "touchcancel", [], [{ y: 190 }]);
+    return [moves.some((e) => e.defaultPrevented), pull];
+  };
+  const phoneMedia = () =>
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+
+  test.each([
+    ["the desktop's status Dialog", false, "header .sg-btn.desktop-only"],
+    ["a phone's status Drawer", true, '[aria-label="開啟系統狀態與花費面板"]'],
+    ["a phone's conversation Sheet", true, '[aria-label="展開對話列表"]'],
+  ])("no pull behind %s; closed, the pull is back", async (_, phone, opener) => {
+    if (phone) phoneMedia();
+    const { root, unmount } = await listed();
+    // A failed check must not leave an overlay or a phone's width to the tests after it, and the
+    // tree goes before afterEach empties the body, or React loses the portal.
+    try {
+      if (!phone) await act(async () => entry(root, "對話 1").click());
+      expect(pullOn(root)).toEqual([true, "ready"]);
+      await act(async () => document.querySelector<HTMLButtonElement>(opener)?.click());
+      await frame();
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      expect(pullOn(root)).toEqual([false, "idle"]);
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      await frame();
+      expect(document.querySelector("[data-base-ui-inert]")).toBeNull();
+      expect(pullOn(root)).toEqual([true, "ready"]);
+    } finally {
+      unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("a card announced in the middle of a pull: the alert still says it, apart from the bar", async () => {
+    const { h, root, unmount } = await listed();
+    try {
+      await act(async () => entry(root, "對話 1").click());
+      drag(scroll(root), 40, true);
+      await act(async () => h.last().receive(requestN(5, "conv-5")));
+      const alert = document.querySelector('[role="alert"][aria-live="assertive"]');
+      const bar = root.querySelector('.pull-indicator[role="status"]');
+      expect(alert?.textContent).toContain("需要核准：執行腳本 s5");
+      expect(exposed(alert)).toBe(true);
+      expect(bar?.textContent).toBe("下拉重新整理");
+      // Two regions, neither inside the other: the bar's polite text does not replace the alert's.
+      expect(alert?.contains(bar ?? null) || bar?.contains(alert)).toBe(false);
+      expect(exposed(bar)).toBe(true);
+      touch(scroll(root), "touchend", [], [{ y: 140 }]);
+    } finally {
+      unmount();
+    }
+  });
+
   test("three waiting cards: only the oldest one's deny has the focus", async () => {
     const { h, root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());
@@ -1280,6 +1343,32 @@ describe("another model: chosen for a new conversation, or continuing one", () =
     expect(h.last().messages().at(-1)).toMatchObject({ kind: "conv.open", conv: "conv-1" });
     expect(root.querySelector(".composer-wrap .task-notice.active")).toBeNull();
     unmount();
+  });
+
+  test("no pull behind the model DropdownMenu or the continuing Popover", async () => {
+    const { root, unmount } = await ready(true);
+    try {
+      await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
+      const main = root.querySelector(".thread-scroll") as HTMLElement;
+      const pulled = () => {
+        const moves = drag(main, PULL_PX + 20, true);
+        touch(main, "touchcancel", [], [{ y: 190 }]);
+        return moves.some((e) => e.defaultPrevented);
+      };
+      expect(pulled()).toBe(true);
+      await act(async () => (root.querySelector(".run-seg") as HTMLButtonElement).click());
+      expect(document.querySelector("[role=menu]")).not.toBeNull();
+      expect(pulled()).toBe(false);
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      await frame();
+      await act(async () => button(root, "以另一個模型接續").click());
+      expect(document.querySelector("[aria-labelledby=model-sheet-title]")).not.toBeNull();
+      expect(pulled()).toBe(false);
+    } finally {
+      unmount();
+    }
   });
 
   test("the list says which conversation one continues", async () => {

@@ -26,16 +26,13 @@ const OWN_GESTURE =
   'input, textarea, select, button, a[href], label, form, [contenteditable]:not([contenteditable="false"]), pre, table';
 const EDITABLE = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
 /**
- * An open overlay: our sheets and the drawer say aria-modal, Base UI's modal popups mark the rest
- * of the page inert or aria-hidden, and its menus and lists are there only while open. A closed
- * one leaving the DOM late is hidden.
+ * An open overlay. Each of Base UI's (Dialog, Drawer, Sheet, Popover, DropdownMenu) marks the page
+ * root outside its portal data-base-ui-inert while open, and takes it off on closing: measured in
+ * Chromium on every one at both widths (tools/visual/pull.ts). The workspace is not made
+ * aria-hidden (App.tsx keeps it exposed), so that mark is the one to read; inert and aria-hidden
+ * are content that takes no input anyway.
  */
-const OVERLAY = '[aria-modal="true"], [data-base-ui-inert], [role="menu"], [role="listbox"]';
-
-function overlayOpen(el: HTMLElement) {
-  if (el.closest('[inert], [aria-hidden="true"]') !== null) return true;
-  return [...document.querySelectorAll(OVERLAY)].some((n) => n.closest("[hidden]") === null);
-}
+const BEHIND_OVERLAY = '[data-base-ui-inert], [inert], [aria-hidden="true"]';
 
 /** Between the finger and the scroller, something that scrolls sideways takes the drag. */
 function sideways(from: Element, el: HTMLElement) {
@@ -50,7 +47,11 @@ function mayStart(el: HTMLElement, target: EventTarget | null) {
   if (el.scrollTop > 0 || !(target instanceof Element)) return false;
   // The soft keyboard is up: the drag is the owner's, and a reload would close it.
   if (document.activeElement?.matches(EDITABLE) === true) return false;
-  return target.closest(OWN_GESTURE) === null && !sideways(target, el) && !overlayOpen(el);
+  return (
+    target.closest(OWN_GESTURE) === null &&
+    !sideways(target, el) &&
+    el.closest(BEHIND_OVERLAY) === null
+  );
 }
 
 const stepOf = (dy: number): PullState["step"] => (dy < 24 ? 1 : dy < 48 ? 2 : 3);
@@ -58,11 +59,11 @@ const stepOf = (dy: number): PullState["step"] => (dy < 24 ? 1 : dy < 48 ? 2 : 3
 /**
  * Watches `scroller` for a one-finger pull down from its top. `draft` says whether the composer
  * holds unsent text: then a pull says so and letting go does nothing, as a reload would lose it.
- * `off` while the app has an overlay of its own open. `reload` is the page's, for tests.
+ * `reload` is the page's, for tests.
  */
 export function usePullToRefresh(
   scroller: RefObject<HTMLElement | null>,
-  options: { draft: () => boolean; off?: boolean; reload?: () => void },
+  options: { draft: () => boolean; reload?: () => void },
 ): PullState {
   const [state, setState] = useState<PullState>({ touched: false, pull: "idle", step: 0 });
   // The listeners are added once; what they read changes each render.
@@ -88,7 +89,7 @@ export function usePullToRefresh(
     const start = (e: TouchEvent) => {
       stop();
       const t = e.touches[0];
-      if (e.touches.length !== 1 || t === undefined || opts.current.off === true) return;
+      if (e.touches.length !== 1 || t === undefined) return;
       if (!mayStart(el, e.target)) return;
       finger = { id: t.identifier, x: t.clientX, y: t.clientY };
     };

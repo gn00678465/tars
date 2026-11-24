@@ -175,3 +175,31 @@ export async function choose(text: string) {
   if (option === undefined) throw new Error(`no option ${text}; listed: ${listed().join(", ")}`);
   await press(option);
 }
+
+export interface Pt {
+  y: number;
+  x?: number;
+  id?: number;
+}
+/** A touch event as the browser sends it: the targets and lists are all a handler reads. */
+export function touch(el: Element, type: string, touches: Pt[], changed: Pt[] = touches) {
+  const e = new Event(type, { bubbles: true, cancelable: true });
+  const list = (ps: Pt[]) =>
+    ps.map((p) => ({ identifier: p.id ?? 0, clientX: p.x ?? 100, clientY: p.y, target: el }));
+  Object.defineProperties(e, {
+    touches: { value: list(touches) },
+    changedTouches: { value: list(changed) },
+  });
+  act(() => {
+    el.dispatchEvent(e);
+  });
+  return e;
+}
+
+/** One finger from y 100 down by `by`, in a few moves; let go unless `hold`. */
+export function drag(el: Element, by: number, hold = false) {
+  touch(el, "touchstart", [{ y: 100 }]);
+  const moves = [0.25, 0.5, 0.75, 1].map((f) => touch(el, "touchmove", [{ y: 100 + by * f }]));
+  if (!hold) touch(el, "touchend", [], [{ y: 100 + by }]);
+  return moves;
+}

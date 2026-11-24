@@ -6,7 +6,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
 import { PullIndicator } from "./components/PullIndicator.tsx";
 import { render } from "./render.ts";
-import { socketHarness } from "./testing.ts";
+import { drag, socketHarness, touch } from "./testing.ts";
 import { PULL_PX, usePullToRefresh } from "./usePullToRefresh.ts";
 
 let unmount = () => undefined as void;
@@ -16,11 +16,10 @@ afterEach(() => {
   document.head.innerHTML = "";
 });
 
-function Page(p: { draft?: boolean; off?: boolean; reload: () => void }) {
+function Page(p: { draft?: boolean; reload: () => void }) {
   const ref = useRef<HTMLElement>(null);
   const state = usePullToRefresh(ref, {
     draft: () => p.draft === true,
-    ...(p.off === undefined ? {} : { off: p.off }),
     reload: p.reload,
   });
   return (
@@ -43,40 +42,12 @@ function Page(p: { draft?: boolean; off?: boolean; reload: () => void }) {
   );
 }
 
-async function page(p: { draft?: boolean; off?: boolean } = {}) {
+async function page(p: { draft?: boolean } = {}) {
   const reload = vi.fn();
   const r = await render(<Page {...p} reload={reload} />);
   unmount = r.unmount;
   const at = (id: string) => r.root.querySelector(`#${id}`) as HTMLElement;
   return { reload, root: r.root, at, scroller: r.root.querySelector("main") as HTMLElement };
-}
-
-interface Pt {
-  y: number;
-  x?: number;
-  id?: number;
-}
-/** A touch event as the browser sends it: the targets and lists are all a handler reads. */
-function touch(el: Element, type: string, touches: Pt[], changed: Pt[] = touches) {
-  const e = new Event(type, { bubbles: true, cancelable: true });
-  const list = (ps: Pt[]) =>
-    ps.map((p) => ({ identifier: p.id ?? 0, clientX: p.x ?? 100, clientY: p.y, target: el }));
-  Object.defineProperties(e, {
-    touches: { value: list(touches) },
-    changedTouches: { value: list(changed) },
-  });
-  act(() => {
-    el.dispatchEvent(e);
-  });
-  return e;
-}
-
-/** One finger from y 100 down by `by`, in a few moves; let go unless `hold`. */
-function drag(el: Element, by: number, hold = false) {
-  touch(el, "touchstart", [{ y: 100 }]);
-  const moves = [0.25, 0.5, 0.75, 1].map((f) => touch(el, "touchmove", [{ y: 100 + by * f }]));
-  if (!hold) touch(el, "touchend", [], [{ y: 100 + by }]);
-  return moves;
 }
 
 const bar = (root: HTMLElement) => root.querySelector(".pull-indicator") as HTMLElement | null;
@@ -158,25 +129,31 @@ test("not from a field, a button, a code block or something scrolling sideways",
   expect(reload).not.toHaveBeenCalled();
 });
 
-test("not while the keyboard is up, an overlay is open, or the app says off", async () => {
+test("not while the keyboard is up, or behind an open overlay's mark", async () => {
   const { reload, root, at } = await page();
   at("field").focus();
   drag(at("msg"), PULL_PX + 20);
   at("field").blur();
-  const sheet = document.createElement("div");
-  sheet.setAttribute("aria-modal", "true");
-  document.body.append(sheet);
-  drag(at("msg"), PULL_PX + 20);
-  sheet.remove();
-  // Base UI's modal popups mark the page behind them.
-  at("msg").closest("main")?.parentElement?.setAttribute("aria-hidden", "true");
-  drag(at("msg"), PULL_PX + 20);
+  // What Base UI puts on the page root while one of its overlays is open (pull.ts measures it);
+  // inert and aria-hidden take no input either.
+  const behind = root.parentElement as HTMLElement;
+  for (const [name, value] of [
+    ["data-base-ui-inert", ""],
+    ["inert", ""],
+    ["aria-hidden", "true"],
+  ] as const) {
+    behind.setAttribute(name, value);
+    expect(
+      drag(at("msg"), PULL_PX + 20).some((e) => e.defaultPrevented),
+      name,
+    ).toBe(false);
+    behind.removeAttribute(name);
+  }
   expect(shown(root)).toEqual(["idle", ""]);
   expect(reload).not.toHaveBeenCalled();
-  unmount();
-  const off = await page({ off: true });
-  drag(off.at("msg"), PULL_PX + 20);
-  expect(off.reload).not.toHaveBeenCalled();
+  // Taken off on closing: the pull works again.
+  drag(at("msg"), PULL_PX + 20);
+  expect(reload).toHaveBeenCalledTimes(1);
 });
 
 test("two fingers do not pull, and a second finger ends a pull", async () => {
