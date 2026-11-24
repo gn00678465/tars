@@ -4,10 +4,13 @@ import { act, useEffect, useState } from "react";
 import { afterEach, beforeAll, expect, test } from "vite-plus/test";
 import { render } from "../render.ts";
 import { initial, type State } from "../state.ts";
-import { choose, typeInto } from "../testing.ts";
+import { choose, typeInto, inScroller } from "../testing.ts";
 import sample from "./ledger-form.sample.json";
-import { Thread } from "./Thread.tsx";
+import { Thread as Rows } from "./Thread.tsx";
 import { type FormHooks, toContext } from "./UiForm.tsx";
+
+/** The thread's rows are the scroller's (App.tsx). */
+const Thread = (props: Parameters<typeof Rows>[0]) => inScroller(<Rows {...props} />);
 
 /**
  * The form's lazy chunk (A2UI, Base UI) loads here once, with time to spare: its first import()
@@ -93,12 +96,7 @@ async function drawn(root: HTMLElement) {
 
 const draw = async (state: State, forms?: FormHooks) => {
   const r = await mount(
-    <Thread
-      state={state}
-      onOlder={() => undefined}
-      after={() => null}
-      {...(forms === undefined ? {} : { forms })}
-    />,
+    <Thread state={state} after={() => null} {...(forms === undefined ? {} : { forms })} />,
   );
   await drawn(r.root);
   return r.root;
@@ -153,7 +151,6 @@ function Ticking({ state, forms }: { state: State; forms: FormHooks }) {
   return (
     <Thread
       state={{ ...state, items }}
-      onOlder={() => undefined}
       after={() => <span className="tick">{n}</span>}
       forms={forms}
     />

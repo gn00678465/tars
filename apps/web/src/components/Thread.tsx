@@ -9,6 +9,10 @@ import { CompactEndCard } from "./CompactEndCard.tsx";
 import { effortName } from "./RunSetup.tsx";
 import { clock, shortId } from "./time.ts";
 import { type FormHooks, UI_SHOW, UiForm } from "./UiForm.tsx";
+import { Bubble, BubbleContent } from "./ui/bubble.tsx";
+import { Marker } from "./ui/marker.tsx";
+import { Message, MessageContent, MessageFooter } from "./ui/message.tsx";
+import { MessageScrollerItem } from "./ui/message-scroller.tsx";
 
 const cut = (truncated: boolean) => (truncated ? "（已截斷）" : "");
 const n = (v: number) => v.toLocaleString("en-US");
@@ -200,13 +204,13 @@ function One({
       // As the prototype (9-01); one past the list's 500 is named by its id.
       const from = origin?.(item.from);
       return (
-        <div key={item.seq} className="fork-banner">
+        <Marker key={item.seq} className="fork-banner">
           <span>
             接續自{from === undefined ? `對話 ${shortId(item.from)}` : `「${from.title}」`}
             （只帶入渲染後文字，不含工具執行紀錄）
           </span>
           {from === undefined ? null : <span className="sg-tag">原模型 {from.model}</span>}
-        </div>
+        </Marker>
       );
     }
     case "assistant":
@@ -310,7 +314,7 @@ function Compaction({ item, merged }: { item: CompactionItem; merged: boolean })
   const when = item.at === undefined ? "" : `${clock(item.at)} `;
   if (merged)
     return (
-      <div className="compaction-divider">
+      <Marker className="compaction-divider">
         <div className="compaction-trigger">
           <span className="compaction-trigger-left">
             <Icon name="layers" />
@@ -321,7 +325,7 @@ function Compaction({ item, merged }: { item: CompactionItem; merged: boolean })
           </span>
           <span className="sg-tag">已併入後面的摘要</span>
         </div>
-      </div>
+      </Marker>
     );
   const figures =
     item.count !== undefined && item.beforeTokens !== undefined && item.keptTokens !== undefined
@@ -329,7 +333,7 @@ function Compaction({ item, merged }: { item: CompactionItem; merged: boolean })
       : "這之前的內容已壓縮成摘要";
   const tag = `${when}${by(item)}`.trim();
   return (
-    <div className="compaction-divider">
+    <Marker className="compaction-divider">
       <button
         className="compaction-trigger"
         type="button"
@@ -357,7 +361,7 @@ function Compaction({ item, merged }: { item: CompactionItem; merged: boolean })
           {item.truncated ? <p>{cut(true)}</p> : null}
         </div>
       ) : null}
-    </div>
+    </Marker>
   );
 }
 
@@ -369,7 +373,7 @@ function Compaction({ item, merged }: { item: CompactionItem; merged: boolean })
 function UsageLine({ item }: { item: Extract<WireItem, { kind: "usage" }> }) {
   const read = item.cacheReadTokens;
   return (
-    <div className="msg-usage-line mono">
+    <MessageFooter className="msg-usage-line mono">
       <span>輸入 {n(item.inputTokens - (read ?? 0))}</span>
       {read === undefined ? null : <span>快取讀 {n(read)}</span>}
       <span>
@@ -381,7 +385,7 @@ function UsageLine({ item }: { item: Extract<WireItem, { kind: "usage" }> }) {
         {/* Only a cost the provider reported is exact; table and estimate are tars's own. */}
         {item.costUsd.toFixed(3)} USD{item.costSource === "provider" ? "" : " 估"}
       </span>
-    </div>
+    </MessageFooter>
   );
 }
 
@@ -403,19 +407,19 @@ function TurnEnd({
 }) {
   if (compacting)
     return (
-      <div className="turn-status" role="status">
+      <MessageScrollerItem className="turn-status" role="status">
         <span className="status-glyph" aria-hidden="true">
           <span />
           <span />
           <span />
         </span>
         <span>壓縮中…</span>
-      </div>
+      </MessageScrollerItem>
     );
   if (turn === undefined) return null;
   if (turn.state === "started")
     return (
-      <div className="turn-status" role="status">
+      <MessageScrollerItem className="turn-status" role="status">
         {turn.phase === "thinking" ? (
           <span className="tars-sprite wheel" aria-hidden="true" />
         ) : turn.phase === "waiting_approval" ? (
@@ -428,7 +432,7 @@ function TurnEnd({
           </span>
         )}
         <span>{(turn.phase === undefined ? undefined : PHASE[turn.phase]) ?? "回覆中…"}</span>
-      </div>
+      </MessageScrollerItem>
     );
   const failed = turn.state === "failed" || turn.state === "interrupted";
   if (turn.state !== "rejected" && !failed) return null;
@@ -437,11 +441,13 @@ function TurnEnd({
     turn.reason ??
     (turn.state === "interrupted" ? "interrupted" : turn.state === "failed" ? "turn_failed" : "");
   return (
-    <ErrorCard
-      code={code}
-      provider={provider}
-      {...(turn.data === undefined ? {} : { data: turn.data })}
-    />
+    <MessageScrollerItem>
+      <ErrorCard
+        code={code}
+        provider={provider}
+        {...(turn.data === undefined ? {} : { data: turn.data })}
+      />
+    </MessageScrollerItem>
   );
 }
 
@@ -466,6 +472,25 @@ function placed(all: ReturnType<typeof groups>, items: readonly WireItem[]) {
   return { compactions, latest, faded: found === -1 ? all.length : found };
 }
 
+/**
+ * A group's row id, for its key and the scroller's: the seq of the owner's message, or of its
+ * first item when older ones are not loaded. Loading older ones and the streaming text, which
+ * has no seq yet, leave it as it is.
+ */
+const rowId = (g: ReturnType<typeof groups>[number], i: number) =>
+  `g${g.user?.seq ?? g.rest[0]?.seq ?? `-${i}`}`;
+
+/** Above the rows, so older ones come in before the first row (the scroller keeps its place). */
+export function Older({ onOlder }: { onOlder: () => void }) {
+  return (
+    <div className="btn-chip-row">
+      <button className="sg-btn sg-btn-sm" type="button" onClick={onOlder}>
+        載入更早的訊息
+      </button>
+    </div>
+  );
+}
+
 /** Each message the owner sent starts a group; what the turn wrote follows it. */
 function groups(items: readonly WireItem[]) {
   const out: { user?: Extract<WireItem, { kind: "user" }>; rest: WireItem[] }[] = [];
@@ -479,7 +504,6 @@ function groups(items: readonly WireItem[]) {
 
 export function Thread(props: {
   state: State;
-  onOlder: () => void;
   after: After;
   /**
    * The new conversation's model label; "" when the local end lists none; absent from a local
@@ -494,11 +518,11 @@ export function Thread(props: {
   /** What a form in the thread can do; absent where forms cannot be sent. */
   forms?: FormHooks;
 }) {
-  const { items, running, turn, more, notices, conv } = props.state;
+  const { items, running, turn, notices, conv } = props.state;
   const sorts = useRef(new Map<string, Sort>()).current;
   if (conv === undefined && items.length === 0)
     return (
-      <div className="empty-state">
+      <MessageScrollerItem className="empty-state">
         <span className="tars-sprite idle" aria-hidden="true" />
         {props.welcome === true ? (
           <>
@@ -518,7 +542,7 @@ export function Thread(props: {
             </p>
           </>
         )}
-      </div>
+      </MessageScrollerItem>
     );
   const all = groups(items);
   // A message a form sent names it: that form is drawn as sent, after a reload too.
@@ -530,7 +554,9 @@ export function Thread(props: {
   };
   const { compactions, latest, faded } = placed(all, items);
   const dividers = compactions.map((c) => (
-    <Compaction key={c.seq} item={c} merged={c !== latest} />
+    <MessageScrollerItem key={`c${c.seq}`} messageId={`c${c.seq}`}>
+      <Compaction item={c} merged={c !== latest} />
+    </MessageScrollerItem>
   ));
   const here = props.state.convs.find((c) => c.id === conv);
   const provider = here?.provider;
@@ -542,42 +568,53 @@ export function Thread(props: {
     );
   return (
     <TableSorts.Provider value={sorts}>
-      {more ? (
-        <div className="btn-chip-row">
-          <button className="sg-btn sg-btn-sm" type="button" onClick={props.onOlder}>
-            載入更早的訊息
-          </button>
-        </div>
-      ) : null}
-      {all.map((g, i) => (
-        <Fragment key={g.user?.seq ?? `g${i}`}>
-          {i === 0 && faded > 0 ? (
-            <div className="compacted-notice-line">模型已看不到以下的原文，只看得到摘要</div>
-          ) : null}
-          {latest !== undefined && i === faded ? dividers : null}
-          <div className={i < faded ? "msg-group compacted-old" : "msg-group"}>
-            {g.user === undefined ? null : (
-              <div className="msg-user">
-                {g.user.text}
-                {cut(g.user.truncated)}
-              </div>
-            )}
-            <div className="msg-assistant">
-              {g.user === undefined ? null : props.after(g.user.seq)}
-              <Rest
-                items={g.rest}
-                after={props.after}
-                provider={provider}
-                origin={props.origin}
-                forms={forms}
-              />
-              {i === all.length - 1 ? streaming : null}
-            </div>
-          </div>
-        </Fragment>
-      ))}
+      {all.map((g, i) => {
+        const id = rowId(g, i);
+        return (
+          <Fragment key={id}>
+            {i === 0 && faded > 0 ? (
+              <MessageScrollerItem className="compacted-notice-line">
+                模型已看不到以下的原文，只看得到摘要
+              </MessageScrollerItem>
+            ) : null}
+            {latest !== undefined && i === faded ? dividers : null}
+            <MessageScrollerItem
+              messageId={id}
+              className={i < faded ? "msg-group compacted-old" : "msg-group"}
+            >
+              {g.user === undefined ? null : (
+                <Message align="end">
+                  <MessageContent>
+                    <Bubble align="end" variant="muted" className="msg-user-bubble">
+                      <BubbleContent className="msg-user">
+                        {g.user.text}
+                        {cut(g.user.truncated)}
+                      </BubbleContent>
+                    </Bubble>
+                  </MessageContent>
+                </Message>
+              )}
+              <Message>
+                <MessageContent className="msg-assistant">
+                  {g.user === undefined ? null : props.after(g.user.seq)}
+                  <Rest
+                    items={g.rest}
+                    after={props.after}
+                    provider={provider}
+                    origin={props.origin}
+                    forms={forms}
+                  />
+                  {i === all.length - 1 ? streaming : null}
+                </MessageContent>
+              </Message>
+            </MessageScrollerItem>
+          </Fragment>
+        );
+      })}
       {latest !== undefined && faded === all.length ? dividers : null}
-      {all.length === 0 ? streaming : null}
+      {all.length === 0 && streaming !== undefined ? (
+        <MessageScrollerItem messageId="streaming">{streaming}</MessageScrollerItem>
+      ) : null}
       <TurnEnd
         turn={turn}
         items={items}
@@ -585,15 +622,18 @@ export function Thread(props: {
         compacting={props.state.compacting === true}
       />
       {props.state.compactEnd === undefined ? null : (
-        <CompactEndCard end={props.state.compactEnd} provider={provider} />
+        <MessageScrollerItem>
+          <CompactEndCard end={props.state.compactEnd} provider={provider} />
+        </MessageScrollerItem>
       )}
       {notices.map((n, i) => (
-        <NoticeCard
-          key={i}
-          notice={n}
-          context={{ provider, effort: here?.effort }}
-          {...(props.onEffort === undefined ? {} : { onEffort: props.onEffort })}
-        />
+        <MessageScrollerItem key={i}>
+          <NoticeCard
+            notice={n}
+            context={{ provider, effort: here?.effort }}
+            {...(props.onEffort === undefined ? {} : { onEffort: props.onEffort })}
+          />
+        </MessageScrollerItem>
       ))}
     </TableSorts.Provider>
   );

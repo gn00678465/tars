@@ -105,6 +105,11 @@ SOFTWARE.
 - 元件位置：`apps/web/src/components/ui/`（`button`、`input`、`textarea`、`input-group`、`combobox`；M4-P2 加 `dialog`、`drawer`、`dropdown-menu`、`popover`、`progress`、`sheet`、`tooltip`）、`apps/web/src/lib/utils.ts`
 - 元件版本：在 repo 外跑 `shadcn` 4.23.0 的 `init -b base -p nova` 與 `add button input input-group combobox`（2026-11-23，樣式 `base-nova`），把產生的檔搬進來後用 `vp fmt` 重排。內容只改一處：`combobox.tsx` 從 `@base-ui/react` 的總入口匯入，改成 `@base-ui/react/combobox`（總入口在 jsdom 測試裡要轉換整個套件，第一次載入多 1.5 秒以上；建置成品不受影響）。`textarea` 是 `input-group` 匯入的。重排前的 sha256：`button.tsx` `313353436d0fcc8e`、`combobox.tsx` `ccc44c4aa4afca18`、`input-group.tsx` `492310e6d519441c`、`input.tsx` `dab990dfefa0ba78`、`textarea.tsx` `82601c91ffc6c727`。要對上游時，先把 CLI 產生的檔用 `vp fmt` 重排再比。
 - M4-P2 加的元件：同一個 CLI 與設定，`add popover tooltip dialog sheet drawer dropdown-menu progress`（2026-11-24），沒有新增套件，匯入已是 `@base-ui/react/<子路徑>`。用 `vp fmt` 重排。內容改兩處：`popover.tsx` 的 `PopoverContent` 多收 `anchor` 傳給 Positioner（面板從別的按鈕升起，例如上下文環）；`sheet.tsx` 的 `SheetContent` 多收 `keepMounted` 傳給 Portal（手機的對話列表關起來仍留在頁面）。重排前的 sha256：`dialog.tsx` `7e96b921d921ee9f`、`drawer.tsx` `5d6118f4b18755bb`、`dropdown-menu.tsx` `ffd69006ed9c79e1`、`popover.tsx` `5fecff622f4eecc0`、`progress.tsx` `bae4a2c7eded93a8`、`sheet.tsx` `db422e2934b79774`、`tooltip.tsx` `f83d5f511812573f`。`button.tsx` 與 P1 的相同。
+- M4-P3a 加的元件：同一個 CLI，`init -t vite -b base -p nova` 後 `add message message-scroller bubble marker`（2026-11-24），新增的套件只有 `@shadcn/react` 0.3.1（`message-scroller` 匯入它的 `@shadcn/react/message-scroller`）。用 `vp fmt` 重排。重排前的 sha256：`message.tsx` `64e9ae0f9d1e268b`、`message-scroller.tsx` `653012cfeefe555b`、`bubble.tsx` `cef49b9490c90d90`、`marker.tsx` `6b0a6a0f510ac210`。內容改三處：
+  - `message-scroller.tsx` 的 `MessageScrollerViewport` 拿掉 `scroll-fade-b`（底部淡出遮罩）、`scrollbar-thin`、`scrollbar-gutter-stable`（捲軸占位，寬度會變）、`contain-content`（會裁掉 fixed 的子元素）與 `data-autoscrolling:` 的兩個捲軸顏色：都會改外觀。
+  - 同檔的 `MessageScrollerItem` 拿掉 `[content-visibility:auto]` 與 `[contain-intrinsic-size:auto_10rem]`：畫面外的列先估 10rem 高，scrollHeight 先錯再修，串流中貼底會跳。
+  - `bubble.tsx` 的 `bubbleVariants` 只留 `default` 與 `muted`，其他五個變體沒有用到，卻因為 `cva()` 呼叫留在首屏 JS（約 230 B gzip）。
+  - 不用 Message Scroller 文件裡開啟時的行內 script：CSP 不允許。
 - 來源：https://github.com/shadcn-ui/ui
 - 授權：MIT
 

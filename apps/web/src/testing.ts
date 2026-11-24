@@ -1,5 +1,11 @@
 import { PROTOCOL_VERSION, type ServerMessage } from "@tars/protocol";
-import { act } from "react";
+import { act, createElement, type ReactNode } from "react";
+import {
+  MessageScroller,
+  MessageScrollerContent,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "./components/ui/message-scroller.tsx";
 import { Socket, type SocketDeps, type WebSocketLike } from "./socket.ts";
 import type { Event } from "./state.ts";
 
@@ -202,4 +208,123 @@ export function drag(el: Element, by: number, hold = false) {
   const moves = [0.25, 0.5, 0.75, 1].map((f) => touch(el, "touchmove", [{ y: 100 + by * f }]));
   if (!hold) touch(el, "touchend", [], [{ y: 100 + by }]);
   return moves;
+}
+
+/** The thread's rows are the scroller's (App.tsx): a test that draws Thread alone puts it in one. */
+export const inScroller = (rows: ReactNode) =>
+  createElement(
+    MessageScrollerProvider,
+    null,
+    createElement(
+      MessageScroller,
+      null,
+      createElement(
+        MessageScrollerViewport,
+        null,
+        createElement(MessageScrollerContent, null, rows),
+      ),
+    ),
+  );
+
+/**
+ * jsdom has no ResizeObserver or IntersectionObserver, and the scroller (@shadcn/react's Message
+ * Scroller) follows a growing row by the first. Installed before the scroller mounts; `resize()`
+ * is a layout change, which the scroller handles a frame later.
+ */
+export function observers() {
+  const resized = new Set<ResizeObserverCallback>();
+  const saved = { r: globalThis.ResizeObserver, i: globalThis.IntersectionObserver };
+  class FakeResizeObserver {
+    constructor(private readonly cb: ResizeObserverCallback) {}
+    observe() {
+      resized.add(this.cb);
+    }
+    unobserve() {}
+    disconnect() {
+      resized.delete(this.cb);
+    }
+  }
+  class FakeIntersectionObserver {
+    readonly root = null;
+    readonly rootMargin = "0px";
+    readonly thresholds = [0];
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords() {
+      return [];
+    }
+  }
+  globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
+  globalThis.IntersectionObserver =
+    FakeIntersectionObserver as unknown as typeof IntersectionObserver;
+  return {
+    resize: async () => {
+      for (const cb of resized) cb([], {} as ResizeObserver);
+      await frame();
+    },
+    restore: () => {
+      globalThis.ResizeObserver = saved.r;
+      globalThis.IntersectionObserver = saved.i;
+    },
+  };
+}
+
+const box = (top: number, height: number) =>
+  ({ top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top }) as DOMRect;
+
+/**
+ * jsdom lays nothing out: the scroller's viewport is `viewPx` tall and its rows are stacked, each
+ * `rowPx` tall, so where a row is and how far the end is are what a browser would say. scrollTop
+ * stays within what can be scrolled, as in a browser, and scrollTo moves at once and fires scroll.
+ */
+export function layout(viewport: HTMLElement, viewPx: number, rowPx: (row: HTMLElement) => number) {
+  const content = viewport.querySelector('[data-slot="message-scroller-content"]') as HTMLElement;
+  const rows = () =>
+    [...content.children].filter((e): e is HTMLElement => !(e as HTMLElement).hidden);
+  const total = () => rows().reduce((n, r) => n + rowPx(r), 0);
+  const clamp = (v: number) => Math.min(Math.max(0, v), Math.max(0, total() - viewPx));
+  let top = 0;
+  Object.defineProperties(viewport, {
+    clientHeight: { configurable: true, get: () => viewPx },
+    scrollHeight: { configurable: true, get: () => Math.max(total(), viewPx) },
+    scrollTop: {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = clamp(v);
+      },
+    },
+    scrollTo: {
+      configurable: true,
+      value: (o: ScrollToOptions) => {
+        top = clamp(o.top ?? top);
+        viewport.dispatchEvent(new Event("scroll"));
+      },
+    },
+    getBoundingClientRect: { configurable: true, value: () => box(0, viewPx) },
+  });
+  // Called with .call(this) below.
+  // oxlint-disable-next-line typescript/unbound-method
+  const original = HTMLElement.prototype.getBoundingClientRect;
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    if (this.parentElement !== content) return original.call(this);
+    let y = -top;
+    for (const r of rows()) {
+      if (r === this) return box(y, rowPx(r));
+      y += rowPx(r);
+    }
+    return box(0, 0);
+  };
+  return () => {
+    HTMLElement.prototype.getBoundingClientRect = original;
+    for (const k of [
+      "clientHeight",
+      "scrollHeight",
+      "scrollTop",
+      "scrollTo",
+      "getBoundingClientRect",
+    ])
+      delete (viewport as unknown as Record<string, unknown>)[k];
+  };
 }

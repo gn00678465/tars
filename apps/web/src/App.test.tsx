@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
 import { button, buttons, render } from "./render.ts";
 import { shortTime } from "./components/time.ts";
-import { drag, frame, server, socketHarness, touch } from "./testing.ts";
+import { drag, frame, layout, observers, server, socketHarness, touch } from "./testing.ts";
 import { DAMPING, REST_PX } from "./usePullToRefresh.ts";
 
 /** A finger's way that moves the page past the rest. */
@@ -530,12 +530,15 @@ describe("the sidebar and the open conversation", () => {
     });
 
     test("at the bottom, what comes is followed; scrolled up, it is left alone", async () => {
+      // The scroller follows a row that grows by its ResizeObserver, and finds the end by its
+      // rows' boxes: both are stood in for (testing.ts). A browser keeps scrollTop within
+      // scrollHeight - clientHeight, so the end is 300 and 600 here, not 500 and 800.
+      const o = observers();
       const { h, root, unmount } = await listed();
       await act(async () => entry(root, "對話 1").click());
       const el = scroll(root);
       let height = 500;
-      Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => height });
-      Object.defineProperty(el, "clientHeight", { configurable: true, get: () => 200 });
+      const restore = layout(el, 200, (r) => (r.dataset.messageId === undefined ? 0 : height));
       await act(async () =>
         h
           .last()
@@ -547,17 +550,24 @@ describe("the sidebar and the open conversation", () => {
             ),
           ),
       );
-      expect(el.scrollTop).toBe(500);
+      expect(el.scrollTop).toBe(300);
       height = 800;
       await act(async () => h.last().receive(item(result)));
-      expect(el.scrollTop).toBe(800);
+      await o.resize();
+      expect(el.scrollTop).toBe(600);
       // Scrolled up to read: nothing pulls it down.
-      el.scrollTop = 100;
-      await act(async () => el.dispatchEvent(new Event("scroll")));
+      await act(async () => {
+        el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -500 }));
+        el.scrollTop = 100;
+        el.dispatchEvent(new Event("scroll"));
+      });
       height = 900;
       await act(async () => h.last().receive(item(reply)));
+      await o.resize();
       expect(el.scrollTop).toBe(100);
       unmount();
+      restore();
+      o.restore();
     });
   });
 

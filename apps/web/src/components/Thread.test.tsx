@@ -4,7 +4,11 @@ import { act } from "react";
 import { afterEach, expect, test } from "vite-plus/test";
 import { render } from "../render.ts";
 import { initial, type State } from "../state.ts";
-import { Thread } from "./Thread.tsx";
+import { Thread as Rows } from "./Thread.tsx";
+import { inScroller } from "../testing.ts";
+
+/** The thread's rows are the scroller's (App.tsx). */
+const Thread = (props: Parameters<typeof Rows>[0]) => inScroller(<Rows {...props} />);
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -54,9 +58,7 @@ test("each end state of a tool call is a tag in Chinese; a refused call reads �
     "refused",
     "interrupted",
   ];
-  const { root } = await render(
-    <Thread state={steps([...ends, undefined])} onOlder={() => undefined} after={() => null} />,
-  );
+  const { root } = await render(<Thread state={steps([...ends, undefined])} after={() => null} />);
   const cards = [...root.querySelectorAll(".tool-step")].map((e) => [
     e.querySelector(".tool-step-left > span")?.textContent,
     e.querySelector(".sg-tag")?.className,
@@ -76,9 +78,7 @@ test("each end state of a tool call is a tag in Chinese; a refused call reads �
 });
 
 test("a status this page does not know is shown as sent, not dropped", async () => {
-  const { root } = await render(
-    <Thread state={steps(["later_status"])} onOlder={() => undefined} after={() => null} />,
-  );
+  const { root } = await render(<Thread state={steps(["later_status"])} after={() => null} />);
   expect(root.querySelector(".tool-step .sg-tag")?.textContent).toBe("later_status");
 });
 
@@ -92,12 +92,7 @@ test("a carried conversation opens with where it came from and that model's labe
   const origin = (id: string) =>
     id === "conv-00000001" ? { title: "整理巡檢", model: "Claude Sonnet 4.6" } : undefined;
   const known = await render(
-    <Thread
-      state={carried("conv-00000001")}
-      origin={origin}
-      onOlder={() => undefined}
-      after={() => null}
-    />,
+    <Thread state={carried("conv-00000001")} origin={origin} after={() => null} />,
   );
   const banner = known.root.querySelector(".fork-banner") as HTMLElement;
   expect([...banner.children].map((e) => e.textContent)).toEqual([
@@ -107,12 +102,7 @@ test("a carried conversation opens with where it came from and that model's labe
   known.unmount();
   // One past the list: named by its id, no model.
   const far = await render(
-    <Thread
-      state={carried("conv-0000abcdef99")}
-      origin={origin}
-      onOlder={() => undefined}
-      after={() => null}
-    />,
+    <Thread state={carried("conv-0000abcdef99")} origin={origin} after={() => null} />,
   );
   expect(far.root.querySelector(".fork-banner")?.textContent).toBe(
     "接續自對話 abcdef99（只帶入渲染後文字，不含工具執行紀錄）",
@@ -145,7 +135,6 @@ test("A1: the usage line as the prototype; cache reads are taken out of 輸入 a
   const full = await render(
     <Thread
       state={usage({ cacheReadTokens: 18_920, thinkingTokens: 92, effort: "medium" })}
-      onOlder={() => undefined}
       after={() => null}
     />,
   );
@@ -158,19 +147,13 @@ test("A1: the usage line as the prototype; cache reads are taken out of 輸入 a
   ]);
   document.body.innerHTML = "";
   const none = await render(
-    <Thread
-      state={usage({ cacheReadTokens: 0, costSource: "provider" })}
-      onOlder={() => undefined}
-      after={() => null}
-    />,
+    <Thread state={usage({ cacheReadTokens: 0, costSource: "provider" })} after={() => null} />,
   );
   expect(spans(none.root)).toEqual(["輸入 19,340", "快取讀 0", "輸出 216", "0.010 USD"]);
 });
 
 test("A1: a local end older than the fields: no 快取讀, no thinking, no effort, never a made-up 0", async () => {
-  const { root } = await render(
-    <Thread state={usage({})} onOlder={() => undefined} after={() => null} />,
-  );
+  const { root } = await render(<Thread state={usage({})} after={() => null} />);
   expect(spans(root)).toEqual(["輸入 19,340", "輸出 216", "0.010 USD 估"]);
 });
 
@@ -185,9 +168,7 @@ const result = (extra: Record<string, unknown>): State => {
 };
 
 test("A2: the time in seconds replaces 結束碼 in the summary; the code moves into the output", async () => {
-  const { root } = await render(
-    <Thread state={result({ durationMs: 840 })} onOlder={() => undefined} after={() => null} />,
-  );
+  const { root } = await render(<Thread state={result({ durationMs: 840 })} after={() => null} />);
   const right = root.querySelector(".tool-step-right")?.textContent;
   expect(right).toContain("0.84 s");
   expect(right).not.toContain("結束碼");
@@ -197,9 +178,7 @@ test("A2: the time in seconds replaces 結束碼 in the summary; the code moves 
 });
 
 test("A2: without a time (an older local end) the summary keeps 結束碼", async () => {
-  const { root } = await render(
-    <Thread state={result({})} onOlder={() => undefined} after={() => null} />,
-  );
+  const { root } = await render(<Thread state={result({})} after={() => null} />);
   expect(root.querySelector(".tool-step-right")?.textContent).toContain("結束碼 0");
 });
 
@@ -213,9 +192,7 @@ test("B3: a refused call says why when the local end does; 沒有執行 when it 
         i.kind === "tool_result" && refusal !== undefined ? ({ ...i, refusal } as WireItem) : i,
       ),
     };
-    const { root } = await render(
-      <Thread state={state} onOlder={() => undefined} after={() => null} />,
-    );
+    const { root } = await render(<Thread state={state} after={() => null} />);
     return root.querySelector(".tool-step .sg-tag")?.textContent;
   };
   expect(await tags("not_offered")).toBe("這個入口不提供");
@@ -235,9 +212,7 @@ const turnState = (turn: State["turn"], items: WireItem[] = []): State => ({
 test("D1: a started turn's line names its phase, and is gone once the turn ends", async () => {
   const line = async (turn: State["turn"]) => {
     document.body.innerHTML = "";
-    const { root } = await render(
-      <Thread state={turnState(turn)} onOlder={() => undefined} after={() => null} />,
-    );
+    const { root } = await render(<Thread state={turnState(turn)} after={() => null} />);
     return root.querySelector(".turn-status")?.textContent ?? null;
   };
   expect(await line({ state: "started", turn: T, phase: "thinking" })).toBe("思考中…");
@@ -255,7 +230,6 @@ test("the sprites: the wheel while thinking, idle while waiting for an approval 
   const thinking = await render(
     <Thread
       state={turnState({ state: "started", turn: T, phase: "thinking" })}
-      onOlder={() => undefined}
       after={() => null}
     />,
   );
@@ -267,7 +241,6 @@ test("the sprites: the wheel while thinking, idle while waiting for an approval 
   const replying = await render(
     <Thread
       state={turnState({ state: "started", turn: T, phase: "replying" })}
-      onOlder={() => undefined}
       after={() => null}
     />,
   );
@@ -276,7 +249,6 @@ test("the sprites: the wheel while thinking, idle while waiting for an approval 
   const waiting = await render(
     <Thread
       state={turnState({ state: "started", turn: T, phase: "waiting_approval" })}
-      onOlder={() => undefined}
       after={() => null}
     />,
   );
@@ -287,11 +259,7 @@ test("the sprites: the wheel while thinking, idle while waiting for an approval 
   expect(waiting.root.querySelector("[style], style")).toBeNull();
   waiting.unmount();
   const empty = await render(
-    <Thread
-      state={{ ...initial, connection: "open" }}
-      onOlder={() => undefined}
-      after={() => null}
-    />,
+    <Thread state={{ ...initial, connection: "open" }} after={() => null} />,
   );
   expect(empty.root.querySelector(".empty-state .tars-sprite")?.className).toBe("tars-sprite idle");
   expect(empty.root.querySelector("[style], style")).toBeNull();
@@ -309,9 +277,7 @@ test("a table's order picked while the reply streams stays once the reply is an 
     truncated: false,
     state: "complete",
   };
-  const view = (state: State) => (
-    <Thread state={state} onOlder={() => undefined} after={() => null} />
-  );
+  const view = (state: State) => <Thread state={state} after={() => null} />;
   const streaming: State = {
     ...turnState({ state: "started", turn: T }, [user, before]),
     running: { turn: T, text: table },
@@ -339,11 +305,7 @@ test("C3: an interrupted turn is a warn card, from its error item or, without on
     data: { script: "bark-notify" },
   } as WireItem;
   const withItem = await render(
-    <Thread
-      state={turnState({ state: "interrupted", turn: T }, [errorItem])}
-      onOlder={() => undefined}
-      after={() => null}
-    />,
+    <Thread state={turnState({ state: "interrupted", turn: T }, [errorItem])} after={() => null} />,
   );
   const cards = withItem.root.querySelectorAll(".task-notice");
   expect(cards).toHaveLength(1);
@@ -354,11 +316,7 @@ test("C3: an interrupted turn is a warn card, from its error item or, without on
   );
   document.body.innerHTML = "";
   const bare = await render(
-    <Thread
-      state={turnState({ state: "interrupted", turn: T })}
-      onOlder={() => undefined}
-      after={() => null}
-    />,
+    <Thread state={turnState({ state: "interrupted", turn: T })} after={() => null} />,
   );
   expect(bare.root.querySelector(".task-notice-title")?.textContent).toBe("回合中斷（本機端重啟）");
   expect(bare.root.querySelector(".turn-status")).toBeNull();
@@ -373,7 +331,6 @@ test("C1: a failed turn's figures come from turn.data when no error item carries
         reason: "turn_cap",
         data: { turnUsd: 1.02, turnCapUsd: 1 },
       })}
-      onOlder={() => undefined}
       after={() => null}
     />,
   );
@@ -441,16 +398,15 @@ const compacted = (): State => {
 };
 
 test("E4: the dividers sit where the latest summary ends; what it summarized is faded", async () => {
-  const { root } = await render(
-    <Thread state={compacted()} onOlder={() => undefined} after={() => null} />,
-  );
+  const { root } = await render(<Thread state={compacted()} after={() => null} />);
   const order = [
     ...root.querySelectorAll(".compacted-notice-line, .msg-group, .compaction-divider"),
   ].map((e) =>
     e.classList.contains("compaction-divider")
       ? `divider:${e.querySelector(".compaction-trigger-left")?.textContent}`
       : e.classList.contains("msg-group")
-        ? `${e.className}:${e.querySelector(".msg-user")?.textContent}`
+        ? // The row's own classes, without the scroller item's.
+          `${e.classList.contains("compacted-old") ? "msg-group compacted-old" : "msg-group"}:${e.querySelector(".msg-user")?.textContent}`
         : "line",
   );
   expect(order).toEqual([
@@ -467,9 +423,7 @@ test("E4: the dividers sit where the latest summary ends; what it summarized is 
 });
 
 test("E4: the summary opens to its sections, headings in Chinese, figures and cost above", async () => {
-  const { root } = await render(
-    <Thread state={compacted()} onOlder={() => undefined} after={() => null} />,
-  );
+  const { root } = await render(<Thread state={compacted()} after={() => null} />);
   const open = root.querySelector("button.compaction-trigger") as HTMLButtonElement;
   expect(open.textContent).toContain("展開摘要");
   open.click();
@@ -496,9 +450,7 @@ test("E4: an older local end's compaction, without its place, is drawn where it 
       ? ({ seq: i.seq, turn: i.turn, kind: i.kind, text: "摘要", truncated: false } as WireItem)
       : i,
   );
-  const { root } = await render(
-    <Thread state={{ ...s, items }} onOlder={() => undefined} after={() => null} />,
-  );
+  const { root } = await render(<Thread state={{ ...s, items }} after={() => null} />);
   expect(root.querySelector(".compacted-old")).toBeNull();
   expect(root.querySelectorAll(".compaction-divider")).toHaveLength(2);
   expect(root.querySelector(".compaction-trigger-left")?.textContent).toBe(
@@ -508,11 +460,7 @@ test("E4: an older local end's compaction, without its place, is drawn where it 
 
 test("E3: 壓縮中 while it runs; its end, when not a summary, is a card saying nothing changed", async () => {
   const line = await render(
-    <Thread
-      state={{ ...compacted(), compacting: true }}
-      onOlder={() => undefined}
-      after={() => null}
-    />,
+    <Thread state={{ ...compacted(), compacting: true }} after={() => null} />,
   );
   expect(line.root.querySelector(".turn-status")?.textContent).toBe("壓縮中…");
   const ends: [NonNullable<State["compactEnd"]>, string, string][] = [
@@ -536,11 +484,7 @@ test("E3: 壓縮中 while it runs; its end, when not a summary, is a card saying
   for (const [end, title, desc] of ends) {
     document.body.innerHTML = "";
     const { root } = await render(
-      <Thread
-        state={{ ...compacted(), compactEnd: end }}
-        onOlder={() => undefined}
-        after={() => null}
-      />,
+      <Thread state={{ ...compacted(), compactEnd: end }} after={() => null} />,
     );
     expect(root.querySelector(".task-notice-title")?.textContent).toBe(title);
     expect(root.querySelector(".task-notice-desc")?.textContent).toBe(desc);

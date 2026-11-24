@@ -5,7 +5,11 @@ import { afterEach, beforeAll, expect, test, vi } from "vite-plus/test";
 import { render } from "../render.ts";
 import { initial, type State } from "../state.ts";
 import sample from "./ledger-form.sample.json";
-import { Thread } from "./Thread.tsx";
+import { Thread as Rows } from "./Thread.tsx";
+import { inScroller } from "../testing.ts";
+
+/** The thread's rows are the scroller's (App.tsx). */
+const Thread = (props: Parameters<typeof Rows>[0]) => inScroller(<Rows {...props} />);
 
 /** What to make throw: the form check, or A2UI while drawing. */
 const fail = vi.hoisted(() => ({ check: false, card: false }));
@@ -81,7 +85,6 @@ async function draw() {
   const { root } = await render(
     <Thread
       state={state}
-      onOlder={() => undefined}
       after={() => null}
       forms={{ submit: () => undefined, blocked: undefined, sending: undefined, error: undefined }}
     />,

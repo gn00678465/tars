@@ -62,7 +62,7 @@ function mayStart(el: HTMLElement, target: EventTarget | null) {
   );
 }
 
-const reduced = () =>
+export const reducedMotion = () =>
   typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /**
@@ -106,7 +106,7 @@ export function usePullToRefresh(
       pulling = false;
       ready = false;
       moveTo(0);
-      if (!was || reduced()) return show("idle");
+      if (!was || reducedMotion()) return show("idle");
       show("back");
       settle = setTimeout(() => {
         settle = undefined;
@@ -171,7 +171,7 @@ export function usePullToRefresh(
       // At rest first, so 重新整理中… is still where it was when the reload starts.
       settle = setTimeout(
         () => (opts.current.reload ?? (() => location.reload()))(),
-        reduced() ? 0 : SETTLE_MS,
+        reducedMotion() ? 0 : SETTLE_MS,
       );
     };
     el.addEventListener("touchstart", start, { passive: true });

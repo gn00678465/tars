@@ -26,7 +26,7 @@ import {
   effortNote,
   RunSetup,
 } from "./components/RunSetup.tsx";
-import { Thread } from "./components/Thread.tsx";
+import { Older, Thread } from "./components/Thread.tsx";
 import { SourceOverlay } from "./components/wiki/SourceOverlay.tsx";
 import { WikiSideList, WikiTabs } from "./components/wiki/WikiSidebar.tsx";
 import { WikiWorkspace } from "./components/wiki/WikiWorkspace.tsx";
@@ -41,12 +41,34 @@ import {
   runBusy,
   sendBusy,
 } from "./state.ts";
-import { usePullToRefresh } from "./usePullToRefresh.ts";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+  useMessageScroller,
+} from "./components/ui/message-scroller.tsx";
+import { reducedMotion, usePullToRefresh } from "./usePullToRefresh.ts";
 import { useWikiRequests } from "./wiki/requests.ts";
 import type { WikiEvent } from "./wiki/state.ts";
 
 /** Within this much of the end counts as at the bottom (rounding, a last line half shown). */
 const BOTTOM_PX = 24;
+
+/**
+ * In the scroller: a conversation opened or started, and a message the owner sent, go to the end
+ * and follow it again, wherever the owner had scrolled to.
+ */
+function ToEnd({ conv, sent }: { conv: string | undefined; sent: number }) {
+  const { scrollToEnd } = useMessageScroller();
+  useLayoutEffect(() => {
+    scrollToEnd();
+  }, [conv, sent, scrollToEnd]);
+  return null;
+}
+
 /**
  * 往返延遲 is measured all the time, for the top bar: on connecting, every PING_MS, and again when
  * the status sheet opens or closes. Not more often: each status.get makes the local end total its budgets
@@ -195,14 +217,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const [seenReconnect, setSeenReconnect] = useState<number | undefined>(undefined);
 
   // A conversation opened from the list: the page goes to its thread.
-  const thread = useRef<HTMLElement>(null);
-  // Whether the owner was at the bottom before this render: then what came is followed. One who
-  // scrolled up to read is left there.
-  const atBottom = useRef(true);
-  useLayoutEffect(() => {
-    const el = thread.current;
-    if (el !== null && atBottom.current) el.scrollTop = el.scrollHeight;
-  }, [state.items, state.running, state.turn, state.cards]);
+  const thread = useRef<HTMLDivElement>(null);
+  const [sent, setSent] = useState(0);
   // Whether the composer holds unsent text: a pull does not reload over it.
   const draft = useRef(false);
   const workspace = useRef<HTMLDivElement>(null);
@@ -560,82 +576,115 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             </div>
           )}
           <PullIndicator state={pull} />
-          <main
-            className="thread-scroll"
-            ref={thread}
-            tabIndex={-1}
-            aria-label={wikiOn ? "個人知識庫" : "訊息"}
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_PX;
-            }}
-          >
-            <div className="thread-inner thread">
-              {wikiOn ? (
-                <WikiWorkspace
-                  wiki={wiki}
-                  offline={!reachable}
-                  now={today}
-                  dispatch={toWiki}
-                  onJump={open}
-                />
-              ) : (
-                <>
-                  {current === undefined || models === undefined ? null : (
-                    <ContinueHints
-                      conv={current}
-                      models={models}
-                      status={state.status}
-                      onContinue={() => setPicking("continue")}
-                    />
+          {/* At the bottom what comes is followed; one who scrolled up to read is left there. The
+              knowledge base is read from the top: nothing is followed under it. */}
+          <MessageScrollerProvider autoScroll={!wikiOn} scrollEdgeThreshold={BOTTOM_PX}>
+            <MessageScroller className="thread-frame">
+              <ToEnd conv={state.conv} sent={sent} />
+              <MessageScrollerViewport
+                className="thread-scroll"
+                ref={thread}
+                role="main"
+                tabIndex={-1}
+                aria-label={wikiOn ? "個人知識庫" : "訊息"}
+              >
+                {/* Outside the rows: older rows come in before the first one, which is how the
+                    scroller knows to keep the place. */}
+                {wikiOn ? null : (
+                  <div className="thread-inner thread-head">
+                    {current === undefined || models === undefined ? null : (
+                      <ContinueHints
+                        conv={current}
+                        models={models}
+                        status={state.status}
+                        onContinue={() => setPicking("continue")}
+                      />
+                    )}
+                    {state.context === undefined || state.conv === undefined ? null : (
+                      <ContextHint
+                        context={state.context}
+                        onCompact={() => setContextSheet({ focus: "" })}
+                      />
+                    )}
+                    {state.more ? (
+                      <Older
+                        onOlder={() => {
+                          if (state.conv !== undefined && oldest !== undefined)
+                            socket.send("conv.open", { before: oldest }, state.conv);
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                )}
+                {/* The finished reply is spoken once by the polite region below (state.spoken):
+                    as a log, every row added would be read again. */}
+                <MessageScrollerContent
+                  className="thread-inner thread"
+                  role="presentation"
+                  aria-busy={state.running !== undefined}
+                >
+                  {wikiOn ? (
+                    <MessageScrollerItem>
+                      <WikiWorkspace
+                        wiki={wiki}
+                        offline={!reachable}
+                        now={today}
+                        dispatch={toWiki}
+                        onJump={open}
+                      />
+                    </MessageScrollerItem>
+                  ) : (
+                    <>
+                      <Thread
+                        state={state}
+                        origin={(id) => {
+                          const c = state.convs.find((x) => x.id === id);
+                          return c === undefined
+                            ? undefined
+                            : { title: titleOf(id), model: modelName(c.provider, c.model) };
+                        }}
+                        {...(models === undefined
+                          ? {}
+                          : { model: models.length === 0 ? "" : nextLabel })}
+                        welcome={
+                          started === 0 &&
+                          next === undefined &&
+                          state.connection === "open" &&
+                          state.relay.online
+                        }
+                        {...(effort === undefined || levels.length === 0
+                          ? {}
+                          : { onEffort: () => setEffortOpen(true) })}
+                        after={(seq) => anchored.get(seq)?.map(card)}
+                        forms={{
+                          // A form sends as a message does: nothing while a turn runs or offline.
+                          submit: (callId, context) => {
+                            if (state.conv !== undefined)
+                              socket.submitForm(state.conv, callId, context);
+                          },
+                          blocked: composerBlocked(state) ?? sendBusy(state),
+                          sending: state.form?.callId,
+                          error: state.formError,
+                        }}
+                      />
+                      {loose.map((c) => (
+                        <MessageScrollerItem key={c.approval.approvalId}>
+                          {card(c)}
+                        </MessageScrollerItem>
+                      ))}
+                    </>
                   )}
-                  {state.context === undefined || state.conv === undefined ? null : (
-                    <ContextHint
-                      context={state.context}
-                      onCompact={() => setContextSheet({ focus: "" })}
-                    />
-                  )}
-                  <Thread
-                    state={state}
-                    origin={(id) => {
-                      const c = state.convs.find((x) => x.id === id);
-                      return c === undefined
-                        ? undefined
-                        : { title: titleOf(id), model: modelName(c.provider, c.model) };
-                    }}
-                    {...(models === undefined
-                      ? {}
-                      : { model: models.length === 0 ? "" : nextLabel })}
-                    welcome={
-                      started === 0 &&
-                      next === undefined &&
-                      state.connection === "open" &&
-                      state.relay.online
-                    }
-                    {...(effort === undefined || levels.length === 0
-                      ? {}
-                      : { onEffort: () => setEffortOpen(true) })}
-                    after={(seq) => anchored.get(seq)?.map(card)}
-                    forms={{
-                      // A form sends as a message does: nothing while a turn runs or offline.
-                      submit: (callId, context) => {
-                        if (state.conv !== undefined)
-                          socket.submitForm(state.conv, callId, context);
-                      },
-                      blocked: composerBlocked(state) ?? sendBusy(state),
-                      sending: state.form?.callId,
-                      error: state.formError,
-                    }}
-                    onOlder={() => {
-                      if (state.conv !== undefined && oldest !== undefined)
-                        socket.send("conv.open", { before: oldest }, state.conv);
-                    }}
-                  />
-                  {loose.map(card)}
-                </>
-              )}
-            </div>
-          </main>
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+              {/* The button goes inert once pressed: the focus stays in the thread, not on the page. */}
+              <MessageScrollerButton
+                className="thread-to-end"
+                aria-label="捲到最新訊息"
+                behavior={reducedMotion() ? "auto" : "smooth"}
+                onClick={() => thread.current?.focus({ preventScroll: true })}
+              />
+            </MessageScroller>
+          </MessageScrollerProvider>
           <footer className="composer-dock">
             <div className="composer-wrap">
               {pinned.length === 0 ? null : (
@@ -692,6 +741,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                 onSend={(text) => {
                   // The reply comes in the thread: the page goes back to it.
                   toWiki({ type: "view", view: "chat" });
+                  setSent((n) => n + 1);
                   const options = {
                     ...chosen,
                     ...(sendEffort === undefined ? {} : { effort: sendEffort }),

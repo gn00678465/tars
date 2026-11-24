@@ -774,3 +774,76 @@ th[aria-sort="descending"] .md-sort-mark::after {
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/*
+ * The thread in shadcn's Message Scroller and message shells (M4-P3a). Their utilities are in a
+ * cascade layer; what they set and the prototype's classes do not is set back here, so the
+ * thread looks as before. The frame takes the old scroller's place in the workspace.
+ */
+.thread-frame {
+  flex: 1 1 0;
+  height: auto;
+}
+/* The scroller's content is at least the viewport tall (min-h-full): with the head above it,
+ * a short thread would scroll. */
+.thread-inner {
+  height: auto;
+  min-height: 0;
+}
+.thread-head {
+  margin-bottom: 16px;
+}
+.thread-head:empty {
+  display: none;
+}
+/* A card's deny takes the focus and is scrolled to: not under 捲到最新訊息. */
+.thread-scroll {
+  scroll-padding-bottom: 64px;
+}
+.thread [data-slot="message"] {
+  gap: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+.thread [data-slot="message-content"] {
+  overflow-wrap: inherit;
+}
+.msg-user-bubble {
+  max-width: 82%;
+}
+.msg-user {
+  max-width: 100%;
+  line-height: inherit;
+  overflow: visible;
+  overflow-wrap: inherit;
+}
+.fork-banner {
+  line-height: inherit;
+}
+.compaction-divider {
+  display: block;
+  min-height: 0;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+.compaction-divider svg {
+  width: 14px;
+  height: 14px;
+}
+.msg-usage-line {
+  padding-inline: 0;
+  font-weight: inherit;
+  line-height: inherit;
+}
+/* 44 px to a finger, as drawn at 28. */
+.thread-to-end::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-to-end {
+    transition-property: opacity;
+  }
+}

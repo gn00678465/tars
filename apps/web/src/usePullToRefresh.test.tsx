@@ -276,7 +276,7 @@ test("in the app: the composer's unsent text blocks the pull, cleared it does no
   const r = await render(<App socket={h.socket} now={h.now} />);
   unmount = r.unmount;
   await act(async () => h.last().ready());
-  const main = r.root.querySelector("main.thread-scroll") as HTMLElement;
+  const main = r.root.querySelector(".thread-scroll") as HTMLElement;
   const workspace = r.root.querySelector(".workspace") as HTMLElement;
   // The bar is not on the page until a finger touches the thread: a desktop never has it.
   expect(bar(r.root)).toBeNull();

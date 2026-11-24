@@ -9,15 +9,17 @@ import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 /**
- * Under this much JS a first visit loads, gzipped: 224,175 bytes (measured at the merge of pull
- * to refresh, 1,090 over M4-P2's 222,099, and the screen readout in the status sheet, about 1 kB;
- * that readout is for finding the iPhone's bottom gap, and goes when it is found) plus 2 kB. P2 put Base UI's overlays on the first load (main was 138,115):
- * the design's estimate was about 210 kB; the phone's Drawer is 11.8 kB of it and the one tooltip
- * 4 kB (m4_web_stack_design.md 7 raises it phase by phase).
+ * Under this much JS a first visit loads, gzipped: main's 224,365 bytes at M4-P3a plus 8 kB for
+ * the thread's Message Scroller (@shadcn/react) and its message shells; P3a measured 232,257.
+ * main's count has the screen readout in the status sheet, about 1 kB: it is for finding the
+ * iPhone's bottom gap, and goes when that is found.
+ * P2 put Base UI's overlays on the first load (main was 138,115): the design's estimate was about
+ * 210 kB; the phone's Drawer is 11.8 kB of it and the one tooltip 4 kB
+ * (m4_web_stack_design.md 7 raises it phase by phase).
  * Measured by this file's own build, which leaves out the Cloudflare and _headers plugins: they
  * do not change the page's chunks.
  */
-const FIRST_LOAD_LIMIT = 224_175 + 2_000;
+const FIRST_LOAD_LIMIT = 224_365 + 8_000;
 
 /** Strings only zod 3 has, and only zod 4 has (research/a2ui_proto_result.md, Zod 4 (4)). */
 const ZOD3 = "Unrecognized key(s) in object";
