@@ -170,7 +170,7 @@ export function RunSetup(props: {
               ref={m.trigger}
               type="button"
               aria-haspopup="dialog"
-              aria-expanded={false}
+              aria-expanded={m.open}
               onClick={() => m.onOpen(true)}
               {...modelSeg}
             />
@@ -256,7 +256,7 @@ export function RunSetup(props: {
               <button
                 type="button"
                 aria-haspopup="dialog"
-                aria-expanded={false}
+                aria-expanded={e.open}
                 onClick={() => e.onOpen(!e.open)}
                 {...effortSeg}
               />

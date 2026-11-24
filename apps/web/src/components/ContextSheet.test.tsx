@@ -21,7 +21,11 @@ test("E1: the ring turns at the local end's warn and stop lines", async () => {
   const tone = async (used: number) => {
     document.body.innerHTML = "";
     const { root } = await render(
-      <ContextRing context={{ ...context, contextUsed: used }} onOpen={() => undefined} />,
+      <ContextRing
+        context={{ ...context, contextUsed: used }}
+        onOpen={() => undefined}
+        open={false}
+      />,
     );
     return root.querySelector(".context-ring-fill")?.getAttribute("class");
   };

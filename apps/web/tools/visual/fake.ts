@@ -19,6 +19,8 @@ class SceneSocket {
   onclose: ((e: { code: number }) => void) | null = null;
   constructor() {
     setTimeout(() => this.onopen?.(), 0);
+    // For csp.ts: a push after the page is drawn, as the local end sends a new approval.
+    (globalThis as { visualPush?: (m: Push) => void }).visualPush = (m) => this.reply(m);
   }
   close() {}
   // A microtask, not a timer: the status line's round trip then reads the same in every run.

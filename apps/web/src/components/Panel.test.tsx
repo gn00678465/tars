@@ -164,3 +164,44 @@ test("an anchor not in the page gets the centred Dialog, not a Popover at the co
   await frame();
   expect(popup()?.getAttribute("data-slot")).toBe("dialog-content");
 });
+
+test("its anchor gone while open: still one popup, Esc closes it, nothing left hidden", async () => {
+  function Host(props: { anchor: boolean }) {
+    const at = useRef<HTMLButtonElement>(null);
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        {props.anchor ? (
+          <button type="button" ref={at}>
+            錨點
+          </button>
+        ) : null}
+        <span>頁面</span>
+        {open ? (
+          <Panel
+            phone={false}
+            at={{ ref: at, side: "top" }}
+            title="標題"
+            titleId="panel-title"
+            onClose={() => setOpen(false)}
+            foot={null}
+          >
+            <input aria-label="欄位" />
+          </Panel>
+        ) : null}
+      </>
+    );
+  }
+  const { rerender, unmount } = await render(<Host anchor />);
+  await rerender(<Host anchor />);
+  await frame();
+  expect(popup()?.getAttribute("data-slot")).toBe("popover-content");
+  await rerender(<Host anchor={false} />);
+  await frame();
+  expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+  expect(popup()?.contains(document.activeElement)).toBe(true);
+  await key("Escape");
+  expect(popup()).toBeNull();
+  expect(document.querySelector("[aria-hidden=true], [inert]")).toBeNull();
+  unmount();
+});

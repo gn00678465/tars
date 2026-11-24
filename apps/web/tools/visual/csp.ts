@@ -379,6 +379,153 @@ for (const [width, options] of Object.entries(WIDTHS) as [keyof typeof WIDTHS, o
   await context.close();
 }
 
+// An overlay open while the window crosses 768 px: the panel goes from Dialog or Popover to a
+// Drawer and back. Each time one popup is open with the focus inside; after Esc nothing is left
+// aria-hidden or inert that was not before, and the page takes a press.
+for (const o of OVERLAYS.filter(
+  (x) => x.slot.desktop !== undefined && x.slot.phone !== undefined,
+)) {
+  if (o.menu === true) continue;
+  const context = await browser.newContext({ ...WIDTHS.desktop, locale: "zh-TW" });
+  await context.addInitScript(COLLECT);
+  const page = await context.newPage();
+  const fail = (t: string) => failures.push(`resized ${o.name}: ${t}`);
+  page.on("pageerror", (e) => fail(`page error: ${e.message}`));
+  /** Every element marked aria-hidden or inert, by its place in the page. */
+  const marks = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll("[aria-hidden=true], [inert]")]
+        .map((e) => {
+          const at: number[] = [];
+          for (let n: Element | null = e; n?.parentElement; n = n.parentElement)
+            at.unshift([...n.parentElement.children].indexOf(n));
+          return at.join(".");
+        })
+        .join(" "),
+    );
+  const open = async (slot: string) =>
+    page.evaluate((slot) => {
+      const p = [...document.querySelectorAll(`[data-slot="${slot}"][data-open]`)];
+      return { n: p.length, inside: p[0]?.contains(document.activeElement) ?? false };
+    }, slot);
+  try {
+    await page.clock.setFixedTime(NOW);
+    await page.goto(`${url}/?scene=${o.scene}`, { waitUntil: "load" });
+    await page.waitForTimeout(400);
+    for (const c of o.before.desktop) {
+      await page.locator(c).first().click({ timeout: 5_000 });
+      await page.waitForTimeout(300);
+    }
+    const before = await marks();
+    await page
+      .locator(`${o.button.desktop as string} >> visible=true`)
+      .first()
+      .click();
+    await page.waitForTimeout(400);
+    for (const [width, slot] of [
+      ["phone", o.slot.phone],
+      ["desktop", o.slot.desktop],
+    ] as const) {
+      await page.setViewportSize(WIDTHS[width].viewport);
+      await page.waitForTimeout(600);
+      const seen = await open(slot as string);
+      if (seen.n !== 1) fail(`at ${width} width ${seen.n} ${slot} open`);
+      if (!seen.inside) fail(`at ${width} width the focus is not inside`);
+    }
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(500);
+    if ((await marks()) !== before) fail("aria-hidden or inert left after closing");
+    await page.locator('button:has-text("新對話")').first().click({ timeout: 3_000 });
+  } catch (e) {
+    fail((e as Error).message.split("\n")[0] as string);
+  }
+  await context.close();
+}
+
+// An approval that comes while the status sheet is open, at both widths. ApprovalCard gives its
+// deny the focus behind the overlay, as before P2; the announcement and that button must stay
+// readable: nothing above them aria-hidden or inert, and both in Chromium's accessibility tree.
+for (const [width, options] of Object.entries(WIDTHS) as [keyof typeof WIDTHS, object][]) {
+  const context = await browser.newContext({ ...options, locale: "zh-TW" });
+  await context.addInitScript(COLLECT);
+  const page = await context.newPage();
+  const fail = (t: string) => failures.push(`${width} approval under an overlay: ${t}`);
+  page.on("pageerror", (e) => fail(`page error: ${e.message}`));
+  try {
+    await page.clock.setFixedTime(NOW);
+    await page.goto(`${url}/?scene=1`, { waitUntil: "load" });
+    await page.waitForTimeout(400);
+    if (width === "phone") await page.locator(drawer).click();
+    await page.locator(conv("整理 NAS 備份腳本")).first().click();
+    await page.waitForTimeout(300);
+    await page
+      .locator(width === "phone" ? STATUS_PHONE : "header .sg-btn.desktop-only")
+      .first()
+      .click();
+    await page.waitForTimeout(400);
+    await page.evaluate(
+      (m) => (globalThis as { visualPush?: (m: unknown) => void }).visualPush?.(m),
+      {
+        kind: "approval.request",
+        p: {
+          approval: {
+            approvalId: "approval-00000009",
+            conv: "c-ledger",
+            hash: "a".repeat(64),
+            action: "run_script",
+            script: "s9",
+            version: "v1",
+            summary: "推播",
+            effects: "external-write",
+            domains: [],
+            secret: null,
+            argv: [],
+            expiresAt: NOW + 600_000,
+          },
+        },
+      },
+    );
+    await page.waitForTimeout(800);
+    const seen = await page.evaluate(() => {
+      const hidden = (e: Element | null) => {
+        for (; e !== null; e = e.parentElement)
+          if (e.getAttribute("aria-hidden") === "true" || e.hasAttribute("inert")) return true;
+        return false;
+      };
+      const alert = document.querySelector('[role="alert"][aria-live="assertive"]');
+      const a = document.activeElement;
+      return {
+        text: alert?.textContent ?? "",
+        alertHidden: hidden(alert),
+        deny: a?.matches(".approval-card .sg-btn-danger") ?? false,
+        denyHidden: hidden(a),
+      };
+    });
+    if (!seen.text.includes("需要核准")) fail(`announced ${JSON.stringify(seen.text)}`);
+    if (seen.alertHidden) fail("the announcement is under aria-hidden or inert");
+    if (!seen.deny) fail("the deny button does not have the focus");
+    if (seen.denyHidden) fail("the focused deny is under aria-hidden or inert");
+    const cdp = await context.newCDPSession(page);
+    const { nodes } = (await cdp.send("Accessibility.getFullAXTree")) as {
+      nodes: { ignored: boolean; role?: { value: string }; name?: { value: unknown } }[];
+    };
+    const read = nodes.filter((n) => !n.ignored).map((n) => [n.role?.value, String(n.name?.value)]);
+    if (!read.some(([, name]) => name?.includes("需要核准")))
+      fail("the announcement is not in the accessibility tree");
+    if (!read.some(([role, name]) => role === "button" && name?.startsWith("拒絕")))
+      fail("the deny button is not in the accessibility tree");
+  } catch (e) {
+    fail((e as Error).message.split("\n")[0] as string);
+  }
+  const seen = (await page.evaluate(
+    () => (globalThis as { cspSeen?: unknown[] }).cspSeen ?? [],
+  )) as Violation[];
+  failures.push(
+    ...seen.filter((v) => !isProbe(v)).map((v) => `${width} approval: CSP ${JSON.stringify(v)}`),
+  );
+  await context.close();
+}
+
 // The menu button's tooltip, on a desktop with the column folded: shown on a keyboard focus,
 // gone on Esc. A phone shows it on no touch.
 {

@@ -141,6 +141,8 @@ export function TopBar(props: {
   onSheet: () => void;
   /** Opens the context sheet; absent when the page has no context to show. */
   onContext?: () => void;
+  /** Whether the context sheet is open. */
+  contextOpen: boolean;
   /** The context ring, which the context sheet drops from. */
   ringRef?: Ref<HTMLButtonElement>;
 }) {
@@ -192,7 +194,12 @@ export function TopBar(props: {
           )}
         </button>
         {props.state.context === undefined || props.onContext === undefined ? null : (
-          <ContextRing context={props.state.context} onOpen={props.onContext} ref={props.ringRef} />
+          <ContextRing
+            context={props.state.context}
+            onOpen={props.onContext}
+            open={props.contextOpen}
+            ref={props.ringRef}
+          />
         )}
         <button
           className="sg-btn mobile-only"

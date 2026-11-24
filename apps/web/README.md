@@ -260,9 +260,11 @@ node tools/visual/run.ts --control     # 基準和自己比，看雜訊有多少
 - 雜訊：`--control` 兩次實測的最大差異是 0.04% 與 0.01%，來自狀態列的延遲毫秒數。
 - 結果在 `.visual/report.md`，開頭寫兩邊的 commit。截圖在 `.visual/shots/base/` 與 `.visual/shots/head/`。任一張差異超過 0.5% 就失敗，要人看兩張截圖。`--only` 給了不存在的場景時報錯，退出碼 2。
 
-### CSP 與記帳表單的 Combobox
+### CSP、浮層與記帳表單的 Combobox
 
-Base UI 升級、加了會畫浮層的元件，或改了浮層之後跑：
+**每個階段合併前都要跑，退出碼必須是 0。** 階段的驗收清單要列這一項。焦點圈、Tab 不跑出浮層、斷點切換與核准卡的可讀性，只有這裡查得到：jsdom 不因 Tab 移動焦點，也不排版。
+
+它不在 `bun run check` 裡：要 Chromium，還要建置兩次，跑一次要幾分鐘。`bun run check` 要能在沒有瀏覽器的環境跑完，所以不放進去。
 
 ```
 cd apps/web
@@ -274,7 +276,7 @@ node tools/visual/csp.ts
 - 只排除 zod 4 的 eval 試探（`main` 就有）：`script-src` 擋 `eval`、發生在首屏入口檔、行與欄正好落在 zod 的試探程式碼上，而且每次載入最多一筆。zod 升級後那段程式碼變了，工具會報錯要你更新 `PROBE_CODE`。
 - 截圖在 `.visual/csp/`。和畫面比對一樣需要 Chromium，不在 `bun run check` 裡。
 - 「記帳表單」是場景 16。拿 P1 之前的基準跑 `run.ts` 時，基準沒有這個場景，場景 16 會算失敗；比的是前 15 個場景。
-- 接著在兩種寬度逐一打開每個浮層（M4-P2）：用 Enter 與空白鍵各開一次，查焦點進到裡面、Tab 不跑出去（選單例外：照 WAI-ARIA 的選單模式，Tab 會離開並關閉）、Esc 與按外面會關、焦點回到按鈕；手機上還查是底部 Drawer、外面那一點按到的是遮罩而不是頁面、欄位是 16 px。最後在桌面收起對話列表，查選單按鈕的提示在鍵盤聚焦時出現、按 Esc 消失。jsdom 不會因 Tab 移動焦點，也不排版，這些只能在這裡查。失敗時截圖存在 `.visual/csp/`。
+- 接著在兩種寬度逐一打開每個浮層（M4-P2）：用 Enter 與空白鍵各開一次，查焦點進到裡面、Tab 不跑出去（選單例外：照 WAI-ARIA 的選單模式，Tab 會離開並關閉）、Esc 與按外面會關、焦點回到按鈕；手機上還查是底部 Drawer、外面那一點按到的是遮罩而不是頁面、欄位是 16 px。在桌面打開會變 Drawer 的浮層後把視窗縮到 390 px 再放回：每次都只有一個浮層開著、焦點在裡面，關掉後沒有多出 aria-hidden 或 inert。狀態面板開著時推一張待核准卡：公告與拿到焦點的拒絕鈕都不在 aria-hidden 或 inert 底下，也都在 Chromium 的無障礙樹裡（`tools/visual/fake.ts` 的 `visualPush` 送這張卡）。最後在桌面收起對話列表，查選單按鈕的提示在鍵盤聚焦時出現、按 Esc 消失。jsdom 不會因 Tab 移動焦點，也不排版，這些只能在這裡查。失敗時截圖存在 `.visual/csp/`。
 
 ## 手動驗收
 

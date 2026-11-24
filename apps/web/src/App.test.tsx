@@ -628,6 +628,44 @@ describe("the sidebar and the open conversation", () => {
       .find((c) => c.textContent?.includes(`${script} @ `))
       ?.querySelector<HTMLButtonElement>(".sg-btn-danger");
 
+  /** Whether a screen reader can reach it: nothing above it is aria-hidden or inert. */
+  const exposed = (el: Element | null) => {
+    for (let e = el; e !== null; e = e.parentElement)
+      if (e.getAttribute("aria-hidden") === "true" || e.hasAttribute("inert")) return false;
+    return el !== null;
+  };
+
+  test.each([
+    ["the desktop's status Dialog", false],
+    ["a phone's status Drawer", true],
+  ])(
+    "a card that comes while %s is open is announced, and its deny is readable",
+    async (_, phone) => {
+      if (phone)
+        vi.stubGlobal("matchMedia", () => ({
+          matches: true,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }));
+      const { h, root, unmount } = await listed();
+      if (!phone) await act(async () => entry(root, "對話 1").click());
+      const status = document.querySelector<HTMLButtonElement>(
+        phone ? '[aria-label="開啟系統狀態與花費面板"]' : "header .sg-btn.desktop-only",
+      );
+      await act(async () => status?.click());
+      await frame();
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      await act(async () => h.last().receive(requestN(5, "conv-5")));
+      const alert = document.querySelector('[role="alert"][aria-live="assertive"]');
+      expect(alert?.textContent).toContain("需要核准：執行腳本 s5");
+      expect(exposed(alert)).toBe(true);
+      expect(document.activeElement).toBe(denyOf(root, "s5"));
+      expect(exposed(document.activeElement)).toBe(true);
+      unmount();
+      vi.unstubAllGlobals();
+    },
+  );
+
   test("three waiting cards: only the oldest one's deny has the focus", async () => {
     const { h, root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());
@@ -1206,7 +1244,9 @@ describe("another model: chosen for a new conversation, or continuing one", () =
   test("continuing: the cost said first, then a new conversation that carries this one", async () => {
     const { h, root, send, submitted, unmount } = await ready(true);
     await act(async () => (root.querySelector(".conv-item") as HTMLButtonElement).click());
+    expect(button(root, "以另一個模型接續").getAttribute("aria-expanded")).toBe("false");
     await act(async () => button(root, "以另一個模型接續").click());
+    expect(button(root, "以另一個模型接續").getAttribute("aria-expanded")).toBe("true");
     const sheet = document.querySelector("[aria-labelledby=model-sheet-title]") as HTMLElement;
     expect(sheet.textContent).toContain("來源對話：甲（原模型 Model A）");
     const a = [...sheet.querySelectorAll<HTMLButtonElement>(".model-option")][0];
@@ -1679,12 +1719,15 @@ describe("effort: the level beside the model, its menu, and what the message car
     asPhone();
     const { root, seg, menu, openConv, unmount } = await ready();
     await openConv("甲");
+    expect(seg()?.getAttribute("aria-expanded")).toBe("false");
     await act(async () => seg()?.click());
     expect(menu()).toBeNull();
+    expect(seg()?.getAttribute("aria-expanded")).toBe("true");
     const sheet = document.querySelector("[aria-labelledby=effort-sheet-title]") as HTMLElement;
     expect(sheet.querySelector("h2")?.textContent).toBe("選擇推理強度（Model A）");
     await act(async () => button(sheet, "低（low）回應最快，思考最少").click());
     expect(document.querySelector("[aria-labelledby=effort-sheet-title]")).toBeNull();
+    expect(seg()?.getAttribute("aria-expanded")).toBe("false");
     expect(seg()?.textContent).toBe("推理低");
     expect((root.querySelector(".effort-toast") as HTMLElement).hidden).toBe(false);
     unmount();
@@ -1982,11 +2025,18 @@ describe("the model menu: spending by provider, each model's window and levels, 
     })) as unknown as typeof window.matchMedia;
     const { seg, menu, unmount } = await ready();
     expect(seg().getAttribute("aria-haspopup")).toBe("dialog");
+    expect(seg().getAttribute("aria-expanded")).toBe("false");
     await act(async () => seg().click());
     expect(menu()).toBeNull();
     expect(document.querySelector("[aria-labelledby=model-sheet-title] h2")?.textContent).toBe(
       "選擇模型",
     );
+    expect(seg().getAttribute("aria-expanded")).toBe("true");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="關閉"]')?.click(),
+    );
+    expect(document.querySelector("[aria-labelledby=model-sheet-title]")).toBeNull();
+    expect(seg().getAttribute("aria-expanded")).toBe("false");
     unmount();
   });
 });

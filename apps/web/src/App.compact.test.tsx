@@ -98,7 +98,10 @@ test("E1, E3: the ring; /compact with what to keep sends conv.compact; 壓縮中
 
 test("E2, E3: the sheet says the local end's figures and starts a compaction; busy is a failure card", async () => {
   const { root, sent, receive, unmount } = await opened({ ...CONTEXT, lastCompactedAt: 1 });
-  await act(async () => (root.querySelector(".context-trigger") as HTMLButtonElement).click());
+  const ring = root.querySelector(".context-trigger") as HTMLButtonElement;
+  expect(ring.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => ring.click());
+  expect(ring.getAttribute("aria-expanded")).toBe("true");
   const sheet = document.querySelector(".sheet-panel") as HTMLElement;
   const values = [...sheet.querySelectorAll("dd")].map((d) => d.textContent);
   expect(values[0]).toBe("48,200 / 200,000 tokens（24%）");
@@ -107,6 +110,7 @@ test("E2, E3: the sheet says the local end's figures and starts a compaction; bu
   expect(sheet.textContent).toContain("壓縮會送出一次模型請求");
   await act(async () => button(document.body, "立即壓縮").click());
   expect(document.querySelector(".sheet-panel")).toBeNull();
+  expect(ring.getAttribute("aria-expanded")).toBe("false");
   const [compact] = sent("conv.compact");
   expect(compact?.p).toEqual({});
   await receive(server("nack", { reason: "busy" }, { re: compact?.id }));

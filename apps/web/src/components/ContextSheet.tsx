@@ -21,6 +21,8 @@ const toneOf = (c: WireContext) => {
 export function ContextRing(props: {
   context: WireContext;
   onOpen: () => void;
+  /** Whether the context sheet is open. */
+  open: boolean;
   ref?: Ref<HTMLButtonElement>;
 }) {
   const c = props.context;
@@ -35,6 +37,7 @@ export function ContextRing(props: {
       type="button"
       aria-label="上下文用量與壓縮"
       aria-haspopup="dialog"
+      aria-expanded={props.open}
       onClick={props.onOpen}
     >
       <svg className="context-ring" viewBox="0 0 16 16" aria-hidden="true">

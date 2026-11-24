@@ -366,6 +366,10 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const cert = certTag(state.status);
   // With messages, another model is a continuation (D17).
   const pickModel = () => setPicking(source === undefined ? "new" : "continue");
+  const modelSheet =
+    picking !== undefined &&
+    models !== undefined &&
+    !(picking === "continue" && sourceConv === undefined);
   const levels = target?.effortLevels ?? [];
   const wanted =
     effortPick ??
@@ -473,13 +477,19 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               }
             : {})}
         />
-        <div className="workspace">
+        {/* aria-live="off" is the default and announces nothing; it is here for Base UI. A modal
+            overlay marks the page outside it aria-hidden, keeping only live regions and what
+            holds them, when it opens. An approval card that comes while one is open lands here
+            and takes the focus (ApprovalCard); hidden, iPhone's VoiceOver would not read it. So
+            the workspace stays exposed, as it was before the overlays were Base UI's. */}
+        <div className="workspace" aria-live="off">
           <TopBar
             state={state}
             menuHidden={!collapsed && !compact}
             onMenu={() => (compact ? setDrawer(true) : setCollapsed(false))}
             onSheet={() => setSheet(true)}
             onContext={() => setContextSheet({ focus: "" })}
+            contextOpen={contextSheet !== undefined}
             ringRef={ring}
           />
           {targetRef === undefined ? null : (
@@ -509,6 +519,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                     className="sg-btn sg-btn-ghost"
                     type="button"
                     aria-haspopup="dialog"
+                    aria-expanded={modelSheet && picking === "continue"}
                     // As the prototype (9-06): there is nothing to carry yet; the composer's model
                     // control switches in place.
                     disabled={state.conv === undefined}
@@ -739,7 +750,8 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
                               source === undefined
                                 ? "這個對話還沒有訊息，可以直接換模型。送出第一則訊息後，模型就綁在對話上。"
                                 : "模型綁在對話上。這個對話已有訊息，選另一個模型會開新對話接續。",
-                            open: modelOpen,
+                            // A phone's model button opens the sheet, not the menu.
+                            open: phone ? modelSheet : modelOpen,
                             trigger: modelButton,
                             ...(locked === undefined ? {} : { disabled: locked }),
                             onOpen: (o) => (phone ? o && pickModel() : setModelOpen(o)),
@@ -812,9 +824,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
         {phone && effort !== undefined && effortOpen && levels.length > 0 ? (
           <EffortSheet effort={effort} modelLabel={target?.label ?? nextLabel} />
         ) : null}
-        {picking === undefined ||
-        models === undefined ||
-        (picking === "continue" && sourceConv === undefined) ? null : (
+        {!modelSheet || models === undefined ? null : (
           <ModelSheet
             models={models}
             phone={phone}
