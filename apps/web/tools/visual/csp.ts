@@ -2,13 +2,12 @@
 // csp-test, cut down to this). Chromium opens the form scene at both widths, types Chinese and
 // English into the two account fields, picks, fills the rest and sends. It fails on any CSP
 // violation or page error, or when ui.submit does not carry the English account names.
-// zod 4's eval probe is left out, and only it (ZOD_PROBE below): main has it on every load.
+// zod 4's eval probe is left out, and only it (zodProbe in page.ts): main has it on every load.
 //   node tools/visual/csp.ts
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/csp/.
-import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { chromium, type Page } from "playwright-core";
-import { buildTree, serve } from "./page.ts";
+import { buildTree, COLLECT, serve, type Violation, zodProbe } from "./page.ts";
 import { NOW, SCENES } from "./scenes.ts";
 
 const web = resolve(import.meta.dirname, "../..");
@@ -19,51 +18,7 @@ if (scene === 0) throw new Error("no ledger form scene in scenes.ts");
 await buildTree(web, dir, true);
 const { url, server } = await serve(dir);
 
-/**
- * zod 4's eval probe (zod/v4/core/util.js allowsEval, 4.6.7): `try { return Function(""), true }`
- * in the first-load entry, once per load (cached). A violation is it only when it is script-src
- * refusing eval, raised in the entry chunk, on that code. Anything else counts, eval or not.
- */
-const PROBE_CODE = "try{return Function(``),!0}catch{return!1}";
-const entry = /<script type="module"[^>]*src="(\/assets\/index-[\w-]+\.js)"/.exec(
-  readFileSync(join(dir, "index.html"), "utf8"),
-)?.[1];
-if (entry === undefined) throw new Error("no entry script in index.html");
-const code = readFileSync(join(dir, entry), "utf8");
-const at = code.indexOf(PROBE_CODE);
-if (at < 0 || code.indexOf(PROBE_CODE, at + 1) >= 0)
-  throw new Error(`zod's probe is not once in ${entry}: update PROBE_CODE`);
-const line = code.slice(0, at).split("\n").length;
-const column = at - code.lastIndexOf("\n", at - 1);
-interface Violation {
-  directive: string;
-  blocked: string;
-  source: string;
-  line: number;
-  column: number;
-}
-const isProbe = (v: Violation) =>
-  v.directive === "script-src" &&
-  v.blocked === "eval" &&
-  new URL(v.source, url).pathname === entry &&
-  v.line === line &&
-  v.column >= column &&
-  v.column < column + PROBE_CODE.length;
-
-/** Every violation the page raises, as data: read back before the page closes. */
-const COLLECT = () => {
-  const seen: unknown[] = [];
-  (globalThis as { cspSeen?: unknown[] }).cspSeen = seen;
-  document.addEventListener("securitypolicyviolation", (e) =>
-    seen.push({
-      directive: e.effectiveDirective,
-      blocked: e.blockedURI,
-      source: e.sourceFile,
-      line: e.lineNumber,
-      column: e.columnNumber,
-    }),
-  );
-};
+const { isProbe } = zodProbe(dir, url);
 
 const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM ?? "/usr/bin/chromium",

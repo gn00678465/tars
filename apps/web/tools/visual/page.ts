@@ -1,5 +1,6 @@
-// What run.ts and csp.ts share: a tree's build, with or without the scene page, served with the
-// app's CSP, and the listener that turns a CSP violation into a console line.
+// What run.ts, csp.ts and pull.ts share: a tree's build, with or without the scene page, served
+// with the app's CSP; the listener that turns a CSP violation into a console line; and the
+// violations as data, less zod's eval probe.
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { extname, join, normalize } from "node:path";
@@ -88,3 +89,53 @@ export const CSP_LISTENER = () =>
       `Refused to load: ${e.violatedDirective} ${e.blockedURI} at ${e.sourceFile}:${e.lineNumber}:${e.columnNumber}`,
     ),
   );
+
+export interface Violation {
+  directive: string;
+  blocked: string;
+  source: string;
+  line: number;
+  column: number;
+}
+
+/** Every violation the page raises, as data (globalThis.cspSeen): read back before it closes. */
+export const COLLECT = () => {
+  const seen: unknown[] = [];
+  (globalThis as { cspSeen?: unknown[] }).cspSeen = seen;
+  document.addEventListener("securitypolicyviolation", (e) =>
+    seen.push({
+      directive: e.effectiveDirective,
+      blocked: e.blockedURI,
+      source: e.sourceFile,
+      line: e.lineNumber,
+      column: e.columnNumber,
+    }),
+  );
+};
+
+/**
+ * zod 4's eval probe (zod/v4/core/util.js allowsEval, 4.6.7): `try { return Function(""), true }`
+ * in the first-load entry, once per load (cached). A violation is it only when it is script-src
+ * refusing eval, raised in the entry chunk, on that code. Anything else counts, eval or not.
+ */
+const PROBE_CODE = "try{return Function(``),!0}catch{return!1}";
+export function zodProbe(dir: string, url: string) {
+  const entry = /<script type="module"[^>]*src="(\/assets\/index-[\w-]+\.js)"/.exec(
+    readFileSync(join(dir, "index.html"), "utf8"),
+  )?.[1];
+  if (entry === undefined) throw new Error("no entry script in index.html");
+  const code = readFileSync(join(dir, entry), "utf8");
+  const at = code.indexOf(PROBE_CODE);
+  if (at < 0 || code.indexOf(PROBE_CODE, at + 1) >= 0)
+    throw new Error(`zod's probe is not once in ${entry}: update PROBE_CODE`);
+  const line = code.slice(0, at).split("\n").length;
+  const column = at - code.lastIndexOf("\n", at - 1);
+  const isProbe = (v: Violation) =>
+    v.directive === "script-src" &&
+    v.blocked === "eval" &&
+    new URL(v.source, url).pathname === entry &&
+    v.line === line &&
+    v.column >= column &&
+    v.column < column + PROBE_CODE.length;
+  return { isProbe };
+}

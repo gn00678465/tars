@@ -510,3 +510,44 @@ th[aria-sort="descending"] .md-sort-mark::after {
     font-size: 16px !important;
   }
 }
+
+/*
+ * Pull to refresh (src/usePullToRefresh.ts). The bar's height goes by state and step, never by
+ * the finger: no inline style. The thread keeps its own bounce from reaching the page.
+ */
+.thread-scroll {
+  overscroll-behavior-y: contain;
+}
+.pull-indicator {
+  flex: none;
+  height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  transition: height 0.15s ease-out;
+}
+.pull-indicator[data-step="1"] {
+  height: 16px;
+}
+.pull-indicator[data-step="2"] {
+  height: 28px;
+}
+.pull-indicator[data-step="3"] {
+  height: 40px;
+}
+.pull-indicator[data-pull="ready"],
+.pull-indicator[data-pull="busy"] {
+  height: 48px;
+}
+.pull-indicator[data-pull="blocked"] {
+  color: var(--foreground);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pull-indicator {
+    transition: none;
+  }
+}

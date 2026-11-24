@@ -267,9 +267,28 @@ node tools/visual/csp.ts
 
 - 用 `headers.ts` 的 CSP 提供場景頁，在桌面與手機兩種寬度打開「記帳表單（A2UI）」場景。在兩個帳戶欄位分別打中文與英文、選取，填完金額與摘要後送出。
 - 有任何 CSP 違規或頁面錯誤，或 `ui.submit` 帶的不是英文帳戶名，就失敗（退出碼 1）。
-- 只排除 zod 4 的 eval 試探（`main` 就有）：`script-src` 擋 `eval`、發生在首屏入口檔、行與欄正好落在 zod 的試探程式碼上，而且每次載入最多一筆。zod 升級後那段程式碼變了，工具會報錯要你更新 `PROBE_CODE`。
+- 只排除 zod 4 的 eval 試探（`main` 就有）：`script-src` 擋 `eval`、發生在首屏入口檔、行與欄正好落在 zod 的試探程式碼上，而且每次載入最多一筆。zod 升級後那段程式碼變了，工具會報錯要你更新 `tools/visual/page.ts` 的 `PROBE_CODE`。
 - 截圖在 `.visual/csp/`。和畫面比對一樣需要 Chromium，不在 `bun run check` 裡。
 - 「記帳表單」是場景 16。拿 P1 之前的基準跑 `run.ts` 時，基準沒有這個場景，場景 16 會算失敗；比的是前 15 個場景。
+
+### 下拉重新整理
+
+改了對話串的捲動、`src/usePullToRefresh.ts` 或浮層之後跑：
+
+```
+cd apps/web
+node tools/visual/pull.ts
+```
+
+- 用 CDP 的 `Input.dispatchTouchEvent` 真的拖曳（Playwright 的 `page.touchscreen` 只能點）。
+- 手機寬度、觸控裝置：
+  - 對話串末尾插入純文字段落撐長，手指往下、往上拖，對話串照常捲動，不重新載入。
+  - 回到頂端拉 40 px 放開，不重新載入。
+  - 拉 120 px，放開前顯示「放開重新整理」，放開後重新載入。
+  - 知識庫的頁面拉 120 px 放開，也重新載入。
+- 桌面寬度：滑鼠拖曳與滾輪不出現指示列，也不重新載入。
+- CSP 違規與頁面錯誤的判斷和 `csp.ts` 相同。截圖在 `.visual/pull/`。需要 Chromium，不在 `bun run check` 裡。
+- iPhone Safari 的橡皮筋效果和 `preventDefault` 怎麼互動，Chromium 測不到，要在手機上試。
 
 ## 手動驗收
 

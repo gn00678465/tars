@@ -9,12 +9,12 @@ import { build } from "vite-plus";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 /**
- * Under this much JS a first visit loads, gzipped: M4-P0's 137,922 bytes plus 5 kB through M4-P1,
- * whose components load only with a form (m4_web_stack_design.md 7 raises it phase by phase).
+ * Under this much JS a first visit loads, gzipped: main's 138,115 bytes after M4-P1 plus 2 kB for
+ * pull to refresh (m4_web_stack_design.md 7 raises it phase by phase).
  * Measured by this file's own build, which leaves out the Cloudflare and _headers plugins: they
  * do not change the page's chunks.
  */
-const FIRST_LOAD_LIMIT = 137_922 + 5_000;
+const FIRST_LOAD_LIMIT = 138_115 + 2_000;
 
 /** Strings only zod 3 has, and only zod 4 has (research/a2ui_proto_result.md, Zod 4 (4)). */
 const ZOD3 = "Unrecognized key(s) in object";

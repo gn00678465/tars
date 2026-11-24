@@ -40,8 +40,15 @@ export function Composer(props: {
   effort?: EffortMenu;
   /** Beside the send button: the model and effort control; absent from an older local end. */
   setup?: ReactNode;
+  /** Whether there is unsent text, each time that changes. */
+  onDraft?: (draft: boolean) => void;
 }) {
   const [text, setText] = useState("");
+  const { onDraft } = props;
+  const draft = text !== "";
+  useEffect(() => {
+    onDraft?.(draft);
+  }, [onDraft, draft]);
   // Esc closes the menu until the text changes.
   const [closed, setClosed] = useState(false);
   const [index, setIndex] = useState(0);

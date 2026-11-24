@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import { ApprovalCard, announceText } from "./components/ApprovalCard.tsx";
 import { ArchiveToast } from "./components/ArchiveToast.tsx";
 import { Composer } from "./components/Composer.tsx";
+import { PullIndicator } from "./components/PullIndicator.tsx";
 import { ContextHint, ContinueHints } from "./components/ContinueHints.tsx";
 import { ContextSheet } from "./components/ContextSheet.tsx";
 import { COMPACT_FOCUS_CHARS } from "@tars/protocol";
@@ -40,6 +41,7 @@ import {
   runBusy,
   sendBusy,
 } from "./state.ts";
+import { usePullToRefresh } from "./usePullToRefresh.ts";
 import { useWikiRequests } from "./wiki/requests.ts";
 import type { WikiEvent } from "./wiki/state.ts";
 
@@ -198,6 +200,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     const el = thread.current;
     if (el !== null && atBottom.current) el.scrollTop = el.scrollHeight;
   }, [state.items, state.running, state.turn, state.cards]);
+  // Whether the composer holds unsent text: a pull does not reload over it.
+  const draft = useRef(false);
+  const pull = usePullToRefresh(thread, { draft: () => draft.current, off: drawer });
   const [opened, setOpened] = useState(0);
   useEffect(() => {
     if (opened > 0) thread.current?.focus();
@@ -542,6 +547,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               </button>
             </div>
           )}
+          <PullIndicator state={pull} />
           <main
             className="thread-scroll"
             ref={thread}
@@ -663,6 +669,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
               )}
               <Composer
                 focus={started}
+                onDraft={(d) => {
+                  draft.current = d;
+                }}
                 blocked={composerBlocked(state)}
                 busy={sendBusy(state)}
                 canAbort={running && state.connection === "open"}
