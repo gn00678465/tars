@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { noticeTone } from "../testing.ts";
 import { act } from "react";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 import { button, render } from "../render.ts";
@@ -18,7 +19,7 @@ test("a key the provider refused: icon, what happened and what it means, the com
   try {
     const { root } = await render(<ErrorCard code="auth" provider="openrouter" />);
     const card = root.querySelector(".task-notice") as HTMLElement;
-    expect([card.className, card.getAttribute("role")]).toEqual(["task-notice error", "status"]);
+    expect([noticeTone(card), card.getAttribute("role")]).toEqual(["task-notice error", "status"]);
     expect(card.querySelector(".task-notice-title svg")).not.toBeNull();
     expect(root.querySelector(".task-notice-title")?.textContent).toBe("provider 拒絕了 API 金鑰");
     expect(root.querySelector(".task-notice-desc")?.textContent).toBe(
@@ -62,7 +63,7 @@ test.each<[string, string, string, string | undefined]>([
   "%s: its severity, what it means, and a command when there is one",
   async (code, tone, desc, command) => {
     const { root } = await render(<ErrorCard code={code} provider="gemini" />);
-    expect(root.querySelector(".task-notice")?.className).toBe(tone);
+    expect(noticeTone(root.querySelector(".task-notice"))).toBe(tone);
     expect(root.querySelector(".task-notice-desc")?.textContent).toBe(desc);
     expect(root.querySelector(".cli-copy-cmd")?.textContent).toBe(command);
   },
@@ -90,14 +91,14 @@ test("a reason with nothing to run shows only what happened; an unknown code sho
   known.unmount();
   const unknown = await render(<ErrorCard code="something_new" provider="anthropic" />);
   expect(unknown.root.textContent).toBe("錯誤：something_new");
-  expect(unknown.root.querySelector(".task-notice")?.className).toBe("task-notice error");
+  expect(noticeTone(unknown.root.querySelector(".task-notice"))).toBe("task-notice error");
 });
 
 const texts = async (code: string, data: Record<string, string | number>, provider?: string) => {
   document.body.innerHTML = "";
   const { root } = await render(<ErrorCard code={code} provider={provider} data={data} />);
   return {
-    tone: root.querySelector(".task-notice")?.className,
+    tone: noticeTone(root.querySelector(".task-notice")),
     title: root.querySelector(".task-notice-title")?.textContent,
     desc: root.querySelector(".task-notice-desc")?.textContent,
     fix: root.querySelector(".cli-copy-cmd")?.textContent ?? null,

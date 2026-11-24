@@ -855,3 +855,94 @@ th[aria-sort="descending"] .md-sort-mark::after {
     transition-property: opacity;
   }
 }
+/*
+ * M4-P3b: a tool step and the turn's status are Trace lines (components/ui/trace.tsx). The words
+ * of a result carry its tone; the icon has it too, so colour is never the only sign.
+ */
+.tool-step-target {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.tool-step-icon.ok,
+.tool-step-result.ok {
+  color: var(--status-ok);
+}
+.tool-step-icon.warn,
+.tool-step-result.warn {
+  color: var(--status-warn);
+}
+.tool-step-icon.error,
+.tool-step-result.error {
+  color: var(--status-error);
+}
+.tool-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* A finger's target, 44 px tall, where the line is 20. */
+@media (pointer: coarse) {
+  .tool-step-summary {
+    min-height: 44px;
+  }
+}
+/* TARS at 16 px on a running step; 32 px on the turn's status line, as before. */
+.tars-sprite.sm {
+  width: 16px;
+  height: 16px;
+  background-size: 64px 16px;
+  animation-name: tars-sprite-play-sm;
+}
+@keyframes tars-sprite-play-sm {
+  to {
+    background-position: -64px 0;
+  }
+}
+.turn-status-icon {
+  width: 32px;
+  height: 32px;
+}
+/*
+ * The thread's notices are shadcn's Item (NoticeItem.tsx) drawn as the prototype's task-notice: its
+ * box and its title and words, not Item's own, and no line cut (Item clamps a title to one line).
+ */
+[data-slot="item"].task-notice {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 13px;
+  line-height: inherit;
+}
+[data-slot="item"] .task-notice-body {
+  gap: 4px;
+}
+[data-slot="item"] .task-notice-title,
+[data-slot="item"] .task-notice-desc {
+  display: flex;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  width: auto;
+  font-size: inherit;
+  line-height: inherit;
+}
+[data-slot="item"] .task-notice-title {
+  font-size: 13px;
+}
+[data-slot="item"] .task-notice-desc {
+  display: block;
+  font-size: 12.5px;
+}
+/*
+ * Trace opens by height over 200 ms. In the thread a step opens at once: the scroller follows
+ * a frame behind, and through the 200 ms the end slid up to 123 px off (tools/visual/scroll.ts).
+ * Its chevron still turns, except with reduced motion.
+ */
+.thread-scroll [data-slot="trace-collapsible-content"] {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="trace-collapsible-content"],
+  [data-slot="trace-collapsible-trigger"] [data-slot="trace-icon"] {
+    transition: none;
+  }
+}

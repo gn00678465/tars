@@ -328,3 +328,12 @@ export function layout(viewport: HTMLElement, viewPx: number, rowPx: (row: HTMLE
       delete (viewport as unknown as Record<string, unknown>)[k];
   };
 }
+
+/**
+ * A notice's own classes: task-notice and its tone. Drawn on shadcn's Item (NoticeItem.tsx), its
+ * element carries Item's classes too, which say nothing of the tone.
+ */
+export const noticeTone = (e: Element | null | undefined) =>
+  e === null || e === undefined
+    ? undefined
+    : [...e.classList].filter((c) => /^(task-notice|warn|error|active|ok)$/.test(c)).join(" ");

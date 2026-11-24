@@ -5,7 +5,16 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
 import { button, buttons, render } from "./render.ts";
 import { shortTime } from "./components/time.ts";
-import { drag, frame, layout, observers, server, socketHarness, touch } from "./testing.ts";
+import {
+  drag,
+  frame,
+  layout,
+  observers,
+  server,
+  socketHarness,
+  touch,
+  noticeTone,
+} from "./testing.ts";
 import { DAMPING, REST_PX } from "./usePullToRefresh.ts";
 
 /** A finger's way that moves the page past the rest. */
@@ -493,7 +502,7 @@ describe("the sidebar and the open conversation", () => {
         ),
       ].map((e) =>
         e.classList.contains("tool-step")
-          ? `tool:${e.querySelector(".sg-tag")?.textContent}`
+          ? `tool:${e.querySelector(".tool-step-result")?.textContent}`
           : e.classList.contains("approval-card")
             ? "card"
             : e.textContent,
@@ -1799,7 +1808,7 @@ describe("effort: the level beside the model, its menu, and what the message car
     });
     const cards = () =>
       [...root.querySelectorAll(".thread .task-notice")].map((e) => [
-        e.className,
+        noticeTone(e),
         e.querySelector(".task-notice-title")?.textContent,
         e.querySelector(".task-notice-desc")?.textContent,
       ]);

@@ -1,7 +1,7 @@
 import type { WireContext, WireModel, WireStatus } from "@tars/protocol";
 import { contextPct, overStop } from "../state.ts";
 import { reasonText } from "../reasons.ts";
-import { Icon } from "./Icon.tsx";
+import { NoticeItem } from "./NoticeItem.tsx";
 import { periodName, providerName, providerSpend } from "./StatusBar.tsx";
 
 interface Hint {
@@ -62,18 +62,17 @@ export function ContinueHints(props: {
   onContinue: () => void;
 }) {
   return hints(props.conv, props.models, props.status).map((h) => (
-    <div className={`task-notice ${h.tone}`} key={h.title}>
-      <div className="task-notice-body">
-        <div className="task-notice-title">
-          <Icon name="alert" />
-          {h.title}
-        </div>
-        <div className="task-notice-desc">{h.desc}</div>
-      </div>
-      <button className="sg-btn" type="button" onClick={props.onContinue}>
-        {h.action}
-      </button>
-    </div>
+    <NoticeItem
+      key={h.title}
+      tone={h.tone}
+      title={h.title}
+      desc={h.desc}
+      action={
+        <button className="sg-btn" type="button" onClick={props.onContinue}>
+          {h.action}
+        </button>
+      }
+    />
   ));
 }
 
@@ -100,17 +99,15 @@ export function ContextHint(props: { context: WireContext; onCompact: () => void
       ? `自動壓縮沒有開啟，超過 ${stop}% 硬停門檻時本機端不再接受新回合。`
       : `自動壓縮沒有開啟。到 ${stop}% 硬停門檻時本機端不再接受新回合，請先壓縮或開新對話接續。`;
   return (
-    <div className="task-notice warn">
-      <div className="task-notice-body">
-        <div className="task-notice-title">
-          <Icon name="alert" />
-          {title}
-        </div>
-        <div className="task-notice-desc">{desc}</div>
-      </div>
-      <button className="sg-btn" type="button" onClick={props.onCompact}>
-        開啟壓縮
-      </button>
-    </div>
+    <NoticeItem
+      tone="warn"
+      title={title}
+      desc={desc}
+      action={
+        <button className="sg-btn" type="button" onClick={props.onCompact}>
+          開啟壓縮
+        </button>
+      }
+    />
   );
 }

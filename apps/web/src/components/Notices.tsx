@@ -1,7 +1,7 @@
 import type { Notice } from "../state.ts";
 import { reasonText } from "../reasons.ts";
 import { CopyCommand } from "./CopyCommand.tsx";
-import { Icon } from "./Icon.tsx";
+import { NoticeItem } from "./NoticeItem.tsx";
 import { effortName } from "./RunSetup.tsx";
 
 type Tone = "" | "active" | "warn" | "error";
@@ -139,20 +139,22 @@ export function NoticeCard(props: {
 }) {
   const s = shown(props.notice, props.context);
   return (
-    <div className={`task-notice ${s.tone}`} role="status">
-      <div className="task-notice-body">
-        <div className="task-notice-title">
-          <Icon name="alert" />
-          {s.title}
-        </div>
-        {s.desc === undefined ? null : <div className="task-notice-desc">{s.desc}</div>}
-        {s.command === undefined ? null : <CopyCommand command={s.command} />}
-      </div>
-      {s.effort === true && props.onEffort !== undefined ? (
-        <button className="sg-btn" type="button" onClick={props.onEffort}>
-          調整推理強度
-        </button>
-      ) : null}
-    </div>
+    <NoticeItem
+      tone={s.tone}
+      role="status"
+      title={s.title}
+      {...(s.desc === undefined ? {} : { desc: s.desc })}
+      {...(s.effort === true && props.onEffort !== undefined
+        ? {
+            action: (
+              <button className="sg-btn" type="button" onClick={props.onEffort}>
+                調整推理強度
+              </button>
+            ),
+          }
+        : {})}
+    >
+      {s.command === undefined ? null : <CopyCommand command={s.command} />}
+    </NoticeItem>
   );
 }

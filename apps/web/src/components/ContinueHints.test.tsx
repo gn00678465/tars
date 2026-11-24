@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { noticeTone } from "../testing.ts";
 import { describe, expect, test } from "vite-plus/test";
 import type { WireModel, WireStatus } from "@tars/protocol";
 import { act } from "react";
@@ -36,7 +37,7 @@ const shown = async (
     />,
   );
   const notices = [...r.root.querySelectorAll(".task-notice")].map((n) => ({
-    tone: n.className,
+    tone: noticeTone(n),
     title: n.querySelector(".task-notice-title")?.textContent,
     desc: n.querySelector(".task-notice-desc")?.textContent,
     action: n.querySelector("button")?.textContent,

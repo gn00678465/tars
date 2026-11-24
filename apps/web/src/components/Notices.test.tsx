@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { noticeTone } from "../testing.ts";
 import { afterEach, expect, test } from "vite-plus/test";
 import { render } from "../render.ts";
 import type { Notice } from "../state.ts";
@@ -14,7 +15,7 @@ async function shown(notice: Notice, effort?: string) {
   );
   const card = root.querySelector(".task-notice") as HTMLElement;
   return {
-    tone: card.className,
+    tone: noticeTone(card),
     role: card.getAttribute("role"),
     icon: card.querySelector(".task-notice-title svg") !== null,
     title: card.querySelector(".task-notice-title")?.textContent,
@@ -75,7 +76,7 @@ test.each<[Notice, string, string, string | undefined]>([
   ],
   [
     { code: "effort_unsupported" },
-    "task-notice ",
+    "task-notice",
     "這個模型不支援推理強度",
     "這次請求不帶推理強度設定。",
   ],
@@ -91,7 +92,7 @@ test.each<[Notice, string, string, string | undefined]>([
     "已擋下：這個入口不提供這個指令",
     "memory remember 只在本機終端執行",
   ],
-  [{ code: "later_code", data: { n: 1 } }, "task-notice ", "本機端通知：later_code", "n=1"],
+  [{ code: "later_code", data: { n: 1 } }, "task-notice", "本機端通知：later_code", "n=1"],
 ])("%o: a task-notice with an icon, title and what it means", async (notice, tone, title, desc) => {
   const s = await shown(notice);
   expect(s).toMatchObject({ tone, role: "status", icon: true, title, desc });
