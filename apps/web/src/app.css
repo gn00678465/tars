@@ -666,8 +666,26 @@ th[aria-sort="descending"] .md-sort-mark::after {
   pointer-events: none;
 }
 .pull-indicator .pull-mark {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
   visibility: hidden;
-  animation: none;
+}
+.pull-indicator .pull-mark svg {
+  width: 20px;
+  height: 20px;
+}
+.pull-indicator[data-pull="busy"] .pull-mark {
+  visibility: visible;
+}
+.pull-indicator .pull-spin svg {
+  animation: pull-spin 0.8s linear infinite;
+}
+@keyframes pull-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .pull-indicator[data-pull="idle"],
 .pull-indicator[data-pull="back"] .pull-text {
@@ -694,6 +712,9 @@ th[aria-sort="descending"] .md-sort-mark::after {
   .workspace:has(> .pull-indicator:is([data-pull="busy"], [data-pull="back"]))
     > :not(.pull-indicator, .composer-dock) {
     transition: none;
+  }
+  .pull-indicator .pull-spin svg {
+    animation: none;
   }
 }
 

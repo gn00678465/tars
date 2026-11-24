@@ -97,12 +97,12 @@ test("the page follows the finger, damped and capped; past the rest 放開重新
   touch(el, "touchcancel", [], [{ y: 500 }]);
 });
 
-test("let go past the rest: the page settles at it with 重新整理中… and the wheel, then reloads", async () => {
+test("let go past the rest: the page settles at it with 重新整理中… and the spinner, then reloads", async () => {
   const { reload, root, at, offset } = await page();
   drag(at("msg"), PULL_PX + 100, true);
   touch(at("msg"), "touchend", [], [{ y: 100 + PULL_PX + 100 }]);
   expect([offset(), ...(shown(root) ?? [])]).toEqual([`${REST_PX}px`, "busy", "重新整理中…"]);
-  expect(bar(root)?.querySelector(".tars-sprite.wheel")).not.toBeNull();
+  expect(bar(root)?.querySelector(".pull-spin svg.lucide-loader-circle")).not.toBeNull();
   await settle(SETTLE_MS - 1);
   expect(reload).not.toHaveBeenCalled();
   await settle(1);
@@ -112,7 +112,7 @@ test("let go past the rest: the page settles at it with 重新整理中… and t
   expect(shown(root)).toEqual(["busy", "重新整理中…"]);
 });
 
-test("one box in every state: the wheel's place is kept, so the text does not move", async () => {
+test("one box in every state: the spinner's place is kept, so the text does not move", async () => {
   const { root, at } = await page();
   const kids = () => [...(bar(root)?.children ?? [])].map((c) => c.className);
   drag(at("msg"), 40, true);
@@ -121,9 +121,9 @@ test("one box in every state: the wheel's place is kept, so the text does not mo
   const ready = kids();
   touch(at("msg"), "touchend", [], [{ y: 100 + PULL_PX }]);
   expect([pulling, ready, kids()]).toEqual([
-    ["tars-sprite pull-mark", "pull-text"],
-    ["tars-sprite pull-mark", "pull-text"],
-    ["tars-sprite wheel", "pull-text"],
+    ["pull-mark", "pull-text"],
+    ["pull-mark", "pull-text"],
+    ["pull-mark pull-spin", "pull-text"],
   ]);
 });
 

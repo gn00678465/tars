@@ -1,3 +1,4 @@
+import { LoaderCircleIcon } from "lucide-react";
 import type { Pull, PullState } from "../usePullToRefresh.ts";
 
 const TEXT: Record<Pull, string> = {
@@ -11,17 +12,19 @@ const TEXT: Record<Pull, string> = {
 
 /**
  * The indicator in the space the moved page leaves at the top (app.css). One box in every state:
- * the wheel's place is kept when it is not turning, and the text is one line, so nothing moves
- * from 放開重新整理 to 重新整理中….
+ * the spinner's place is kept while it is not shown, and the text is one line, so nothing moves
+ * from 放開重新整理 to 重新整理中…. The spinner is lucide's, the library the other icons come from.
  */
 export function PullIndicator({ state }: { state: PullState }) {
   if (!state.touched) return null;
   return (
     <div className="pull-indicator" role="status" data-pull={state.pull}>
       <span
-        className={state.pull === "busy" ? "tars-sprite wheel" : "tars-sprite pull-mark"}
+        className={state.pull === "busy" ? "pull-mark pull-spin" : "pull-mark"}
         aria-hidden="true"
-      />
+      >
+        <LoaderCircleIcon />
+      </span>
       <span className="pull-text">{TEXT[state.pull]}</span>
     </div>
   );
