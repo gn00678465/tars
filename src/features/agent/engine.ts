@@ -85,6 +85,7 @@ import {
   type WikiIndexBody,
   type TurnState,
   type Usage,
+  isToolName,
 } from "./types.ts";
 
 export { REASON_TEXT };
@@ -711,6 +712,16 @@ export function createEngine(deps: EngineDeps) {
         outputTokens: usage.outputTokens,
       });
     }
+    if (end.stop === "tool_use")
+      for (const c of got.calls)
+        if (c.invalid !== undefined)
+          deps.log.log("invalid_arguments", {
+            turn: t.turnId,
+            step: t.step,
+            provider: t.s.model.provider,
+            ...(isToolName(c.name) ? { tool: c.name } : {}),
+            ...c.invalid,
+          });
     for (const item of written) t.frontend.emit({ type: "item", item });
     if (usage === undefined) t.frontend.emit({ type: "notice", code: "usage_missing" });
     if (end.stop === "max_tokens" && got.text === "")

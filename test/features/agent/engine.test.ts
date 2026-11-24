@@ -1,6 +1,13 @@
 import type { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { Engine, TurnOutcome } from "../../../src/features/agent/engine.ts";
 import { estimateTokens, utf8Bytes } from "../../../src/features/agent/bytes.ts";
@@ -950,6 +957,67 @@ describe("compatible providers", () => {
     }>(h.db, "SELECT * FROM usage ORDER BY id");
   const fakeOf = (h: CompatHarness, ref: Ref) =>
     ref.provider === "gemini" ? h.gemini : h.openrouter;
+
+  test("M4-G: arguments that are not JSON are logged by shape only; the conversation goes on", async () => {
+    const h = await compat();
+    // No id and the same name on one index: taken as one call, its arguments glued.
+    h.gemini.reply({
+      kind: "message",
+      toolCalls: [
+        {
+          id: "p1",
+          name: "file_read",
+          args: { path: "notes/private.md" },
+          index: 0,
+          signature: "sig-private-1",
+        },
+        {
+          id: "",
+          name: "file_read",
+          args: { path: "notes/other.md" },
+          index: 0,
+          signature: "sig-private-2",
+        },
+      ],
+    });
+    h.gemini.reply(compatText("讀不到"));
+    const first = ended(await send(h, GEMINI, "記一筆"));
+    expect(first.state).toBe("completed");
+    const log = readFileSync(h.paths.agentLog, "utf8");
+    const lines = log
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((l) => l.event === "invalid_arguments");
+    const glued =
+      JSON.stringify({ path: "notes/private.md" }) + JSON.stringify({ path: "notes/other.md" });
+    expect(lines).toEqual([
+      {
+        at: expect.any(Number),
+        event: "invalid_arguments",
+        turn: expect.any(String),
+        step: 1,
+        provider: "gemini",
+        tool: "file_read",
+        index: 0,
+        ids: 1,
+        calls: 1,
+        interleaved: false,
+        bytes: utf8Bytes(glued),
+      },
+    ]);
+    expect(log).not.toContain("notes/");
+    expect(log).not.toContain("sig-private");
+    h.gemini.reply(compatText("好"));
+    const next = ended(
+      await h.engine.runTurn(
+        { ...GEMINI, effort: "medium", text: "再試一次", convId: first.convId },
+        h.frontend,
+        new AbortController().signal,
+      ),
+    );
+    expect(next.state).toBe("completed");
+  });
 
   test("while the stream runs without input usage, the row stays at the reserved amount", async () => {
     const h = await compat();

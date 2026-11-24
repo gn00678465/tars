@@ -3,7 +3,9 @@
  * POST /chat/completions answers with SSE from a queue of scripted replies (or a handler once
  * the queue is empty); GET /models and GET /key answer from settable values. Every request is
  * recorded. In gemini mode a current-turn tool call sent back without its thought_signature is a
- * 400, as the real endpoint does (P2 item 7).
+ * 400, as the real endpoint does (P2 item 7), and so is a tool call whose arguments are not JSON
+ * anywhere in the history [unconfirmed: the owner's conversation got "Request contains an invalid
+ * argument." with such a call in it; whether that or its signature was the cause is not known].
  */
 
 export type CompatMode = "gemini" | "openrouter";
@@ -29,6 +31,10 @@ export interface FakeToolCall {
   readonly extra?: Record<string, unknown>;
   /** Extra keys inside extra_content.google besides thought_signature. */
   readonly googleExtra?: Record<string, unknown>;
+  /** The index on every chunk of this call; default its place in the list. null: none sent. */
+  readonly index?: number | null;
+  /** The id again on the chunk that carries the rest of the arguments. */
+  readonly repeatId?: boolean;
 }
 
 export type FakeCompatReply =
@@ -160,7 +166,8 @@ function messageChunks(mode: CompatMode, reply: Extract<FakeCompatReply, { kind:
   const half = Math.ceil(text.length / 2);
   for (const piece of [text.slice(0, half), text.slice(half)])
     if (piece !== "") out.push(chunk({ content: piece }));
-  for (const [index, call] of (reply.toolCalls ?? []).entries()) {
+  for (const [place, call] of (reply.toolCalls ?? []).entries()) {
+    const index = call.index === null ? {} : { index: call.index ?? place };
     const args = typeof call.args === "string" ? call.args : JSON.stringify(call.args);
     const mid = Math.ceil(args.length / 2);
     const google =
@@ -177,7 +184,7 @@ function messageChunks(mode: CompatMode, reply: Extract<FakeCompatReply, { kind:
       chunk({
         tool_calls: [
           {
-            index,
+            ...index,
             id: call.id,
             type: "function",
             function: { name: call.name, arguments: args.slice(0, mid) },
@@ -186,13 +193,21 @@ function messageChunks(mode: CompatMode, reply: Extract<FakeCompatReply, { kind:
           },
         ],
       }),
-      chunk({ tool_calls: [{ index, function: { arguments: args.slice(mid) } }] }),
+      chunk({
+        tool_calls: [
+          {
+            ...index,
+            ...(call.repeatId === true ? { id: call.id } : {}),
+            function: { arguments: args.slice(mid) },
+          },
+        ],
+      }),
     );
     if (reply.resendSignature !== undefined)
       out.push(
         chunk({
           tool_calls: [
-            { index, extra_content: { google: { thought_signature: reply.resendSignature } } },
+            { ...index, extra_content: { google: { thought_signature: reply.resendSignature } } },
           ],
         }),
       );
@@ -237,6 +252,23 @@ function missingSignature(body: Record<string, unknown>): boolean {
               ?.google?.thought_signature !== "string",
         ),
     );
+}
+
+/** In gemini mode: does any tool call in the history carry arguments that are not JSON? */
+function invalidArguments(body: Record<string, unknown>): boolean {
+  const messages = Array.isArray(body.messages) ? (body.messages as Record<string, unknown>[]) : [];
+  return messages.some(
+    (m) =>
+      Array.isArray(m.tool_calls) &&
+      (m.tool_calls as { function?: { arguments?: unknown } }[]).some((c) => {
+        try {
+          JSON.parse(String(c.function?.arguments));
+          return false;
+        } catch {
+          return true;
+        }
+      }),
+  );
 }
 
 const errorBody = (mode: CompatMode, status: number, message: string) => {
@@ -347,6 +379,10 @@ export function startFakeCompat(mode: CompatMode): FakeCompat {
           ),
           { status: 400 },
         );
+      if (mode === "gemini" && invalidArguments(body))
+        return Response.json(errorBody(mode, 400, "Request contains an invalid argument."), {
+          status: 400,
+        });
       const reply = queue.shift() ?? fake.handler?.(body);
       if (reply === undefined)
         return Response.json(errorBody(mode, 500, "fake: no reply queued"), { status: 500 });

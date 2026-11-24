@@ -177,7 +177,12 @@ export function toChatMessages(req: ModelRequest): ChatMessage[] {
       const stored = item.body.native?.[0] as ChatMessage | undefined;
       if (stored !== undefined && stored.role === "assistant")
         push(
-          stale(item, i, currentTurn, req.thinkingKey) ? withoutSignatures(stored) : clone(stored),
+          replayable(
+            stale(item, i, currentTurn, req.thinkingKey)
+              ? withoutSignatures(stored)
+              : clone(stored),
+            i < currentTurn,
+          ),
         );
       else if (item.body.text !== "") push({ role: "assistant", content: item.body.text });
     } else if (item.kind === "tool_result") {
@@ -200,12 +205,47 @@ export function toChatMessages(req: ModelRequest): ChatMessage[] {
 const stale = (item: Item, i: number, currentTurn: number, thinkingKey: string) =>
   i < currentTurn && item.kind === "assistant" && item.body.thinkingKey !== thinkingKey;
 
-const clone = (m: Extract<ChatMessage, { role: "assistant" }>): ChatMessage => ({
+type AssistantMessage = Extract<ChatMessage, { role: "assistant" }>;
+
+/**
+ * A stored call whose arguments are not JSON (M4-G: two of Gemini's calls glued into one) made
+ * Gemini refuse every request that held it, "Request contains an invalid argument.". It goes
+ * back as the JSON its tool was given, so the model sees what it sent; valid ones go as stored,
+ * keeping the cached prefix. In a finished turn it also goes without its signature, which may
+ * have been the two calls' and is not needed there [unconfirmed which of the two Google refused].
+ */
+function replayable(m: AssistantMessage, finished: boolean): AssistantMessage {
+  if (m.tool_calls?.every((c) => isJson(c.function.arguments)) !== false) return m;
+  return {
+    ...m,
+    tool_calls: m.tool_calls.map((c) => {
+      if (isJson(c.function.arguments)) return c;
+      const args = JSON.stringify(parseArguments(c.function.arguments));
+      const { extra_content, ...rest } = c;
+      return {
+        ...rest,
+        function: { ...c.function, arguments: args },
+        ...(finished || extra_content === undefined ? {} : { extra_content }),
+      };
+    }),
+  };
+}
+
+function isJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const clone = (m: AssistantMessage): AssistantMessage => ({
   ...m,
   ...(m.tool_calls === undefined ? {} : { tool_calls: m.tool_calls.map((c) => ({ ...c })) }),
 });
 
-function withoutSignatures(m: Extract<ChatMessage, { role: "assistant" }>): ChatMessage {
+function withoutSignatures(m: AssistantMessage): AssistantMessage {
   if (m.tool_calls === undefined) return { ...m };
   return {
     ...m,
@@ -252,6 +292,17 @@ interface PartialCall {
   name: string;
   args: string;
   signature?: string;
+  index: number;
+}
+
+/** One index's calls, for the diagnosis of arguments that are not JSON. */
+interface Slot {
+  /** The call its chunks go to now. */
+  call: PartialCall;
+  readonly ids: Set<string>;
+  calls: number;
+  /** A second call came while the first's arguments were not yet JSON. */
+  interleaved: boolean;
 }
 
 async function* streamChat(
@@ -273,7 +324,8 @@ async function* streamChat(
     let thinking = false;
     let finish: string | undefined;
     let usage: RawUsage | undefined;
-    const calls = new Map<number, PartialCall>();
+    const slots = new Map<number, Slot>();
+    const calls: PartialCall[] = [];
     for await (const chunk of chunks) {
       if (!seen.receivedStart) {
         seen.receivedStart = true;
@@ -297,13 +349,14 @@ async function* streamChat(
       }
       for (const tc of delta.tool_calls ?? []) {
         seen.receivedContent = true;
-        const at = tc.index ?? 0;
-        const call = calls.get(at) ?? { id: "", name: "", args: "" };
-        calls.set(at, call);
+        const call = callFor(slots, calls, tc);
         // Every call the model wrote is output, kept or not.
         seen.callBytes +=
           utf8Bytes(tc.function?.name ?? "") + utf8Bytes(tc.function?.arguments ?? "");
-        if (tc.id) call.id = tc.id;
+        if (tc.id) {
+          call.id = tc.id;
+          slots.get(call.index)?.ids.add(tc.id);
+        }
         if (tc.function?.name) call.name = tc.function.name;
         if (tc.function?.arguments) call.args += tc.function.arguments;
         const signature = tc.extra_content?.google?.thought_signature;
@@ -315,22 +368,32 @@ async function* streamChat(
     }
     if (finish === undefined)
       throw new ProviderError("connection", { ...seen, mayHaveRun: !seen.receivedStart });
-    const complete = [...calls.entries()]
-      .toSorted(([a], [b]) => a - b)
-      .map(([, c]) => c)
-      .filter((c) => c.id !== "" && c.name !== "");
+    const complete = calls.filter((c) => c.id !== "" && c.name !== "");
     const stop = stopOf(finish, complete.length > 0);
     const kept = stop === "tool_use" ? complete : [];
     for (const c of kept)
       if (c.signature !== undefined && utf8Bytes(c.signature) > SIGNATURE_LIMIT)
         throw new ProviderError("bad_request", { ...seen, detail: "thought_signature 超過上限" });
-    for (const c of kept)
+    for (const c of kept) {
+      const slot = slots.get(c.index) as Slot;
       yield {
         type: "tool_call",
         providerCallId: c.id,
         name: c.name,
         input: parseArguments(c.args),
+        ...(isJson(c.args)
+          ? {}
+          : {
+              invalid: {
+                index: c.index,
+                ids: slot.ids.size,
+                calls: slot.calls,
+                interleaved: slot.interleaved,
+                bytes: utf8Bytes(c.args),
+              },
+            }),
       };
+    }
     const toolCalls = kept.map((c): ChatToolCall => ({
       id: c.id,
       type: "function",
@@ -361,6 +424,39 @@ async function* streamChat(
   } catch (err) {
     throw toProviderError(err, provider, signal, seen, apiKey);
   }
+}
+
+/**
+ * The call a chunk belongs to. Chunks of one call share an index; a chunk on an index already
+ * holding a call starts another when its id differs, or, with no id, its name does: Gemini put
+ * two parallel calls on one index, and they were taken as one, one name and both arguments
+ * [unconfirmed: whether it sends the same index or none is not known; both land here, a missing
+ * index taken as 0]. The same id again is more of the same call, as some providers send it on
+ * every chunk. No id and the same name cannot be told apart from more of the same call, and are
+ * taken as that: arguments that end up not JSON reach the tool as _invalid_arguments and are
+ * logged. Calls stay in the order they started.
+ */
+function callFor(slots: Map<number, Slot>, calls: PartialCall[], tc: RawToolCallDelta) {
+  const index = tc.index ?? 0;
+  const slot = slots.get(index);
+  const cur = slot?.call;
+  const id = tc.id ?? "";
+  const name = tc.function?.name ?? "";
+  const another =
+    cur !== undefined &&
+    (id !== "" && cur.id !== ""
+      ? id !== cur.id
+      : id === "" && name !== "" && cur.name !== "" && name !== cur.name);
+  if (cur !== undefined && !another) return cur;
+  const call: PartialCall = { id: "", name: "", args: "", index };
+  calls.push(call);
+  if (slot === undefined) slots.set(index, { call, ids: new Set(), calls: 1, interleaved: false });
+  else {
+    if (!isJson(slot.call.args)) slot.interleaved = true;
+    slot.call = call;
+    slot.calls += 1;
+  }
+  return call;
 }
 
 /**
