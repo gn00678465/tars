@@ -33,14 +33,20 @@ const SMALL = () => {
   const found: string[] = [];
   const sel = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
   for (const el of document.querySelectorAll<HTMLElement>(sel)) {
-    if (el instanceof HTMLInputElement && /^(checkbox|radio|range|hidden|button|submit)$/.test(el.type)) continue;
+    if (
+      el instanceof HTMLInputElement &&
+      /^(checkbox|radio|range|hidden|button|submit)$/.test(el.type)
+    )
+      continue;
     const box = el.getBoundingClientRect();
     const style = getComputedStyle(el);
     if (box.width === 0 || box.height === 0 || style.visibility === "hidden") continue;
     const size = Number.parseFloat(style.fontSize);
     if (size < 16) {
       const label = el.getAttribute("aria-label") ?? el.getAttribute("placeholder") ?? "";
-      found.push(`${el.tagName.toLowerCase()}.${String(el.className).split(" ")[0]} "${label}" ${size}px`);
+      found.push(
+        `${el.tagName.toLowerCase()}.${String(el.className).split(" ")[0]} "${label}" ${size}px`,
+      );
     }
   }
   return found;
@@ -55,10 +61,11 @@ for (const [i, s] of SCENES.entries()) {
   await page.clock.setFixedTime(NOW);
   await page.goto(`${url}/?scene=${n}`, { waitUntil: "load" });
   await page.waitForTimeout(400);
-  for (const step of (s.phone ?? s.steps ?? [])) {
+  for (const step of s.phone ?? s.steps ?? []) {
     try {
       if ("click" in step) await page.locator(step.click).first().click({ timeout: 5_000 });
-      else if ("fill" in step) await page.locator(step.fill).first().fill(step.text, { timeout: 5_000 });
+      else if ("fill" in step)
+        await page.locator(step.fill).first().fill(step.text, { timeout: 5_000 });
       else await page.waitForTimeout(step.wait);
     } catch {
       bad.push(`scene ${n} ${s.name}: step failed ${JSON.stringify(step)}`);

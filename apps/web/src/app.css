@@ -495,7 +495,14 @@ th[aria-sort="descending"] .md-sort-mark::after {
  * tools/visual/zoom.ts opens every scene as a touch device and fails on a control under 16px.
  */
 @media (pointer: coarse) {
-  input:not([type="checkbox"], [type="radio"], [type="range"], [type="hidden"], [type="button"], [type="submit"]),
+  input:not(
+    [type="checkbox"],
+    [type="radio"],
+    [type="range"],
+    [type="hidden"],
+    [type="button"],
+    [type="submit"]
+  ),
   textarea,
   select,
   [contenteditable=""],
