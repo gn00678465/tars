@@ -574,6 +574,15 @@ function message(s: State, m: ServerMessage, at: number): State {
           }),
         };
       }
+      // conv.open of a conversation that is gone (the one a reload reopens): back home.
+      if (
+        s.openReq !== undefined &&
+        m.re === s.openReq.id &&
+        m.kind === "nack" &&
+        m.p.reason === "not_found" &&
+        s.conv === s.openReq.conv
+      )
+        return reduce(withoutKeys(s, "openReq"), { type: "open_conv", conv: undefined });
       // conv.open of a conversation archived meanwhile (a tab that was offline): leave it.
       if (
         s.openReq !== undefined &&

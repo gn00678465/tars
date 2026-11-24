@@ -17,5 +17,5 @@ export default defineConfig({
   fmt: { ignorePatterns: [...generated, "src/vendor/**"] },
   lint: { ignorePatterns: generated, options: { typeAware: true, typeCheck: true } },
   // .visual/ holds the base tree that tools/visual extracts, tests and all.
-  test: { exclude: ["**/node_modules/**", ".visual/**"] },
+  test: { exclude: ["**/node_modules/**", ".visual/**"], setupFiles: ["src/test-setup.ts"] },
 });

@@ -35,6 +35,7 @@ import type { Socket } from "./socket.ts";
 import {
   composerBlocked,
   initial,
+  type State,
   localNow,
   NACK_TEXT,
   reduce,
@@ -51,6 +52,7 @@ import {
   useMessageScroller,
 } from "./components/ui/message-scroller.tsx";
 import { reducedMotion, usePullToRefresh } from "./usePullToRefresh.ts";
+import { keep, readKept } from "./kept.ts";
 import { useWikiRequests } from "./wiki/requests.ts";
 import type { WikiEvent } from "./wiki/state.ts";
 
@@ -86,7 +88,16 @@ const TOAST_MS = 2_600;
 const ARCHIVE_TOAST_MS = 8_000;
 
 export function App({ socket, now }: { socket: Socket; now: () => number }) {
-  const [state, dispatch] = useReducer(reduce, initial);
+  // A reload comes back where the tab was (kept.ts): the conversation is opened after the hello,
+  // the knowledge base once the local end says it has one.
+  const [state, dispatch] = useReducer(reduce, initial, (s): State => {
+    const kept = readKept();
+    return {
+      ...s,
+      ...(kept.conv === undefined ? {} : { conv: kept.conv }),
+      ...(kept.wiki === undefined ? {} : { wiki: { ...s.wiki, ...kept.wiki } }),
+    };
+  });
   const [tick, setTick] = useState(now);
 
   useEffect(() => {
@@ -163,6 +174,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   useWikiRequests(socket, state.wiki, toWiki, reachable);
   const { wiki } = state;
   const wikiOn = wiki.available && wiki.view === "wiki";
+  useEffect(() => keep(state.conv, wiki), [state.conv, wiki]);
   // 今天 and 昨天 for the list and the knowledge base: a wall clock, not `now`, which is monotonic.
   const today = localNow(state, tick) ?? Date.now();
   /**

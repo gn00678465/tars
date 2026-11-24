@@ -19,8 +19,9 @@ export interface WikiState {
   readonly status?: WikiStatus;
   readonly list?: WikiList;
   /**
-   * The sidebar's tab and the main column together, as the prototype switches them; the page
-   * always opens on the conversations (ui_spec 5.7).
+   * The sidebar's tab and the main column together, as the prototype switches them. A tab opens on
+   * the conversations, unless a reload finds it was on the knowledge base (kept.ts): then it comes
+   * back to it once wiki.status answers.
    */
   readonly view: "chat" | "wiki";
   readonly category: WikiCategory | "all";
