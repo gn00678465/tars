@@ -1,4 +1,3 @@
-import { ScreenProbe } from "./ScreenProbe.tsx";
 import type { WireStatus } from "@tars/protocol";
 import type { Ref } from "react";
 import { about, contextPct, type State, versionText } from "../state.ts";
@@ -350,7 +349,6 @@ export function StatusSheet(props: {
           ) : null}
         </div>
       )}
-      <ScreenProbe />
     </Panel>
   );
 }

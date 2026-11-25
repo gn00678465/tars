@@ -726,63 +726,6 @@ th[aria-sort="descending"] .md-sort-mark::after {
   }
 }
 
-/* ScreenProbe (components/ScreenProbe.tsx): measured elements, never shown. */
-.probe {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 1px;
-  visibility: hidden;
-  pointer-events: none;
-}
-.probe-vh {
-  height: 100vh;
-}
-.probe-svh {
-  height: 100svh;
-}
-.probe-lvh {
-  height: 100lvh;
-}
-.probe-dvh {
-  height: 100dvh;
-}
-.probe-fixed {
-  bottom: 0;
-}
-.probe-env-top {
-  height: env(safe-area-inset-top, 0px);
-}
-.probe-env-bottom {
-  height: env(safe-area-inset-bottom, 0px);
-}
-/* The screen's bottom edge, drawn: a screenshot shows how far it is from the end of the glass. */
-.probe-line {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
-  background: #ff0000;
-  z-index: 2147483647;
-  pointer-events: none;
-}
-.screen-probe {
-  margin-top: 12px;
-  font-size: 12px;
-}
-.screen-probe-out {
-  margin: 8px 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-family: var(--font-mono, monospace);
-}
-.screen-probe-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 /*
  * The thread in shadcn's Message Scroller and message shells (M4-P3a). Their utilities are in a
  * cascade layer; what they set and the prototype's classes do not is set back here, so the
