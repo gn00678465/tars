@@ -976,3 +976,156 @@ th[aria-sort="descending"] .md-sort-mark::after {
   opacity: 1;
   pointer-events: auto;
 }
+
+/*
+ * M4-P4b: two or more cards from other conversations, one at a time under a pager. A desktop has
+ * an arrow at each side of the title; a phone puts both at the right, where the thumb is. The
+ * pager is outside the bounded area, so it never scrolls away.
+ */
+.pager {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  grid-template-areas: "prev title next";
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.pager-prev {
+  grid-area: prev;
+}
+.pager-next {
+  grid-area: next;
+}
+.pager-title {
+  grid-area: title;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+@media (max-width: 767px) {
+  .pager {
+    grid-template-columns: minmax(0, 1fr) 44px 44px;
+    grid-template-areas: "title prev next";
+    gap: 4px;
+  }
+}
+.pager-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.pager-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pager-meta {
+  font-size: 12px;
+  color: var(--subtle-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.pager-meta .sg-tag {
+  padding: 0 6px;
+}
+/* The conversation's time and model, moved here from the card: the first cut when narrow. */
+.pager-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pager-arrow {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--foreground);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out);
+}
+.pager-arrow:hover:not([data-disabled]) {
+  background: var(--glass-state);
+}
+/* At the end: still focusable, dimmer and unframed, so it reads as there but not usable. */
+.pager-arrow[data-disabled] {
+  color: oklch(0.45 0.007 250);
+  border-color: transparent;
+  cursor: default;
+}
+.pager-arrow:focus-visible {
+  outline: 2px solid var(--focus-line);
+  outline-offset: 4px;
+}
+/* How many still wait that way: the cards behind the arrows are not otherwise seen. */
+.pager-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--status-wait);
+  color: var(--surface-inset);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+.pinned-head-wait {
+  color: var(--status-wait);
+}
+/* On a phone the script goes to the second line, so the title is not cut for it. */
+.pager-script-sub {
+  display: none;
+}
+@media (max-width: 767px) {
+  .pager-script-main {
+    display: none;
+  }
+  .pager-script-sub {
+    display: inline;
+  }
+}
+/* The card's box takes the focus after its decision; the card's own frame shows where it is. */
+.pager-card:focus {
+  outline: none;
+}
+.pager-card:focus-visible {
+  outline: 2px solid var(--focus-line);
+  outline-offset: 2px;
+}
+/* The pager names the card, so its bar is one line and does not stick over the fields. */
+.pinned-scroll .approval-origin-bar.paged {
+  position: static;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.approval-origin-bar.paged .approval-origin-actions {
+  margin-left: auto;
+}
+/* 關閉 is left of 跳至該對話, its place kept until it is there: deciding moves neither. */
+.approval-origin-actions .origin-close {
+  min-width: 44px;
+  justify-content: center;
+}
+.approval-origin-actions .origin-close.reserved {
+  visibility: hidden;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pager-arrow {
+    transition: none;
+  }
+}

@@ -793,7 +793,7 @@ describe("the sidebar and the open conversation", () => {
     unmount();
   });
 
-  test("the focus moves on to the next card once the first is decided", async () => {
+  test("decided elsewhere behind the pager: it stays shown, and the focus goes to no other card", async () => {
     const { h, root, unmount } = await listed();
     await act(async () => entry(root, "對話 1").click());
     for (const n of [2, 3]) await act(async () => h.last().receive(requestN(n, `conv-${n}`)));
@@ -807,7 +807,9 @@ describe("the sidebar and the open conversation", () => {
         }),
       ),
     );
-    expect(document.activeElement).toBe(denyOf(root, "s3"));
+    expect(root.querySelector(".pager-meta")?.textContent).toContain("1/2");
+    expect(denyOf(root, "s3")).toBeUndefined();
+    expect(document.activeElement?.closest(".approval-card")).toBeNull();
     unmount();
   });
 
@@ -856,10 +858,17 @@ describe("the sidebar and the open conversation", () => {
           }),
         ),
       );
-    const shown = [...root.querySelectorAll(".composer-dock .approval-card")].map(
-      (c) => c.querySelector(".approval-field-val")?.textContent,
-    );
-    expect(shown).toEqual(["s4 @ v1", "s5 @ v1", "s2 @ v1"]);
+    // Behind the pager, in the order they came: the first, then each with the next arrow.
+    const shown = [];
+    for (;;) {
+      const cards = root.querySelectorAll(".composer-dock .approval-card");
+      expect(cards).toHaveLength(1);
+      shown.push(cards[0]?.querySelector(".approval-field-val")?.textContent);
+      const next = root.querySelector<HTMLButtonElement>(".pager-next");
+      if (next === null || next.getAttribute("aria-disabled") === "true") break;
+      await act(async () => next.click());
+    }
+    expect(shown).toEqual(["s2 @ v1", "s4 @ v1", "s5 @ v1"]);
     unmount();
   });
 
@@ -1518,21 +1527,28 @@ describe("cards from other conversations: set off, and told apart", () => {
       );
     });
     const dock = root.querySelector(".pinned-approvals") as HTMLElement;
+    // The one still waiting is shown first; no other waits.
     expect(dock.querySelector(".pinned-head")?.textContent).toBe("其他對話的核准（2）");
     const time = (ms: number) => shortTime(ms);
-    expect(heads()).toEqual([
+    // Behind the pager its header says it, one card at a time.
+    const head = () => ({
+      title: dock.querySelector(".pager-name")?.firstChild?.textContent,
+      meta: dock.querySelector(".pager-meta")?.textContent,
+    });
+    const second = head();
+    await act(async () => (dock.querySelector(".pager-prev") as HTMLButtonElement).click());
+    const first = head();
+    expect([first, second]).toEqual([
       {
-        kind: "已決定（來自其他對話）",
         title: SAME,
-        detail: `${time(CONVS[0]?.updatedAt ?? 0)} · claude-sonnet-5-5`,
+        meta: `1/2· 已決定（已核准）· fava-ledger寫外部· ${time(CONVS[0]?.updatedAt ?? 0)} · claude-sonnet-5-5`,
       },
       {
-        kind: "待核准（來自其他對話）",
         title: SAME,
-        detail: `${time(CONVS[1]?.updatedAt ?? 0)} · gemini-2.5-pro`,
+        meta: `2/2· 待核准· fava-ledger寫外部· ${time(CONVS[1]?.updatedAt ?? 0)} · gemini-2.5-pro`,
       },
     ]);
-    expect(heads()[0]?.detail).not.toBe(heads()[1]?.detail);
+    expect(heads()).toEqual([{ kind: undefined, title: undefined, detail: undefined }]);
     unmount();
   });
 

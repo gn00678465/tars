@@ -200,7 +200,7 @@ test("a snapshot without running leaves a decided card, and another conversation
     (c) => c.querySelector(".approval-head .sg-tag")?.textContent,
   );
   expect(cards).toHaveLength(2);
-  expect(cards.some((t) => t === "等待核准")).toBe(true);
+  expect(cards.some((t) => t === "待核准")).toBe(true);
   expect(p.root.textContent).toContain("other-script");
   p.unmount();
 });

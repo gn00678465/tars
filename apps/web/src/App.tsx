@@ -92,6 +92,13 @@ const ARCHIVE_TOAST_MS = 8_000;
  * Windows allows (about 900 ms), and too soon to have read the other card.
  */
 const OTHER_CARD_MS = 1_000;
+/** A decided card's result, as the pager's header says it. */
+const RESULT: Readonly<Record<string, string>> = {
+  approved: "已核准",
+  denied: "已拒絕",
+  expired: "已過期",
+  cancelled: "已取消",
+};
 
 export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // A reload comes back where the tab was (kept.ts): the conversation is opened after the hello,
@@ -159,6 +166,20 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   const lastDecided = useRef<{ approvalId: string; at: number }>(undefined);
   /** The card the user decided last, for where the focus goes next. */
   const [decided, setDecided] = useState<string>();
+  /**
+   * The pinned card shown behind the pager, and its place in the dock: when it goes, the next
+   * one waiting from that place is shown.
+   */
+  const [picked, setPicked] = useState<{ id: string; at: number }>();
+  /** A pinned card shown because the one shown went, not by an arrow, and when it was shown. */
+  const shownBy = useRef<{ approvalId: string; at: number }>(undefined);
+  /** What the dock shows, for decide: whether it pages, and which card. */
+  const dock = useRef<{ paged: boolean; shown?: string; ids: ReadonlySet<string> }>({
+    paged: false,
+    ids: new Set(),
+  });
+  /** Bumped when the card the pager shows is decided: the focus stays on it. */
+  const [keepFocus, setKeepFocus] = useState(0);
   const modelButton = useRef<HTMLButtonElement>(null);
   /** The context sheet, with what to keep already typed after /compact when it was too long. */
   const [contextSheet, setContextSheet] = useState<{ focus: string } | undefined>(undefined);
@@ -318,6 +339,18 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     // stopped for OTHER_CARD_MS: one held back is not sent, changes no card, and starts the wait
     // again. The same card's goes at once: a decision refused may go again.
     const at = now();
+    const { approvalId } = card.approval;
+    // Behind the pager only the card shown is in the page; a press for another one (a script's
+    // click) is not sent. The second line: the time window below stays.
+    if (dock.current.paged && dock.current.ids.has(approvalId) && dock.current.shown !== approvalId)
+      return;
+    // A card put in the place of one that went was not chosen: it is held as another card's
+    // decision is, the wait starting again on each press.
+    const put = shownBy.current;
+    if (put?.approvalId === approvalId && at - put.at < OTHER_CARD_MS) {
+      shownBy.current = { ...put, at };
+      return;
+    }
     const last = lastDecided.current;
     if (
       last !== undefined &&
@@ -335,6 +368,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     if (id !== undefined) {
       lastDecided.current = { approvalId: card.approval.approvalId, at };
       setDecided(card.approval.approvalId);
+      if (dock.current.paged && dock.current.shown === approvalId) setKeepFocus((n) => n + 1);
     }
     dispatch(
       id === undefined
@@ -379,11 +413,49 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // The knowledge base takes the thread's place: what waits in this conversation is pinned too,
   // so no approval goes out of sight.
   const away = wikiOn ? [...elsewhere, ...here.filter((c) => c.resolved === undefined)] : elsewhere;
-  const pinned = [...byDecision(elsewhere), ...away.filter((c) => c.resolved === undefined)];
+  // In the order they came, decided or not: the pager's arrows go through them so.
+  const pinned = [...byDecision(elsewhere), ...away.filter((c) => c.resolved === undefined)].sort(
+    (a, b) => state.cards.indexOf(a) - state.cards.indexOf(b),
+  );
+  const paged = pinned.length > 1;
+  const toDecide = (c: (typeof state.cards)[number]) =>
+    c.resolved === undefined && c.deciding === undefined && c.acked !== true;
+  // The pager shows the card chosen. Gone (closed, decided elsewhere and dropped, cleared by a
+  // snapshot), the next one to decide from its place, else the nearest before it, else the last:
+  // that one was not chosen, and decide holds it as it holds another card's decision.
+  const kept = pinned.find((c) => c.approval.approvalId === picked?.id);
+  const from = Math.min(picked?.at ?? 0, pinned.length);
+  const shownCard =
+    kept ??
+    pinned.slice(from).find(toDecide) ??
+    pinned.slice(0, from).findLast(toDecide) ??
+    pinned.at(-1);
+  const shown = shownCard?.approval.approvalId;
+  const shownAt = shownCard === undefined ? -1 : pinned.indexOf(shownCard);
+  const putThere = kept === undefined && picked !== undefined && shown !== undefined;
+  dock.current = {
+    paged,
+    ids: new Set(pinned.map((c) => c.approval.approvalId)),
+    ...(shown === undefined ? {} : { shown }),
+  };
   // One card on the page takes the focus: the oldest one still to be decided, so it moves on
-  // when that one is sent.
-  const first = pending.find((c) => c.deciding === undefined && c.acked !== true)?.approval
-    .approvalId;
+  // when that one is sent. Behind the pager none of the pinned does: the arrows change cards,
+  // and the focus going into one shown by an arrow, or after a decision, would let a second
+  // Enter decide a card not read. Decided there, the focus stays on that card until it is closed.
+  const docked = dock.current.ids;
+  const first =
+    paged && decided !== undefined && docked.has(decided)
+      ? undefined
+      : pending.find((c) => toDecide(c) && !(paged && docked.has(c.approval.approvalId)))?.approval
+          .approvalId;
+  useEffect(() => {
+    if (shown === undefined) {
+      if (picked !== undefined) setPicked(undefined);
+      return;
+    }
+    if (picked?.id !== shown || picked.at !== shownAt) setPicked({ id: shown, at: shownAt });
+    if (putThere) shownBy.current = { approvalId: shown, at: now() };
+  }, [shown, shownAt]);
   // While the card just decided waits for its result, the focus moves on without scrolling: its
   // buttons, now 「等待本機回應…」 and disabled, stay under the pointer, and the next card's do
   // not slide there. A card that comes otherwise is scrolled into sight as it takes the focus.
@@ -762,30 +834,49 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
           <footer className="composer-dock">
             <div className="composer-wrap">
               {pinned.length === 0 ? null : (
-                <PinnedDock count={pinned.length}>
-                  {pinned.map((card) => (
-                    <ApprovalCard
-                      key={card.approval.approvalId}
-                      card={card}
-                      localNow={localNow(state, tick)}
-                      onDecide={(d) => decide(card, d)}
-                      focus={card.approval.approvalId === first}
-                      quiet={quiet}
-                      pageNow={tick}
-                      {...(blocked === undefined ? {} : { blocked })}
-                      origin={{
-                        ...originOf(card.approval),
-                        onJump: () => open(card.approval.conv),
-                        ...(card.resolved === undefined
-                          ? {}
-                          : {
-                              onDismiss: () =>
-                                setDismissed((d) => new Set(d).add(card.approval.approvalId)),
-                            }),
-                      }}
-                    />
-                  ))}
-                </PinnedDock>
+                <PinnedDock
+                  shown={shown}
+                  settled={keepFocus}
+                  onShow={(id) =>
+                    setPicked({
+                      id,
+                      at: pinned.findIndex((c) => c.approval.approvalId === id),
+                    })
+                  }
+                  cards={pinned.map((card) => ({
+                    id: card.approval.approvalId,
+                    ...originOf(card.approval),
+                    script: card.approval.script,
+                    external: card.approval.effects === "external-write",
+                    state: card.resolved !== undefined ? "done" : toDecide(card) ? "wait" : "sent",
+                    ...(card.resolved === undefined
+                      ? {}
+                      : { result: RESULT[card.resolved.state] ?? card.resolved.state }),
+                    node: (
+                      <ApprovalCard
+                        key={card.approval.approvalId}
+                        card={card}
+                        localNow={localNow(state, tick)}
+                        onDecide={(d) => decide(card, d)}
+                        focus={card.approval.approvalId === first}
+                        quiet={quiet}
+                        pageNow={tick}
+                        {...(blocked === undefined ? {} : { blocked })}
+                        origin={{
+                          ...originOf(card.approval),
+                          ...(paged ? { paged } : {}),
+                          onJump: () => open(card.approval.conv),
+                          ...(card.resolved === undefined
+                            ? {}
+                            : {
+                                onDismiss: () =>
+                                  setDismissed((d) => new Set(d).add(card.approval.approvalId)),
+                              }),
+                        }}
+                      />
+                    ),
+                  }))}
+                />
               )}
               {chosen?.from === undefined ? null : (
                 <ContinueBanner

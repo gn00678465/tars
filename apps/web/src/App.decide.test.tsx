@@ -87,7 +87,9 @@ async function twoCards(layout: "pinned" | "thread") {
   return { h, ...r, cards, press, decisions, html };
 }
 
-describe.each(["pinned", "thread"] as const)("two cards waiting, %s", (layout) => {
+// Pinned, two cards go behind the pager (M4-P4b): the second is not in the page until its arrow
+// is pressed, and App.pager.test.tsx presses it; the time window is tested there through it.
+describe.each(["thread"] as const)("two cards waiting, %s", (layout) => {
   test("two cards are drawn there, and the first decided moves the focus to the second", async () => {
     const t = await twoCards(layout);
     expect(t.cards()).toHaveLength(2);

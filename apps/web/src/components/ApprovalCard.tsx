@@ -115,7 +115,17 @@ export function ApprovalCard(props: {
    * A card from another conversation: its title, and what tells two of the same title apart
    * (their time and model, or the card's own hash when the list does not have it).
    */
-  origin?: { title: string; detail: string; onJump: () => void; onDismiss?: () => void };
+  origin?: {
+    title: string;
+    detail: string;
+    onJump: () => void;
+    onDismiss?: () => void;
+    /**
+     * Behind the dock's pager, which names the card: the bar keeps only 關閉 and 跳至該對話, on
+     * one line, 關閉's place kept while it is not there so deciding moves neither.
+     */
+    paged?: boolean;
+  };
   /** Why a decision cannot be sent now (offline); the buttons are off while it is set. */
   blocked?: string;
   /** Takes the focus when this becomes true; false for all but the oldest card to decide. */
@@ -152,7 +162,7 @@ export function ApprovalCard(props: {
       ? waiting
         ? ["active", "等待結果…"]
         : deciding === undefined
-          ? ["wait", "等待核准"]
+          ? ["wait", "待核准"]
           : ["active", "送出決定中…"]
       : (STATUS[resolved.state] ?? ["", resolved.state]);
   const status = resolved === undefined ? label : resolvedText(resolved, label);
@@ -160,7 +170,27 @@ export function ApprovalCard(props: {
   if (resolved !== undefined) cls.push("state-resolved");
   return (
     <article className={cls.join(" ")} role="region" aria-label="腳本執行核准卡">
-      {props.origin === undefined ? null : (
+      {props.origin === undefined ? null : props.origin.paged === true ? (
+        <div className="approval-origin-bar paged">
+          <div className="approval-origin-actions">
+            {props.origin.onDismiss === undefined ? (
+              <span className="sg-btn sg-btn-sm origin-close reserved" aria-hidden="true" />
+            ) : (
+              <Button
+                variant="ghost"
+                className="sg-btn sg-btn-sm origin-close"
+                aria-label="關閉"
+                onClick={props.origin.onDismiss}
+              >
+                <Icon name="close" size={15} />
+              </Button>
+            )}
+            <Button variant="ghost" className="sg-btn sg-btn-sm" onClick={props.origin.onJump}>
+              跳至該對話
+            </Button>
+          </div>
+        </div>
+      ) : (
         <div className="approval-origin-bar">
           <div className="approval-origin-text">
             <span>{resolved === undefined ? "待核准" : "已決定"}（來自其他對話）</span>
