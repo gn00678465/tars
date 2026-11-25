@@ -220,7 +220,7 @@ button:disabled:not(:where([data-slot])) {
   padding: 0;
   margin: -1px;
   overflow: hidden;
-  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
 }
@@ -1124,7 +1124,7 @@ button:disabled:not(:where([data-slot])) {
 
 .approval-field-val {
   color: var(--foreground);
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .approval-argv {
