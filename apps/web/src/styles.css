@@ -28,13 +28,18 @@
   color-scheme: dark;
 
   /* Typography */
-  /* PingFang first, so an Apple device draws with it and fetches no font; then Noto Sans TC as
-   * installed, then the same font served here (main.tsx), whose unicode-range slices download
-   * only for the characters drawn. The code font ends with the same three: Chinese in a code
-   * block takes them, not the system's fallback, and an Apple device still fetches nothing. */
+  /* Each character takes the first family here that has it. No system font comes before Noto:
+   * on a Traditional Chinese Windows system-ui is Microsoft JhengHei UI, which has the Chinese
+   * and took it (the owner's Rendered Fonts, M4/research/font_order.md); Chromium draws
+   * -apple-system and BlinkMacSystemFont as system-ui too. Safari reads ui-sans-serif as its
+   * system font, Chinese from PingFang, so iOS and Safari fetch nothing; Chromium and Firefox
+   * skip it. Latin: Segoe UI on Windows, Roboto on Android. Then PingFang, Noto Sans TC as
+   * installed, and the same font served here (main.tsx), whose unicode-range slices download only
+   * for the characters drawn. The code font ends with the same three: Chinese in a code block
+   * takes them, and an Apple device still fetches nothing. */
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Noto Sans TC Variable",
-    "Microsoft JhengHei", sans-serif;
+    ui-sans-serif, "Segoe UI", Roboto, "PingFang TC", "Noto Sans TC", "Noto Sans TC Variable",
+    system-ui, sans-serif;
   --font-mono:
     ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace, "PingFang TC",
     "Noto Sans TC", "Noto Sans TC Variable";
