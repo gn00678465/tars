@@ -138,11 +138,14 @@
 
 /* Each argument numbered and ruled off, so a wrapped one is not read as the next. */
 .approval-card ol.approval-argv {
-  list-style: decimal;
+  list-style: none;
+  counter-reset: argv;
   padding-left: 2.75em;
 }
 
 .approval-card ol.approval-argv li {
+  position: relative;
+  counter-increment: argv;
   padding: 4px 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -152,7 +155,15 @@
   border-top: 1px dashed var(--glass-control-rim);
 }
 
-.approval-card ol.approval-argv li::marker {
+/* The number drawn as an outside marker would be (Chrome's ::marker defaults), because Safari
+   before 27.3 takes only color and font-size from ::marker. */
+.approval-card ol.approval-argv li::before {
+  content: counter(argv) ". ";
+  position: absolute;
+  right: 100%;
+  white-space: pre;
+  font-variant-numeric: tabular-nums;
+  unicode-bidi: isolate;
   color: var(--muted-foreground);
   font-family: var(--font-mono);
 }

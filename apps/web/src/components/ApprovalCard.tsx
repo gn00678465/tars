@@ -266,7 +266,8 @@ export function ApprovalCard(props: {
         <dl>
           <dt className="sr-only">內容</dt>
           <dd className="approval-argv-wrap">
-            <ol className="argv approval-argv">
+            {/* Safari drops a list's role when its markers are off (app.css draws the numbers). */}
+            <ol className="argv approval-argv" role="list">
               {a.argv.map((arg, i) => (
                 <li key={i}>
                   <code>{argText(arg)}</code>
