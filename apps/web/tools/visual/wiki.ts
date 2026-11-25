@@ -1,9 +1,13 @@
 // The knowledge base's sidebar by keyboard (ui_spec 5.7), at desktop width and at phone width in
 // the drawer: Tab lands on the chosen category, the arrows change it, Home and End; one more Tab
 // is the first page; a source pill opens its check and Esc gives the focus back to it. Also the
-// two audit items: the phone's search box ≥44 px, an unknown related page's text ≥4.5:1.
+// two audit items: the phone's search box ≥44 px, an unknown related page's text ≥4.5:1. And the
+// focus ring whole on all four sides, nothing it sits in cutting it: each category reached by the
+// arrows, the two view tabs, the pages, the search box, the example chips, and on a desktop the
+// chat view's first conversation, in the same scroller.
 //   node tools/visual/wiki.ts
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/wiki/.
+import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { chromium, type Page } from "playwright-core";
 import { drawer, sceneOf, WIDTHS } from "./overlays.ts";
@@ -72,6 +76,126 @@ const contrast = (page: Page, selector: string) =>
     return (a + 0.05) / (b + 0.05);
   }, selector);
 
+/** A screenshot's pixels, RGBA, decoded in a page of its own. */
+async function pixels(png: Buffer) {
+  const page = await browser.newPage();
+  const got = await page.evaluate(async (b64) => {
+    const i = new Image();
+    i.src = `data:image/png;base64,${b64}`;
+    await i.decode();
+    const c = new OffscreenCanvas(i.width, i.height).getContext("2d");
+    if (c === null) throw new Error("no canvas");
+    c.drawImage(i, 0, 0);
+    const d = c.getImageData(0, 0, i.width, i.height);
+    return { width: d.width, height: d.height, data: [...d.data] };
+  }, png.toString("base64"));
+  await page.close();
+  return got;
+}
+/** A screenshot, k times as big, pixel for pixel: a ring 2 px wide, to be seen. */
+async function zoom(png: Buffer, k: number, path: string) {
+  const page = await browser.newPage();
+  const out = await page.evaluate(
+    async ([b64, k]) => {
+      const i = new Image();
+      i.src = `data:image/png;base64,${b64}`;
+      await i.decode();
+      const canvas = new OffscreenCanvas(i.width * k, i.height * k);
+      const c = canvas.getContext("2d");
+      if (c === null) throw new Error("no canvas");
+      c.imageSmoothingEnabled = false;
+      c.drawImage(i, 0, 0, i.width * k, i.height * k);
+      const bytes = new Uint8Array(await (await canvas.convertToBlob()).arrayBuffer());
+      let s = "";
+      for (const b of bytes) s += String.fromCharCode(b);
+      return btoa(s);
+    },
+    [png.toString("base64"), k] as const,
+  );
+  await page.close();
+  writeFileSync(path, Buffer.from(out, "base64"));
+}
+
+const PAD = 8;
+/**
+ * The focused element's ring, side by side: the element focused, then not, and on each side the
+ * pixels that changed along the outward normal, from the box out to PAD. A side counts where at
+ * least the ring's width changed, sampled over the side's middle half (the corners are round), as
+ * % of the samples. A container's overflow cuts the ring to nothing there, or to 1 px.
+ */
+async function ring(page: Page, shot?: string) {
+  const at = await page.evaluate(() => {
+    const e = document.activeElement as HTMLElement;
+    const r = e.getBoundingClientRect();
+    const s = getComputedStyle(e);
+    return {
+      x: r.x,
+      y: r.y,
+      width: r.width,
+      height: r.height,
+      visible: e.matches(":focus-visible"),
+      w: Number.parseFloat(s.outlineWidth),
+    };
+  });
+  const vw = page.viewportSize() ?? { width: 0, height: 0 };
+  const x0 = Math.max(0, Math.floor(at.x) - PAD);
+  const y0 = Math.max(0, Math.floor(at.y) - PAD);
+  const clip = {
+    x: x0,
+    y: y0,
+    width: Math.min(vw.width, Math.ceil(at.x + at.width) + PAD) - x0,
+    height: Math.min(vw.height, Math.ceil(at.y + at.height) + PAD) - y0,
+  };
+  const onPng = await page.screenshot({ clip, scale: "css" });
+  await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+  await page.waitForTimeout(80);
+  const offPng = await page.screenshot({ clip, scale: "css" });
+  if (shot !== undefined) await zoom(onPng, 4, shot);
+  const [a, b] = [await pixels(onPng), await pixels(offPng)];
+  const changed = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= a.width || y >= a.height) return false;
+    const k = (y * a.width + x) * 4;
+    let d = 0;
+    for (let c = 0; c < 3; c++) d += Math.abs((a.data[k + c] ?? 0) - (b.data[k + c] ?? 0));
+    return d > 60;
+  };
+  // The box in the screenshot's pixels.
+  const [l, t] = [at.x - clip.x, at.y - clip.y];
+  const [r, bt] = [l + at.width, t + at.height];
+  const side = (name: "top" | "right" | "bottom" | "left") => {
+    const along = name === "top" || name === "bottom" ? at.width : at.height;
+    let hits = 0;
+    let n = 0;
+    for (let i = Math.round(along / 4); i <= Math.round((along * 3) / 4); i++, n++) {
+      let got = 0;
+      for (let d = 0; d <= PAD; d++) {
+        const [x, y] =
+          name === "top"
+            ? [l + i, t - d]
+            : name === "bottom"
+              ? [l + i, bt + d]
+              : name === "left"
+                ? [l - d, t + i]
+                : [r + d, t + i];
+        if (changed(Math.floor(x), Math.floor(y))) got++;
+      }
+      if (got >= at.w) hits++;
+    }
+    return n === 0 ? 0 : Math.round((hits / n) * 100);
+  };
+  return {
+    visible: at.visible,
+    top: side("top"),
+    right: side("right"),
+    bottom: side("bottom"),
+    left: side("left"),
+  };
+}
+const whole = (r: Awaited<ReturnType<typeof ring>>) =>
+  r.visible && r.top >= 90 && r.right >= 90 && r.bottom >= 90 && r.left >= 90;
+const sides = (r: Awaited<ReturnType<typeof ring>>) =>
+  `上 ${r.top}% 右 ${r.right}% 下 ${r.bottom}% 左 ${r.left}%${r.visible ? "" : "（沒有 :focus-visible）"}`;
+
 for (const width of ["desktop", "phone"] as const) {
   const where = width === "desktop" ? "桌面" : "手機";
   const context = await browser.newContext({
@@ -90,6 +214,38 @@ for (const width of ["desktop", "phone"] as const) {
     if (width === "phone") await page.locator(drawer).click();
     await page.locator("[role=radiogroup]:visible").waitFor();
     await page.waitForTimeout(300);
+
+    // The ring, whole: each category by the arrows, then the two view tabs and the pages.
+    await page.locator('.sidebar-mode-tab:has-text("知識庫"):visible').focus();
+    await page.keyboard.press("Tab");
+    // Every category, and the last ArrowRight wraps back to 全部.
+    const radios = await page.locator("[role=radiogroup]:visible [role=radio]").count();
+    for (let i = 0; i < radios; i++) {
+      const what = (await focused(page)).text;
+      const r = await ring(page, i === 0 ? join(dir, `${width}-ring-pill.png`) : undefined);
+      check(whole(r), `${where} 焦點框 分類「${what}」：${sides(r)}`);
+      await page.locator("[role=radiogroup]:visible [role=radio][aria-checked=true]").focus();
+      await page.keyboard.press("ArrowRight");
+    }
+    await page.keyboard.press("Shift+Tab");
+    for (const name of ["知識庫", "對話"]) {
+      const what = (await focused(page)).text;
+      const r = await ring(
+        page,
+        name === "知識庫" ? join(dir, `${width}-ring-tab.png`) : undefined,
+      );
+      check(whole(r) && what.startsWith(name), `${where} 焦點框 分頁「${what}」：${sides(r)}`);
+      await page.locator(`.sidebar-mode-tab:has-text("${name}"):visible`).focus();
+      await page.keyboard.press("Shift+Tab");
+    }
+    await page.locator("[role=radiogroup]:visible [role=radio][aria-checked=true]").focus();
+    for (let i = 0; i < 4; i++) {
+      await page.keyboard.press("Tab");
+      const what = (await focused(page)).text.slice(0, 12);
+      const r = await ring(page, i === 0 ? join(dir, `${width}-ring-page.png`) : undefined);
+      check(whole(r), `${where} 焦點框 頁面「${what}」：${sides(r)}`);
+      await page.locator('[role=list][aria-label="知識庫頁面"]:visible .conv-item').nth(i).focus();
+    }
 
     // Tab from the 知識庫 view tab lands on the chosen category.
     await page.locator('.sidebar-mode-tab:has-text("知識庫"):visible').focus();
@@ -133,6 +289,23 @@ for (const width of ["desktop", "phone"] as const) {
       check((box?.height ?? 0) >= 44, `${where} 搜尋框高 ${box?.height} px（≥44）`);
     }
 
+    // The ring, whole, on the search box and the example chips.
+    await page.locator(".wiki-search-input").focus();
+    {
+      const r = await ring(page, join(dir, `${width}-ring-search.png`));
+      check(whole(r), `${where} 焦點框 搜尋框：${sides(r)}`);
+    }
+    const chips = await page.locator(".wiki-query-chip:visible").count();
+    await page.locator(".wiki-search-input").focus();
+    for (let i = 0; i < chips; i++) {
+      await page.keyboard.press("Tab");
+      const what = (await focused(page)).text;
+      const r = await ring(page, i === 0 ? join(dir, `${width}-ring-chip.png`) : undefined);
+      check(whole(r) && what !== "", `${where} 焦點框 快速示範「${what}」：${sides(r)}`);
+      await page.locator(".wiki-query-chip:visible").nth(i).focus();
+    }
+    check(chips > 0, `${where} 快速示範 chip 有 ${chips} 個`);
+
     // The banner: read-only and the last sync.
     const line = await page.locator(".wiki-sync-line:visible").textContent();
     check(
@@ -171,6 +344,16 @@ for (const width of ["desktop", "phone"] as const) {
       inside && back.text === name,
       `${where} 來源面板：開啟時焦點在面板內 ${inside}，Esc 後回到「${back.text}」`,
     );
+
+    // The same list in the chat view: its first conversation sits at the scroller's top.
+    if (width === "desktop") {
+      await page.locator('.sidebar-mode-tab:has-text("對話")').focus();
+      await page.keyboard.press("Enter");
+      await page.locator('.conv-list[aria-label="歷史對話"] .conv-item').first().focus();
+      const what = (await focused(page)).text.slice(0, 12);
+      const r = await ring(page, join(dir, `${width}-ring-conversation.png`));
+      check(whole(r), `${where} 焦點框 對話檢視第一列「${what}」：${sides(r)}`);
+    }
   } catch (e) {
     check(false, `${where}: ${(e as Error).message.split("\n")[0]}`);
   }

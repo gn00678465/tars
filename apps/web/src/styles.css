@@ -511,7 +511,10 @@ button:disabled:not(:where([data-slot])) {
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 8px 12px;
+  /* A scroller cuts at its padding box: 4px above the first row holds the focus ring (2px out,
+     2px wide), and the margin gives them back so nothing moves. */
+  margin-top: -4px;
+  padding: 4px 8px 12px;
   display: flex;
   flex-direction: column;
   gap: 3px;
