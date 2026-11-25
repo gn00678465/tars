@@ -16,7 +16,6 @@ const ours = [
   "AccountSelect.tsx",
   "Panel.tsx",
   "StatusBar.tsx",
-  "ScreenProbe.tsx",
   "ContextSheet.tsx",
   "ModelSheet.tsx",
   "RunSetup.tsx",
