@@ -9,6 +9,13 @@
       "computedHash": "d7fd8ae391a78becc5096d18c8dd6dde9567d2087390d450c19712db39f481e0",
       "installMode": "copy"
     },
+    "impeccable": {
+      "source": "pbakaus/impeccable",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/impeccable/SKILL.md",
+      "computedHash": "f6498f888e66453bed64151372cec9199cf5179cc9f75e4ebf8501d25e6f1290",
+      "installMode": "copy"
+    },
     "ts-bun-conventions": {
       "source": "./.agents/skills/ts-bun-conventions",
       "sourceType": "local",
