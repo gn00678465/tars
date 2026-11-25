@@ -1541,11 +1541,11 @@ describe("cards from other conversations: set off, and told apart", () => {
     expect([first, second]).toEqual([
       {
         title: SAME,
-        meta: `1/2· 已決定（已核准）· fava-ledger寫外部· ${time(CONVS[0]?.updatedAt ?? 0)} · claude-sonnet-5-5`,
+        meta: `1/2· 已決定（已核准）寫外部· fava-ledger· ${time(CONVS[0]?.updatedAt ?? 0)} · claude-sonnet-5-5`,
       },
       {
         title: SAME,
-        meta: `2/2· 待核准· fava-ledger寫外部· ${time(CONVS[1]?.updatedAt ?? 0)} · gemini-2.5-pro`,
+        meta: `2/2· 待核准寫外部· fava-ledger· ${time(CONVS[1]?.updatedAt ?? 0)} · gemini-2.5-pro`,
       },
     ]);
     expect(heads()).toEqual([{ kind: undefined, title: undefined, detail: undefined }]);

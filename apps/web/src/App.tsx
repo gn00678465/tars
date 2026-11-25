@@ -440,14 +440,11 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   };
   // One card on the page takes the focus: the oldest one still to be decided, so it moves on
   // when that one is sent. Behind the pager none of the pinned does: the arrows change cards,
-  // and the focus going into one shown by an arrow, or after a decision, would let a second
-  // Enter decide a card not read. Decided there, the focus stays on that card until it is closed.
-  const docked = dock.current.ids;
-  const first =
-    paged && decided !== undefined && docked.has(decided)
-      ? undefined
-      : pending.find((c) => toDecide(c) && !(paged && docked.has(c.approval.approvalId)))?.approval
-          .approvalId;
+  // and the focus going into one shown by an arrow would let Enter held on the arrow deny it
+  // unread. Decided there, the focus stays on that card (PinnedDock's `settled`).
+  const first = pending.find(
+    (c) => toDecide(c) && !(paged && dock.current.ids.has(c.approval.approvalId)),
+  )?.approval.approvalId;
   useEffect(() => {
     if (shown === undefined) {
       if (picked !== undefined) setPicked(undefined);

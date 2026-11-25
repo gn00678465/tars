@@ -154,8 +154,9 @@ export function PinnedDock(props: {
                 {at + 1}/{cards.length}
               </span>
               <span>· {stateOf(shown)}</span>
-              <span className="mono pager-script-sub">· {shown.script}</span>
+              {/* Before the script: on a phone the line is cut at its end, never this warning. */}
               {shown.external ? <span className="sg-tag warn">寫外部</span> : null}
+              <span className="mono pager-script-sub">· {shown.script}</span>
               <span className="mono pager-detail">· {shown.detail}</span>
             </span>
           </div>
