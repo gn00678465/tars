@@ -63,6 +63,8 @@ export function useWikiHistory(o: {
   selected: string | undefined;
   /** Shows a page, without pushing. */
   select: (path: string) => void;
+  /** Forward to a page: the list put away, as when the page was opened. */
+  toPage: () => void;
   /** Back to the list: the drawer. */
   toList: () => void;
   /** Back to the search results. */
@@ -143,6 +145,7 @@ export function useWikiHistory(o: {
       // Forward: the page that entry opened.
       if (dest !== undefined && dest.depth > (left?.depth ?? 0)) {
         opts.current.select(dest.path);
+        opts.current.toPage();
         return;
       }
       if (left === undefined) return;

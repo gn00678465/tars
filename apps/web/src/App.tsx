@@ -221,6 +221,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     active: phone && state.wiki.view === "wiki",
     selected: state.wiki.selected,
     select: (path) => dispatch({ type: "wiki", e: { type: "select", path } }),
+    toPage: () => setDrawer(false),
     toList: () => setDrawer(true),
     toResults: () =>
       document.querySelector(".dual-track-grid")?.scrollIntoView?.({ block: "start" }),

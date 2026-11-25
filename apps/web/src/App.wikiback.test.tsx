@@ -128,6 +128,12 @@ async function load() {
     await flush();
     await answer();
   };
+  const goForward = async () => {
+    await act(async () => history.forward());
+    await flush();
+    await answer();
+  };
+  const kept = () => JSON.parse(sessionStorage.getItem(KEY) ?? "{}").wiki.selected as string;
   return {
     h,
     ...r,
@@ -143,6 +149,8 @@ async function load() {
     fromList,
     link,
     goBack,
+    goForward,
+    kept,
   };
 }
 
@@ -384,6 +392,49 @@ test("widened to a desktop: the entries go, and so does the back button; narrowe
     path: "people/wang-xiaoming",
     base: "learning/sqlite-fts5",
     depth: 1,
+  });
+  p.unmount();
+});
+
+test("forward after back: the page that entry opened, the drawer shut as when it was opened", async () => {
+  const p = await load();
+  await p.fromList("王小明");
+  await p.goBack();
+  expect(p.drawerOpen()).toBe(true);
+  expect(p.kept()).toBe("projects/nas-backup");
+  await p.goForward();
+  expect(entryNow()).toMatchObject({ path: "people/wang-xiaoming", from: "list", depth: 1 });
+  expect(p.kept()).toBe("people/wang-xiaoming");
+  expect(p.shown()).toContain("王小明");
+  expect(p.drawerOpen()).toBe(false);
+  // The history is where it was before going back: back again returns to the list.
+  await p.goBack();
+  expect(entryNow()).toBeUndefined();
+  expect(p.kept()).toBe("projects/nas-backup");
+  expect(p.drawerOpen()).toBe(true);
+  p.unmount();
+});
+
+test("forward over links: each step the page its entry opened, the depth with it", async () => {
+  const p = await load();
+  await p.fromList("王小明");
+  await p.link("learning/sqlite-fts5");
+  await p.goBack(2);
+  expect(entryNow()).toBeUndefined();
+  expect(p.kept()).toBe("projects/nas-backup");
+  await p.goForward();
+  expect(entryNow()).toMatchObject({ path: "people/wang-xiaoming", depth: 1 });
+  expect(p.kept()).toBe("people/wang-xiaoming");
+  await p.goForward();
+  expect(entryNow()).toMatchObject({ path: "learning/sqlite-fts5", from: "link", depth: 2 });
+  expect(p.kept()).toBe("learning/sqlite-fts5");
+  expect(p.drawerOpen()).toBe(false);
+  // A page opened from here goes on top of the entry forward went to.
+  await p.fromList("王小明");
+  expect(entryNow()).toMatchObject({
+    path: "people/wang-xiaoming",
+    base: "projects/nas-backup",
+    depth: 3,
   });
   p.unmount();
 });

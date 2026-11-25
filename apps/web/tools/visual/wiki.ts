@@ -7,7 +7,8 @@
 // chat view's first conversation, in the same scroller.
 // Then the phone's back (M4 wiki back): a page opened from the list pushes an entry, and the
 // browser's back (page.goBack, as iOS's edge swipe and Android's back key) returns to the list
-// in the app; a related page's link pushes, and back returns to the page before; the back button
+// in the app, and forward (page.goForward) opens that page again with the list put away; a
+// related page's link pushes, and back returns to the page before; the back button
 // is there on a phone, ≥44 px, and not on a desktop, where nothing is pushed.
 //   node tools/visual/wiki.ts
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/wiki/.
@@ -430,6 +431,24 @@ for (const width of ["desktop", "phone"] as const) {
         `${where} 瀏覽器返回：仍在 app（${page.url() === start}），回到清單（抽屜開 ${await opened()}），頁面回到 ${await kept()}`,
       );
       await page.screenshot({ path: join(dir, "phone-back-list.png") });
+      const depth = () =>
+        page.evaluate(() => (history.state as { depth?: number } | null)?.depth ?? 0);
+      await page.goForward();
+      await page.waitForTimeout(400);
+      check(
+        page.url() === start &&
+          (await kept()) === "people/wang-xiaoming" &&
+          (await opened()) === 0 &&
+          (await depth()) === 1,
+        `${where} 瀏覽器前進：頁面 ${await kept()}，抽屜開 ${await opened()}，depth ${await depth()}，仍在 app（${page.url() === start}）`,
+      );
+      await page.screenshot({ path: join(dir, "phone-forward-page.png") });
+      await page.goBack();
+      await page.waitForTimeout(400);
+      check(
+        (await kept()) === "projects/nas-backup" && (await opened()) === 1 && (await depth()) === 0,
+        `${where} 前進後再返回：頁面 ${await kept()}，抽屜開 ${await opened()}，depth ${await depth()}`,
+      );
       // A related page's link pushes; back returns to the page before, the drawer shut.
       await page
         .locator('[role=list][aria-label="知識庫頁面"]:visible button:has-text("NAS 備份腳本")')

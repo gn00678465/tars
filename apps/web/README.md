@@ -478,10 +478,11 @@ node tools/visual/wiki.ts
 - 手機的返回（`src/wiki/history.ts`）：
   - 手機寬度（767 px 以下）在知識庫時，從清單、搜尋結果或頁內連結換到另一頁，就推一筆 history。state 只放 `{ tars, path, base, from, depth }`，不放內容。
   - 瀏覽器的返回（iOS 邊緣滑動、Android 返回鍵）和左上的返回鍵是同一件事：回到前一頁。從清單進來的，再打開抽屜；從搜尋結果進來的，捲回結果。沒有自己推的紀錄時，返回鍵只打開抽屜。
+  - 瀏覽器的前進：打開那筆紀錄的頁，收起抽屜，和當初打開時一樣。
   - 離開手機的知識庫（回到對話、換成桌面寬度、本機端沒有知識庫）時，用 `history.go(-depth)` 退掉自己推的紀錄，退的期間不把 popstate 當返回。退的期間又打開的頁面，等退完再推。之後在對話裡按返回，和以前一樣是離開 app。
   - 重新整理：history 的紀錄留著；如果 sessionStorage 記的頁面和目前的紀錄不同（返回到一半時重新整理），以紀錄為準。
   - 桌面不推 history，也沒有返回鍵。
-  - 工具會檢查：手機上從清單開頁面推一筆；`page.goBack()` 後回到清單，仍在 app；連結換頁後按返回鍵回到前一頁；返回鍵至少 44 px，鍵盤聚焦時有焦點框；桌面不推、沒有返回鍵。截圖是 `.visual/wiki/phone-back-*.png`。jsdom 的版本與壞版本在 `src/App.wikiback.test.tsx`。
+  - 工具會檢查：手機上從清單開頁面推一筆；`page.goBack()` 後回到清單，仍在 app；`page.goForward()` 後回到那一頁、抽屜收起，depth 對得上；連結換頁後按返回鍵回到前一頁；返回鍵至少 44 px，鍵盤聚焦時有焦點框；桌面不推、沒有返回鍵。截圖是 `.visual/wiki/phone-back-*.png`。jsdom 的版本與壞版本在 `src/App.wikiback.test.tsx`。
 - 未驗證：iOS 加到主畫面（standalone）時的 history 與邊緣滑動。要在 iPhone 上確認。
 
 ## 手動驗收
