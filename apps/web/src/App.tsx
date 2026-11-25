@@ -174,10 +174,13 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   /** A pinned card shown because the one shown went, not by an arrow, and when it was shown. */
   const shownBy = useRef<{ approvalId: string; at: number }>(undefined);
   /** What the dock shows, for decide: whether it pages, and which card. */
-  const dock = useRef<{ paged: boolean; shown?: string; ids: ReadonlySet<string> }>({
-    paged: false,
-    ids: new Set(),
-  });
+  const dock = useRef<{
+    paged: boolean;
+    shown?: string;
+    ids: ReadonlySet<string>;
+    /** The pinned cards in the pager's order. */
+    order: readonly string[];
+  }>({ paged: false, ids: new Set(), order: [] });
   /** Bumped when the card the pager shows is decided: the focus stays on it. */
   const [keepFocus, setKeepFocus] = useState(0);
   const modelButton = useRef<HTMLButtonElement>(null);
@@ -294,7 +297,19 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     const fresh = waiting.filter((c) => !announced.current.has(c.approval.approvalId));
     for (const c of fresh) announced.current.add(c.approval.approvalId);
     const last = fresh.at(-1);
-    if (last !== undefined) setAnnounce(announceText(last.approval));
+    // Behind the pager a card that comes is not the one shown (only an arrow changes that): it is
+    // said where it is, and no focus is named.
+    const { paged, shown, order } = dock.current;
+    const at = last === undefined ? -1 : order.indexOf(last.approval.approvalId);
+    const where =
+      paged && at >= 0 && shown !== last?.approval.approvalId
+        ? {
+            at: at + 1,
+            of: order.length,
+            way: at > order.indexOf(shown ?? "") ? ("下" as const) : ("上" as const),
+          }
+        : undefined;
+    if (last !== undefined) setAnnounce(announceText(last.approval, where));
     else if (waiting.length === 0) setAnnounce("");
   }, [state.cards]);
 
@@ -436,6 +451,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   dock.current = {
     paged,
     ids: new Set(pinned.map((c) => c.approval.approvalId)),
+    order: pinned.map((c) => c.approval.approvalId),
     ...(shown === undefined ? {} : { shown }),
   };
   // One card on the page takes the focus: the oldest one still to be decided, so it moves on

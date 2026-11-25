@@ -15,13 +15,23 @@ const EFFECTS: Record<string, string> = {
  * What a screen reader says when a card comes to wait (the prototype's approval-live-alert): the
  * script, its effect and where it connects, the fields an owner decides on first.
  */
-export function announceText(a: WireApproval): string {
+export function announceText(
+  a: WireApproval,
+  /**
+   * Behind the pager and not the card shown: where it is. The focus is in the card shown, so the
+   * text names no button; Enter there decides that one, not this.
+   */
+  paged?: { at: number; of: number; way: "上" | "下" },
+): string {
   const hosts = a.domains.map((d) => (d === "*" ? "任意主機" : d)).join("、");
   // As the prototype: a space before a host name, none before Chinese.
   const where =
     a.domains.length === 0 ? "不連線" : `連線${hosts.startsWith("任意主機") ? "" : " "}${hosts}`;
   const action = a.action === "run_script" ? "執行腳本" : a.action;
-  return `需要核准：${action} ${a.script}，影響${EFFECTS[a.effects] ?? a.effects}，${where}。預設焦點在拒絕按鈕。`;
+  const what = `${action} ${a.script}，影響${EFFECTS[a.effects] ?? a.effects}，${where}`;
+  if (paged !== undefined)
+    return `另有一張待核准（第 ${paged.at} 張，共 ${paged.of} 張）：${what}。按${paged.way}一張查看。`;
+  return `需要核准：${what}。預設焦點在拒絕按鈕。`;
 }
 
 // Everything that prints as nothing or as something else: control and format characters

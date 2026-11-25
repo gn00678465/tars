@@ -78,6 +78,19 @@ export function PinnedDock(props: {
     if (scroll.current !== null) scroll.current.scrollTop = 0;
     box.current?.focus({ preventScroll: true });
   }, [props.settled]);
+  // The focus was in the dock, and what had it went: × closed the card shown and another took its
+  // place, or a decision made elsewhere took the shown card's buttons away. It goes to the card
+  // shown, its box as after a decision (no button: a card put in another's place is held 1000 ms
+  // by App all the same), not to the page's body. Read before the change is committed.
+  const section = useRef<HTMLElement>(null);
+  const hadFocus = useRef(false);
+  hadFocus.current =
+    typeof document !== "undefined" && section.current?.contains(document.activeElement) === true;
+  useEffect(() => {
+    const now = document.activeElement;
+    if (hadFocus.current && (now === null || now === document.body))
+      box.current?.focus({ preventScroll: true });
+  });
   // Said once per card changed to, not again when a count changes (a card that comes is
   // announced by App).
   const [said, setSaid] = useState("");
@@ -127,6 +140,7 @@ export function PinnedDock(props: {
   // keeps the card shown in the page, and with it the focus.
   return (
     <section
+      ref={section}
       className={shown === undefined ? "pinned-approvals" : "pinned-approvals paged"}
       aria-label="其他對話的核准"
     >
@@ -173,11 +187,9 @@ export function PinnedDock(props: {
       )}
       <div className="pinned-scroll" ref={scroll} onScroll={check}>
         {(shown === undefined ? cards : [shown]).map((c) => (
-          <div
-            className="pager-card"
-            key={c.id}
-            {...(shown === undefined ? {} : { ref: box, tabIndex: -1 })}
-          >
+          // One card in the page either way (one pinned, or the one shown): its box can hold the
+          // focus.
+          <div className="pager-card" key={c.id} ref={box} tabIndex={-1}>
             {c.node}
           </div>
         ))}

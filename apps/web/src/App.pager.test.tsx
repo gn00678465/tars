@@ -388,6 +388,110 @@ describe("the card shown goes: which takes its place (15)", () => {
   });
 });
 
+describe("held: each way a card is put before a hand that was pressing (pager_review.md 6)", () => {
+  test("two, the first decided and closed: the one left, put there, is held 1000 ms (M4)", async () => {
+    // Pressed on by keyboard, Enter on × then again would deny the one left, unread.
+    const t = await dock(1, 2);
+    await t.press("deny");
+    await t.resolve(1, "denied");
+    await act(async () => t.h.advance(5_000));
+    await t.close();
+    expect(t.q(".pager")).toBeNull();
+    expect(t.inPage()).toEqual(["s2"]);
+    await t.press("deny");
+    await act(async () => t.h.advance(999));
+    await t.press("deny");
+    expect(t.decisions()).toEqual(["denied@approval-1"]);
+    await act(async () => t.h.advance(1_000));
+    await t.press("deny");
+    expect(t.decisions()).toEqual(["denied@approval-1", "denied@approval-2"]);
+    t.unmount();
+  });
+
+  test("a card put there, pressed at 600 ms and again at 1100 ms: the wait starts again, not sent (M5)", async () => {
+    const t = await dock(1, 2, 3);
+    await t.resolve(1);
+    await act(async () => t.h.advance(5_000));
+    await t.close();
+    expect(t.inPage()).toEqual(["s2"]);
+    await act(async () => t.h.advance(600));
+    await t.press("approve");
+    await act(async () => t.h.advance(500));
+    await t.press("approve");
+    expect(t.decisions()).toEqual([]);
+    t.unmount();
+  });
+
+  test("decided, then › : another card pressed at 600 ms and at 1100 ms is not sent (M11)", async () => {
+    const t = await dock(1, 2);
+    await t.press("approve");
+    await t.go("next");
+    await act(async () => t.h.advance(600));
+    await t.press("approve");
+    await act(async () => t.h.advance(500));
+    await t.press("approve");
+    expect(t.decisions()).toEqual(["approved@approval-1"]);
+    t.unmount();
+  });
+
+  test("a decision not sent (the connection gone) moves no focus (M10)", async () => {
+    const t = await dock(1, 2);
+    const approve = t.button("approve") as HTMLButtonElement;
+    // Taken while it is pressable: once the connection goes the buttons are off.
+    const key = Object.keys(approve).find((k) => k.startsWith("__reactProps"));
+    const onClick = (approve as unknown as Record<string, { onClick?: (e: unknown) => void }>)[
+      key ?? ""
+    ]?.onClick;
+    expect(onClick).toBeTypeOf("function");
+    approve.focus();
+    await act(async () => t.h.last().end(1006));
+    await act(async () =>
+      onClick?.({ preventDefault: vi.fn(), stopPropagation: vi.fn(), currentTarget: approve }),
+    );
+    expect(t.decisions()).toEqual([]);
+    expect(document.activeElement?.classList.contains("pager-card")).toBe(false);
+    t.unmount();
+  });
+});
+
+describe("the focus does not drop to the page (pager_review.md 2)", () => {
+  test("× on a decided card, two left: the focus goes to the box of the one put there", async () => {
+    const t = await dock(1, 2, 3);
+    await t.press("deny");
+    await t.resolve(1, "denied");
+    const shut = t.q<HTMLButtonElement>('.pinned-approvals button[aria-label="關閉"]');
+    shut?.focus();
+    expect(document.activeElement).toBe(shut);
+    await t.close();
+    expect(t.inPage()).toEqual(["s2"]);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.classList.contains("pager-card")).toBe(true);
+    expect(document.activeElement?.textContent).toContain("s2 @");
+    t.unmount();
+  });
+
+  test("the card shown decided elsewhere, its deny focused: the focus goes to its box", async () => {
+    const t = await dock(1, 2);
+    t.button("deny")?.focus();
+    await t.resolve(1, "approved");
+    expect(t.button("deny")).toBeUndefined();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.classList.contains("pager-card")).toBe(true);
+    t.unmount();
+  });
+
+  test("the focus elsewhere (the composer): a card closed or decided there does not take it", async () => {
+    const t = await dock(1, 2, 3);
+    await t.resolve(1);
+    const area = t.q<HTMLTextAreaElement>("textarea");
+    area?.focus();
+    await t.close();
+    await t.resolve(2);
+    expect(document.activeElement).toBe(area);
+    t.unmount();
+  });
+});
+
 describe("what a screen reader is told (16)", () => {
   test("a card that comes is announced as before; changing card says which, once", async () => {
     const t = await dock(1);
@@ -400,6 +504,31 @@ describe("what a screen reader is told (16)", () => {
     expect(said()).toBe("第 2 張，共 2 張：對話 2，s2，待核准");
     await act(async () => t.h.last().receive(request(3, "conv-3")));
     expect(said()).toBe("第 2 張，共 2 張：對話 2，s2，待核准");
+    t.unmount();
+  });
+
+  test("one not shown that comes says where it is, and names no focus: Enter would decide the one shown", async () => {
+    const t = await dock(1);
+    const alert = () => document.querySelector('[role="alert"]')?.textContent;
+    // One pinned: as before.
+    expect(alert()).toBe("需要核准：執行腳本 s1，影響read，不連線。預設焦點在拒絕按鈕。");
+    await act(async () => t.h.last().receive(request(2, "conv-2", "external-write")));
+    expect(alert()).toBe(
+      "另有一張待核准（第 2 張，共 2 張）：執行腳本 s2，影響寫外部，不連線。按下一張查看。",
+    );
+    expect(alert()).not.toContain("焦點");
+    await t.go("next");
+    await act(async () => t.h.last().receive(request(3, "conv-3")));
+    expect(alert()).toContain("另有一張待核准（第 3 張，共 3 張）");
+    t.unmount();
+  });
+
+  test("a card of the conversation open, behind the pager or not, is announced as before", async () => {
+    const t = await dock(1, 2);
+    await act(async () => t.h.last().receive(request(9, "conv-9")));
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+      "需要核准：執行腳本 s9，影響read，不連線。預設焦點在拒絕按鈕。",
+    );
     t.unmount();
   });
 });
