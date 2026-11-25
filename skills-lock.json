@@ -16,6 +16,14 @@
       "computedHash": "f6498f888e66453bed64151372cec9199cf5179cc9f75e4ebf8501d25e6f1290",
       "installMode": "copy"
     },
+    "modern-web-guidance": {
+      "source": "GoogleChrome/modern-web-guidance",
+      "ref": "2b4aa13a72dd47cd135b06ce5abfccd92e19b24f",
+      "sourceType": "github",
+      "skillPath": "skills/modern-web-guidance/SKILL.md",
+      "computedHash": "e27e3ff8bc39a5a9808168d2f78335343af98436fa85550b68cc7d41a5414c5c",
+      "installMode": "copy"
+    },
     "ts-bun-conventions": {
       "source": "./.agents/skills/ts-bun-conventions",
       "sourceType": "local",
