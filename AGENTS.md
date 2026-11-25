@@ -45,12 +45,13 @@ tars 指令在 `src/features/<名稱>/`。用法寫在使用它的 skill 或 pla
 - `.agents/skills/`、`.claude/skills/`：開發用的 skill，不隨 tars 安裝。
   - 外部的用 `npx skills@1.7.6 add <url> --skill <名稱> -a claude-code -a codex --copy -y` 安裝，來源鎖在 `skills-lock.json`。不手改。
   - 自己寫的正本在 `.agents/skills/`。改完用 `npx skills@1.7.6 add ./.agents/skills/<名稱> -a claude-code --copy -y` 同步到 `.claude/skills/`。
-  - 執行 `npx` 時設 `npm_config_ignore_scripts=true`、`npm_config_min_release_age=7`、`DISABLE_TELEMETRY=1`。
+  - 執行 `npx`（含 skill 要你跑的，例如 modern-web-guidance）時設 `npm_config_ignore_scripts=true`、`npm_config_min_release_age=7`、`DISABLE_TELEMETRY=1`。
 
 ## 約束
 
 - repo 公開。網址、帳號、本機路徑寫成佔位符，實際的值從環境變數注入。
 - 測試不連真的外部服務，不讀真的 HOME 與 keyring。
+- **瀏覽器支援：** apps/web 只用 Baseline Newly available（新近可用）以上的功能，含 Widely available；尚未達到 Newly available 的不用。備援照 modern-web-guidance 的預設。外部套件與複製進來的外部元件（shadcn 的 `src/components/ui/`、`src/vendor/`）例外，不為此修改。
 
 ## 這份檔案
 
