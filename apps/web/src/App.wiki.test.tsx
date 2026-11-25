@@ -4,7 +4,7 @@ import { act } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { App } from "./App.tsx";
 import { button, buttons, render } from "./render.ts";
-import { server, socketHarness } from "./testing.ts";
+import { drag, server, socketHarness, touch } from "./testing.ts";
 import { LIST, PAGE, REF, SEARCH, STATUS } from "./wiki/fixtures.ts";
 import { SEARCH_PAUSE_MS } from "./wiki/requests.ts";
 
@@ -119,6 +119,19 @@ test("the tab opens the list and the first page in place of the thread; 返回�
   expect(p.root.querySelector(".conv-list")?.textContent).toContain("NAS 備份怎麼排");
   expect(lists()).toEqual(["歷史對話"]);
   expect(buttons(p.root).some((b) => b.textContent === "個人知識庫")).toBe(true);
+  p.unmount();
+});
+
+test("on the knowledge base scrolled down, a pull from the top edge is taken as in a conversation", async () => {
+  const p = await opened();
+  const scroller = p.root.querySelector(".thread-scroll") as HTMLElement;
+  Object.defineProperty(scroller, "scrollTop", { value: 900, configurable: true });
+  const pill = p.root.querySelector(".topbar .conn-pill") as HTMLElement;
+  const moves = drag(pill, 160, true);
+  expect(moves.some((e) => e.defaultPrevented)).toBe(true);
+  expect(p.root.querySelector(".pull-indicator")?.getAttribute("data-pull")).toBe("ready");
+  touch(pill, "touchcancel", [], [{ y: 190 }]);
+  expect(drag(scroller, 160).some((e) => e.defaultPrevented)).toBe(false);
   p.unmount();
 });
 

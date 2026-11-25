@@ -152,7 +152,7 @@ export function TopBar(props: {
   const spend = spendButton(props.state);
   const warn = c.tone !== "ok" || spend.tone !== undefined;
   return (
-    <header className="topbar">
+    <header className="topbar" data-pull-edge="">
       <div className="topbar-left">
         {props.onBack === undefined ? null : (
           <button

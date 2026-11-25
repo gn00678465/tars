@@ -4,7 +4,10 @@
 // the indicator's box and text do not move from 放開重新整理 to 重新整理中…, then the page
 // reloads, in a conversation and on the knowledge base, and comes back to the same conversation or
 // page; a finger dragging a scrolled thread
-// scrolls it both ways, as before. With each of P2's overlays open (overlays.ts), at phone width
+// scrolls it both ways, as before. From the top edge (the bar and the conversation's header,
+// data-pull-edge) a pull is taken wherever the thread is: at its end in a conversation, scrolled
+// down on the knowledge base; the indicator where a pull at the thread's top puts it; the bar's
+// buttons still open what they open on a tap, and a drag from one takes nothing. With each of P2's overlays open (overlays.ts), at phone width
 // and at desktop width with touch (an iPad), a pull does not reload. A card announced in the middle
 // of a pull is still in the accessibility tree beside the bar. At desktop width a mouse drag does
 // nothing. It fails on any CSP violation or page error (zod's eval probe left out, as csp.ts).
@@ -22,6 +25,8 @@ const dir = join(web, ".visual", "pull");
 await buildTree(web, dir, true);
 const { url, server } = await serve(dir);
 const { isProbe } = zodProbe(dir, url);
+/** The indicator's box, ready, from a pull at the thread's top: the edge's must be the same. */
+let readyBar = "";
 const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM ?? "/usr/bin/chromium",
   headless: true,
@@ -69,6 +74,47 @@ async function moveTo(cdp: CDPSession, x: number, from: number, to: number) {
 }
 const lift = (cdp: CDPSession) =>
   cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+
+const OWN =
+  'input, textarea, select, button, a[href], label, form, [contenteditable]:not([contenteditable="false"]), pre, table';
+/**
+ * A point on the edge `sel` that is no control: the middle of its widest stretch free of one, on
+ * the line through its middle.
+ */
+const grip = (page: Page, sel: string) =>
+  page.evaluate(
+    ([sel, own]) => {
+      const r = document.querySelector(sel)?.getBoundingClientRect();
+      if (r === undefined) throw new Error(`no ${sel}`);
+      const y = r.y + r.height / 2;
+      let best = [0, 0];
+      let from = -1;
+      for (let x = Math.ceil(r.x); x <= r.right; x++) {
+        const e = document.elementFromPoint(x, y);
+        const free =
+          x < r.right && e !== null && e.closest(sel) !== null && e.closest(own) === null;
+        if (free && from < 0) from = x;
+        if (!free && from >= 0) {
+          if (x - from > (best[1] ?? 0) - (best[0] ?? 0)) best = [from, x];
+          from = -1;
+        }
+      }
+      return {
+        x: ((best[0] ?? 0) + (best[1] ?? 0)) / 2,
+        y,
+        width: (best[1] ?? 0) - (best[0] ?? 0),
+      };
+    },
+    [sel, OWN] as const,
+  );
+/** A tap: one finger down and up at one point. */
+async function tap(cdp: CDPSession, x: number, y: number) {
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x, y, id: 1 }],
+  });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+}
 
 /** Where the moved parts, the composer and the indicator are, as page y and size. */
 const LAYOUT = () => {
@@ -239,6 +285,7 @@ try {
     const capped = await layout(page);
     await moveTo(cdp, x, top + 400, top + FULL);
     const ready = await layout(page);
+    readyBar = JSON.stringify([ready.bar, ready.text]);
     await page.screenshot({ path: join(dir, "pull-ready.png") });
     const reloaded = page.waitForEvent("load", { timeout: 5000 }).then(
       () => true,
@@ -302,6 +349,115 @@ try {
     await p.context.close();
   }
 
+  // The top edge, the thread at its end: the reason for the edge (2026-11-25).
+  {
+    const where = "上緣";
+    const p = await phone(
+      sceneOf("對話進行中"),
+      async (page) => {
+        await page.locator('[aria-label="展開對話列表"]').click();
+        await page.locator(".conv-list >> text=整理 NAS 備份腳本").first().click();
+      },
+      where,
+    );
+    const { page, cdp } = p;
+    await scroller(page).evaluate((el) => {
+      const inner = el.querySelector(".thread-inner");
+      for (let i = 0; i < 80; i++) {
+        const line = document.createElement("p");
+        line.textContent = `第 ${i + 1} 行`;
+        inner?.append(line);
+      }
+      el.scrollTo(0, el.scrollHeight);
+    });
+    await page.waitForTimeout(400);
+    const end = await scrollTop(page);
+    const bar0 = await grip(page, ".topbar");
+    const head = await grip(page, ".conv-header-bar");
+    check(
+      end > 0 && bar0.width >= 44 && head.width >= 44,
+      `${where}：對話捲到底（scrollTop ${end}）；頂列可抓 ${bar0.width} px 寬、標頭 ${head.width} px 寬`,
+    );
+
+    // A drag on a button of the bar takes nothing, and opens nothing.
+    const status = await page.locator('[aria-label="開啟系統狀態與花費面板"]').boundingBox();
+    if (status === null) throw new Error(`${where}: no status button`);
+    const [sx, sy] = [status.x + status.width / 2, status.y + status.height / 2];
+    let onButton = "";
+    await drag(cdp, sx, sy, sy + FULL, async () => {
+      onButton = String(await bar(page));
+    });
+    await page.waitForTimeout(600);
+    // The status sheet; the conversation Sheet is a dialog on a phone even closed.
+    const sheetOpen = () => page.locator('[data-slot="drawer-popup"][data-open]').count();
+    let clicks = 0;
+    await page.exposeFunction("seenClick", () => clicks++);
+    await page.evaluate(() =>
+      document.addEventListener(
+        "click",
+        () => (globalThis as { seenClick?: () => void }).seenClick?.(),
+        true,
+      ),
+    );
+    const opened = await sheetOpen();
+    check(
+      onButton === "idle " && opened === 0 && clicks === 0 && p.loads() === 1,
+      `${where}：從狀態鈕往下拖 ${FULL} px：指示「${onButton}」，click ${clicks} 次，狀態面板開 ${opened} 個，載入 ${p.loads()} 次`,
+    );
+    // A tap on it still opens its sheet.
+    await tap(cdp, sx, sy);
+    await page.waitForTimeout(600);
+    const sheet = await sheetOpen();
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(600);
+    check(
+      sheet === 1 && clicks === 1 && p.loads() === 1,
+      `${where}：點狀態鈕：click ${clicks} 次，狀態面板開 ${sheet} 個，沒有重新載入`,
+    );
+
+    // From the header, short of the rest: the page follows and eases back, the thread stays.
+    const still = await layout(page);
+    await hold(cdp, head.x, head.y, head.y + 60);
+    const half = await layout(page);
+    await lift(cdp);
+    await page.waitForTimeout(500);
+    const rested = await layout(page);
+    check(
+      down(still, half, "topbar") === 30 &&
+        down(still, half, "dock") === 0 &&
+        half.pull === "pulling" &&
+        down(still, rested, "topbar") === 0 &&
+        rested.pull === "idle" &&
+        (await scrollTop(page)) === end &&
+        p.loads() === 1,
+      `${where}：從標頭拉 60 px：下移 ${down(still, half, "topbar")} px（${half.pull}），放開回 ${down(still, rested, "topbar")} px，對話串仍在 ${await scrollTop(page)}`,
+    );
+
+    // From the bar, past the rest: the same indicator, and the reload.
+    await hold(cdp, bar0.x, bar0.y, bar0.y + FULL);
+    const ready = await layout(page);
+    const top = await scrollTop(page);
+    await page.screenshot({ path: join(dir, "edge-ready.png") });
+    const reloaded = page.waitForEvent("load", { timeout: 5000 }).then(
+      () => true,
+      () => false,
+    );
+    await lift(cdp);
+    const same = JSON.stringify([ready.bar, ready.text]) === readyBar;
+    check(
+      ready.pull === "ready" &&
+        ready.words === "放開重新整理" &&
+        down(still, ready, "topbar") === FULL / 2 &&
+        same &&
+        top === end,
+      `${where}：對話在底，從頂列拉 ${FULL} px：下移 ${down(still, ready, "topbar")} px「${ready.words}」，指示盒與對話頂端拉的${same ? "相同" : `不同：${JSON.stringify([ready.bar, ready.text])}／${readyBar}`}，對話串仍在 ${top}`,
+    );
+    check((await reloaded) && p.loads() === 2, `${where}：重新載入（載入 ${p.loads()} 次）`);
+    await page.waitForTimeout(300);
+    await violations(page, where);
+    await p.context.close();
+  }
+
   // The knowledge base's page.
   {
     const where = "知識庫";
@@ -340,6 +496,31 @@ try {
       `${where}：重新載入後回到知識庫的同一頁「${page}」（${kept}）`,
     );
     await violations(p.page, `${where}（重新載入後）`);
+    // Scrolled down, from the top edge: taken as in a conversation.
+    await p.page.waitForTimeout(300);
+    await scroller(p.page).evaluate((el) => {
+      for (let i = 0; i < 80; i++) {
+        const line = document.createElement("p");
+        line.textContent = `第 ${i + 1} 行`;
+        el.firstElementChild?.append(line);
+      }
+      el.scrollTo(0, el.scrollHeight);
+    });
+    await p.page.waitForTimeout(400);
+    const deep = await scrollTop(p.page);
+    const g = await grip(p.page, ".topbar");
+    const again = p.page.waitForEvent("load", { timeout: 5000 }).then(
+      () => true,
+      () => false,
+    );
+    let said = "";
+    await drag(p.cdp, g.x, g.y, g.y + FULL, async () => {
+      said = String(await bar(p.page));
+    });
+    check(
+      deep > 0 && said === "ready 放開重新整理" && (await again) && p.loads() === 3,
+      `${where}：捲到 ${deep} 後從頂列拉 ${FULL} px：「${said}」，重新載入（載入 ${p.loads()} 次）`,
+    );
     await p.context.close();
   }
 
@@ -404,6 +585,28 @@ try {
           seen.open === 1 && seen.marked === "root" && loads === 1,
           `${where}：開著（${slot}，#root 標記 ${seen.marked ?? "無"}，手指落在 ${seen.under}）拉 ${FULL} px，載入 ${loads} 次`,
         );
+        // From the top edge, where the bar is: no more taken than from the thread.
+        const edge = await page.evaluate(() => {
+          const r = document.querySelector(".topbar")?.getBoundingClientRect();
+          return r === undefined ? null : { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        });
+        // A popover or a menu closes on a press outside it, the drag on the thread's: open again.
+        if ((await page.locator(`[data-slot="${slot}"][data-open]`).count()) === 0) {
+          await page
+            .locator(`${o.button[width] as string} >> visible=true`)
+            .first()
+            .click();
+          await page.waitForTimeout(500);
+        }
+        const reopened = await page.locator(`[data-slot="${slot}"][data-open]`).count();
+        if (edge !== null) {
+          await drag(cdp, edge.x, edge.y, edge.y + FULL);
+          await page.waitForTimeout(1_500);
+          check(
+            reopened === 1 && loads === 1,
+            `${where}：開著（${reopened}），從上緣拉 ${FULL} px，載入 ${loads} 次`,
+          );
+        }
         await violations(page, where);
       } catch (e) {
         failures.push(`${where}: ${(e as Error).message.split("\n")[0]}`);

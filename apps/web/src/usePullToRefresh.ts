@@ -10,7 +10,7 @@ import { type RefObject, useEffect, useRef, useState } from "react";
 export type Pull = "idle" | "pulling" | "ready" | "blocked" | "busy" | "back";
 
 export interface PullState {
-  /** A finger has touched the scroller: until then nothing is drawn. */
+  /** A finger has touched the scroller or the edge: until then nothing is drawn. */
   touched: boolean;
   /** busy: let go past the rest, settling there, then the reload; back: settling to 0. */
   pull: Pull;
@@ -42,31 +42,42 @@ const EDITABLE = 'input, textarea, select, [contenteditable]:not([contenteditabl
  */
 const BEHIND_OVERLAY = '[data-base-ui-inert], [inert], [aria-hidden="true"]';
 
-/** Between the finger and the scroller, something that scrolls sideways takes the drag. */
-function sideways(from: Element, el: HTMLElement) {
-  for (let n: Element | null = from; n !== null && n !== el; n = n.parentElement) {
+/**
+ * The top of the screen (the bar and the conversation's header, App.tsx): they do not scroll, so
+ * a pull down from them is a pull wherever the thread is, as the owner asked (2026-11-25).
+ */
+export const EDGE = "[data-pull-edge]";
+
+/** Between the finger and `stop`, something that scrolls sideways takes the drag. */
+function sideways(from: Element, stop: Element) {
+  for (let n: Element | null = from; n !== null && n !== stop; n = n.parentElement) {
     const x = getComputedStyle(n).overflowX;
     if ((x === "auto" || x === "scroll") && n.scrollWidth > n.clientWidth) return true;
   }
   return false;
 }
 
-function mayStart(el: HTMLElement, target: EventTarget | null) {
-  if (el.scrollTop > 0 || !(target instanceof Element)) return false;
+/**
+ * Where a pull may start from: the top of the screen, at any scroll; the thread, only at its top.
+ * Anywhere else on the page (the composer, a notice) it does not.
+ */
+function startsAt(el: HTMLElement, page: HTMLElement, target: EventTarget | null) {
+  if (!(target instanceof Element)) return undefined;
+  const edge = target.closest(EDGE);
+  const from = edge !== null && page.contains(edge) ? edge : el.contains(target) ? el : undefined;
+  if (from === undefined || (from === el && el.scrollTop > 0)) return undefined;
   // The soft keyboard is up: the drag is the owner's, and a reload would close it.
-  if (document.activeElement?.matches(EDITABLE) === true) return false;
-  return (
-    target.closest(OWN_GESTURE) === null &&
-    !sideways(target, el) &&
-    el.closest(BEHIND_OVERLAY) === null
-  );
+  if (document.activeElement?.matches(EDITABLE) === true) return undefined;
+  if (target.closest(OWN_GESTURE) !== null || sideways(target, from)) return undefined;
+  return page.closest(BEHIND_OVERLAY) === null ? from : undefined;
 }
 
 export const reducedMotion = () =>
   typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /**
- * Watches `scroller` for a one-finger pull down from its top, and moves `page` with the finger.
+ * Watches `page` for a one-finger pull down from its top edge (EDGE) at any scroll, or from
+ * `scroller` scrolled to its top, and moves `page` with the finger.
  * `draft` says whether the composer holds unsent text: then a pull says so and letting go does
  * nothing, as a reload would lose it. `reload` is the page's, for tests.
  */
@@ -81,8 +92,9 @@ export function usePullToRefresh(
 
   useEffect(() => {
     const el = scroller.current;
-    if (el === null) return;
-    let finger: { id: number; x: number; y: number } | undefined;
+    const page = opts.current.page.current;
+    if (el === null || page === null) return;
+    let finger: { id: number; x: number; y: number; edge: boolean } | undefined;
     let pulling = false;
     let ready = false;
     let busy = false;
@@ -115,6 +127,9 @@ export function usePullToRefresh(
     };
     const start = (e: TouchEvent) => {
       if (busy) return;
+      // The composer and the rest of the page are not the pull's, as before the edge was.
+      const t0 = e.target;
+      if (!(t0 instanceof Element) || !(el.contains(t0) || t0.closest(EDGE) !== null)) return;
       finger = undefined;
       // A new touch while the page settles back: it is at 0 from here.
       if (pulling || settle !== undefined) {
@@ -127,8 +142,9 @@ export function usePullToRefresh(
       show("idle");
       const t = e.touches[0];
       if (e.touches.length !== 1 || t === undefined) return;
-      if (!mayStart(el, e.target)) return;
-      finger = { id: t.identifier, x: t.clientX, y: t.clientY };
+      const from = startsAt(el, page, e.target);
+      if (from === undefined) return;
+      finger = { id: t.identifier, x: t.clientX, y: t.clientY, edge: from !== el };
     };
     const move = (e: TouchEvent) => {
       if (finger === undefined) return;
@@ -140,8 +156,9 @@ export function usePullToRefresh(
       const dx = t.clientX - finger.x;
       if (!pulling) {
         if (Math.abs(dx) < SLOP_PX && Math.abs(dy) < SLOP_PX) return;
-        // Up is scrolling the thread, sideways is someone else's: the gesture is left alone.
-        if (dy <= 0 || Math.abs(dx) > dy || el.scrollTop > 0) {
+        // Up is scrolling the thread, sideways is someone else's: the gesture is left alone. The
+        // edge does not scroll, so the thread's place matters only to a pull on the thread.
+        if (dy <= 0 || Math.abs(dx) > dy || (!finger.edge && el.scrollTop > 0)) {
           finger = undefined;
           return;
         }
@@ -174,16 +191,16 @@ export function usePullToRefresh(
         reducedMotion() ? 0 : SETTLE_MS,
       );
     };
-    el.addEventListener("touchstart", start, { passive: true });
-    el.addEventListener("touchmove", move, { passive: false });
-    el.addEventListener("touchend", end);
-    el.addEventListener("touchcancel", back);
+    page.addEventListener("touchstart", start, { passive: true });
+    page.addEventListener("touchmove", move, { passive: false });
+    page.addEventListener("touchend", end);
+    page.addEventListener("touchcancel", back);
     return () => {
       clearTimeout(settle);
-      el.removeEventListener("touchstart", start);
-      el.removeEventListener("touchmove", move);
-      el.removeEventListener("touchend", end);
-      el.removeEventListener("touchcancel", back);
+      page.removeEventListener("touchstart", start);
+      page.removeEventListener("touchmove", move);
+      page.removeEventListener("touchend", end);
+      page.removeEventListener("touchcancel", back);
     };
   }, [scroller]);
   return state;

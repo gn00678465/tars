@@ -690,7 +690,7 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             ringRef={ring}
           />
           {targetRef === undefined ? null : (
-            <div className="conv-header-bar">
+            <div className="conv-header-bar" data-pull-edge="">
               <div className="conv-header-info">
                 <span className="conv-header-model conv-header-model-mobile-hide">{nextLabel}</span>
                 <span className="sg-tag">{providerName(targetRef.provider)}</span>
