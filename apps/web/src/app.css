@@ -1007,7 +1007,8 @@ th[aria-sort="descending"] .md-sort-mark::after {
   .pager {
     grid-template-columns: minmax(0, 1fr) 44px 44px;
     grid-template-areas: "title prev next";
-    gap: 4px;
+    /* ‹'s badge stands 6 px out at its right: the gap keeps it off ›. */
+    gap: 10px;
   }
 }
 .pager-line {
@@ -1031,7 +1032,14 @@ th[aria-sort="descending"] .md-sort-mark::after {
   overflow: hidden;
 }
 .pager-meta .sg-tag {
+  flex-shrink: 0;
   padding: 0 6px;
+}
+/* The state gives way before the 寫外部 tag does: cut, it ends in an ellipsis. */
+.pager-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The conversation's time and model, moved here from the card: the first cut when narrow. */
 .pager-detail {
@@ -1058,9 +1066,14 @@ th[aria-sort="descending"] .md-sort-mark::after {
 .pager-arrow:hover:not([data-disabled]) {
   background: var(--glass-state);
 }
+/* Pressed: a deeper fill, nothing moves. */
+.pager-arrow:active:not([data-disabled]) {
+  background: var(--glass-rim);
+}
 /* At the end: still focusable, dimmer and unframed, so it reads as there but not usable. */
 .pager-arrow[data-disabled] {
-  color: oklch(0.45 0.007 250);
+  /* Unframed tells it is off; the glyph still reads at 4.5:1 on the dock, as it can be focused. */
+  color: oklch(0.62 0.007 250);
   border-color: transparent;
   cursor: default;
 }
@@ -1097,15 +1110,20 @@ th[aria-sort="descending"] .md-sort-mark::after {
   }
   .pager-script-sub {
     display: inline;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 /* The card's box takes the focus after its decision; the card's own frame shows where it is. */
 .pager-card:focus {
   outline: none;
 }
+/* Inside its box: .pinned-scroll scrolls, and clips what stands out of it. */
 .pager-card:focus-visible {
   outline: 2px solid var(--focus-line);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 /* The pager names the card, so its bar is one line and does not stick over the fields. */
 .pinned-scroll .approval-origin-bar.paged {

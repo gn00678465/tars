@@ -71,9 +71,12 @@ export function PinnedDock(props: {
     if (shown !== undefined && scroll.current !== null) scroll.current.scrollTop = 0;
   }, [shown?.id]);
   // Decided, the focus stays on that card: its buttons are off now, and Enter on the card does
-  // nothing, where on another card's deny it would decide one not read.
+  // nothing, where on another card's deny it would decide one not read. Scrolled back to its top,
+  // where its × comes: closing it is the only way it leaves.
   useEffect(() => {
-    if (props.settled > 0) box.current?.focus({ preventScroll: true });
+    if (props.settled === 0) return;
+    if (scroll.current !== null) scroll.current.scrollTop = 0;
+    box.current?.focus({ preventScroll: true });
   }, [props.settled]);
   // Said once per card changed to, not again when a count changes (a card that comes is
   // announced by App).
@@ -129,10 +132,10 @@ export function PinnedDock(props: {
     >
       <div className="pinned-head">
         其他對話的核准（{cards.length}）
-        {shown === undefined ? null : (
-          <span className="pinned-head-wait" aria-live="polite">
-            {before + after > 0 ? ` · 其他還有 ${before + after} 張待核准` : ""}
-          </span>
+        {/* All the waiting, the one shown too: changing card does not change it. Not live: a
+            card that comes is announced by App, and a change of card by the pager. */}
+        {shown === undefined || waits(cards) === 0 ? null : (
+          <span className="pinned-head-wait"> · 共 {waits(cards)} 張待核准</span>
         )}
       </div>
       {shown === undefined ? null : (
@@ -153,7 +156,7 @@ export function PinnedDock(props: {
               <span className="mono">
                 {at + 1}/{cards.length}
               </span>
-              <span>· {stateOf(shown)}</span>
+              <span className="pager-state">· {stateOf(shown)}</span>
               {/* Before the script: on a phone the line is cut at its end, never this warning. */}
               {shown.external ? <span className="sg-tag warn">寫外部</span> : null}
               <span className="mono pager-script-sub">· {shown.script}</span>

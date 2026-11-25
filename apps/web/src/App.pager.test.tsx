@@ -127,7 +127,7 @@ describe("two or more: behind the pager", () => {
   test("the header: a named group, 1/3, its state, arrows named with what waits that way", async () => {
     const t = await dock(1, 2, 3);
     expect(t.q('[role="group"]')?.getAttribute("aria-label")).toBe("待核准 1／3");
-    expect(t.q(".pinned-head")?.textContent).toBe("其他對話的核准（3） · 其他還有 2 張待核准");
+    expect(t.q(".pinned-head")?.textContent).toBe("其他對話的核准（3） · 共 3 張待核准");
     expect(t.meta()).toContain("1/3· 待核准");
     expect(t.arrow("prev")?.getAttribute("aria-label")).toBe("上一張待核准");
     expect(t.arrow("next")?.getAttribute("aria-label")).toBe(
@@ -136,6 +136,30 @@ describe("two or more: behind the pager", () => {
     expect(t.arrow("next")?.querySelector(".pager-badge")?.textContent).toBe("2");
     // Not a tablist: no roles a screen reader would take for one.
     expect(t.q('[role="tablist"], [role="tab"]')).toBeNull();
+    t.unmount();
+  });
+
+  test("the head's count is all those waiting: changing card leaves it, and it is not live", async () => {
+    const t = await dock(1, 2, 3);
+    await t.resolve(2);
+    const head = () => t.q(".pinned-head")?.textContent;
+    expect(head()).toBe("其他對話的核准（3） · 共 2 張待核准");
+    await t.go("next");
+    expect(head()).toBe("其他對話的核准（3） · 共 2 張待核准");
+    // Only the pager's own line speaks on a change of card.
+    expect(t.q(".pinned-head [aria-live], .pinned-head[aria-live]")).toBeNull();
+    expect(t.root.querySelectorAll(".pinned-approvals [aria-live]")).toHaveLength(1);
+    for (const n of [1, 3]) await t.resolve(n);
+    expect(head()).toBe("其他對話的核准（3）");
+    t.unmount();
+  });
+
+  test("decided, the card goes back to its top, where its × comes", async () => {
+    const t = await dock(1, 2);
+    const scroll = t.q(".pinned-scroll") as HTMLElement;
+    scroll.scrollTop = 500;
+    await t.press("approve");
+    expect(scroll.scrollTop).toBe(0);
     t.unmount();
   });
 

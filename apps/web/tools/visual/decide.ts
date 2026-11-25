@@ -142,8 +142,9 @@ const known: string[] = [];
 const result = (name: string, got: string[], want: string[], isKnown = false) => {
   const ok = JSON.stringify(got) === JSON.stringify(want);
   // In the thread, a press past the 1000 ms window can land on the next card's button, scrolled
-  // there: so on main too (512d5f8), a design question put to the owner (M4-P4b), not a pager
-  // fault. Printed and counted apart, never as a pass.
+  // there, on main too. It does not happen for real: the local end's runCalls (engine.ts) runs
+  // one call at a time, so a conversation has one card waiting; only this fake has two. The
+  // owner keeps it as is (M4-P4b). Printed and counted apart, never as a pass.
   if (isKnown) {
     if (!ok) known.push(`${name}: sent ${JSON.stringify(got)}`);
     console.log(

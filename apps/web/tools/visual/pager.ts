@@ -4,13 +4,20 @@
 // - one card: no pager, the dock as before;
 // - two: the header and its arrows at least 44 px, ‹ off at the first card and › at the last,
 //   no wrapping; a card changed to starts at its top, and where the last one's buttons were is
-//   no button of it; decided, it stays shown;
-// - three, one writing outside: its tag, and each arrow's count of what waits that way;
+//   no button of it; decided, it stays shown, back at its top with its × in sight;
+// - decided by Enter: the card's focus ring, inside the dock that clips; an arrow off reads at
+//   4.5:1, one pressed changes its fill and does not move;
+// - eleven, the last decided and writing outside, its script long: 寫外部 whole, the script
+//   ending in an ellipsis on a phone;
+// - three, one writing outside: its tag, each arrow's count of what waits that way, and no
+//   badge over the other arrow;
 // - a phone, one card taller than the dock: scrolled to its end, the header still shows and
 //   both buttons can be pressed.
+// Only the pager: a conversation has one card waiting at a time (engine.ts runCalls), so the
+// thread has nothing to page.
 //   node tools/visual/pager.ts
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/pager/.
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { type Browser, chromium, type Page } from "playwright-core";
 import { buildTree, COLLECT, serve, type Violation, zodProbe } from "./page.ts";
@@ -110,6 +117,71 @@ const under = (page: Page, [x, y]: [number, number]) =>
     },
     [x, y] as [number, number],
   );
+/** A screenshot's pixels, RGBA, decoded in a page of its own. */
+async function pixels(png: Buffer) {
+  const page = await browser.newPage();
+  const got = await page.evaluate(async (b64) => {
+    const i = new Image();
+    i.src = `data:image/png;base64,${b64}`;
+    await i.decode();
+    const c = new OffscreenCanvas(i.width, i.height).getContext("2d");
+    if (c === null) throw new Error("no canvas");
+    c.drawImage(i, 0, 0);
+    const d = c.getImageData(0, 0, i.width, i.height);
+    return { width: d.width, height: d.height, data: [...d.data] };
+  }, png.toString("base64"));
+  await page.close();
+  return got;
+}
+/** A corner of a screenshot, k times as big, pixel for pixel: a ring 2 px wide, to be seen. */
+async function zoom(png: Buffer, at: Box, k: number, path: string) {
+  const page = await browser.newPage();
+  const out = await page.evaluate(
+    async ([b64, at, k]) => {
+      const i = new Image();
+      i.src = `data:image/png;base64,${b64}`;
+      await i.decode();
+      const canvas = new OffscreenCanvas(at.width * k, at.height * k);
+      const c = canvas.getContext("2d");
+      if (c === null) throw new Error("no canvas");
+      c.imageSmoothingEnabled = false;
+      c.drawImage(i, at.x, at.y, at.width, at.height, 0, 0, at.width * k, at.height * k);
+      const blob = await canvas.convertToBlob({ type: "image/png" });
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let s = "";
+      for (const b of bytes) s += String.fromCharCode(b);
+      return btoa(s);
+    },
+    [png.toString("base64"), at, k] as const,
+  );
+  await page.close();
+  writeFileSync(path, Buffer.from(out, "base64"));
+}
+/** WCAG contrast of two sRGB colours, 0–255 channels. */
+const contrast = (a: number[], b: number[]) => {
+  const lum = (c: number[]) => {
+    const [r, g, bl] = c.map((v) => {
+      const x = v / 255;
+      return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+    }) as [number, number, number];
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+};
+/** An element's computed colour as sRGB, through a canvas (Chromium gives oklch as written). */
+const colorOf = (page: Page, sel: string) =>
+  page.locator(sel).evaluate((e) => {
+    const c = new OffscreenCanvas(1, 1).getContext("2d");
+    if (c === null) throw new Error("no canvas");
+    c.fillStyle = getComputedStyle(e).color;
+    c.fillRect(0, 0, 1, 1);
+    return [...c.getImageData(0, 0, 1, 1).data].slice(0, 3);
+  });
+type Box = { x: number; y: number; width: number; height: number };
+const overlap = (a: Box, b: Box) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
 const pressAt = async (page: Page, touch: boolean, spot: [number, number]) => {
   if (touch) await page.touchscreen.tap(...spot);
   else await page.mouse.click(...spot);
@@ -208,6 +280,8 @@ for (const w of WIDTHS) {
     if (at === null) throw new Error("no approve button");
     const press: [number, number] = [at.x + at.width / 2, at.y + at.height / 2];
     await pressAt(page, w.hasTouch, press);
+    const back = await page.locator(".pinned-scroll").evaluate((e) => e.scrollTop);
+    check(`${w.name} two: decided, the card is back at its top`, back === 0, back);
     await page.clock.runFor(1_500);
     const sentMeta = await meta(page);
     await page.evaluate(
@@ -234,12 +308,155 @@ for (const w of WIDTHS) {
     check(`${w.name} two: decided, the focus is on no button`, !focus.startsWith("button"), focus);
     const pressedAgain = await under(page, press);
     check(
-      `${w.name} two: decided, where it was pressed is no button to decide`,
-      !/核准執行|拒絕/.test(pressedAgain) || pressedAgain.endsWith("(off)"),
+      `${w.name} two: decided, where it was pressed is no button to decide or close`,
+      !/核准執行|拒絕|跳至該對話/.test(pressedAgain) &&
+        (await page.locator('.pinned-approvals button[aria-label="關閉"]').boundingBox()) !==
+          null &&
+        !overlap(
+          { x: press[0], y: press[1], width: 1, height: 1 },
+          (await page.locator('.pinned-approvals button[aria-label="關閉"]').boundingBox())!,
+        ),
       pressedAgain,
+    );
+    const shut = await page.locator('.pinned-approvals button[aria-label="關閉"]').boundingBox();
+    const view = await page.locator(".pinned-scroll").boundingBox();
+    check(
+      `${w.name} two: decided, its × is in sight in the dock`,
+      shut !== null &&
+        view !== null &&
+        shut.y >= view.y &&
+        shut.y + shut.height <= view.y + view.height,
+      { shut, view },
     );
     await page.screenshot({ path: join(shots, `${w.name}-4-decided.png`) });
     for (const p of [...problems, ...(await violations(page))]) bad.push(`${w.name} two: ${p}`);
+    await context.close();
+  }
+
+  // The focus ring of the card's box after a decision by keyboard, inside the clipping dock; the
+  // arrows' contrast when off, and their fill when pressed, nothing moving.
+  {
+    const { context, page, problems } = await open(w, [EXTRA["c-other"]]);
+    const approve = page.locator(".pinned-approvals .approval-actions button").nth(1);
+    await approve.focus();
+    await page.keyboard.press("Enter");
+    await page.clock.runFor(300);
+    const visible = await page
+      .locator(".pager-card")
+      .evaluate((e) => document.activeElement === e && e.matches(":focus-visible"));
+    check(`${w.name} ring: decided by Enter, the box has :focus-visible`, visible, visible);
+    const clip = await box(page, ".pinned-scroll");
+    const on = await page.screenshot({ clip });
+    // For a person to look at: the whole dock, and its top left corner four times as big.
+    const whole = await page.screenshot({ path: join(shots, `${w.name}-7-ring.png`) });
+    await zoom(
+      whole,
+      { x: clip.x - 12, y: clip.y - 8, width: 96, height: 64 },
+      4,
+      join(shots, `${w.name}-7-ring-zoom.png`),
+    );
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.clock.runFor(100);
+    const offShot = await page.screenshot({ clip });
+    const [a, b] = [await pixels(on), await pixels(offShot)];
+    // Changed pixels in a 4 px band at each side the dock shows of the box: its top, left, right.
+    const band = (side: "top" | "left" | "right") => {
+      let n = 0;
+      const len = side === "top" ? a.width : a.height;
+      for (let i = 0; i < len; i++) {
+        let hit = false;
+        for (let d = 0; d < 4 && !hit; d++) {
+          const [x, y] = side === "top" ? [i, d] : side === "left" ? [d, i] : [a.width - 1 - d, i];
+          const k = (y * a.width + x) * 4;
+          const diff =
+            Math.abs((a.data[k] ?? 0) - (b.data[k] ?? 0)) +
+            Math.abs((a.data[k + 1] ?? 0) - (b.data[k + 1] ?? 0)) +
+            Math.abs((a.data[k + 2] ?? 0) - (b.data[k + 2] ?? 0));
+          hit = diff > 60;
+        }
+        if (hit) n++;
+      }
+      return Math.round((n / len) * 100);
+    };
+    const sides = { top: band("top"), left: band("left"), right: band("right") };
+    check(
+      `${w.name} ring: the ring shows on the box's top, left and right (% of each side)`,
+      Object.values(sides).every((v) => v >= 90),
+      sides,
+    );
+    // Off: ‹ at the first. The glyph's colour against the dock under it.
+    const arrowShot = await pixels(await page.locator(".pager-prev").screenshot());
+    const under0 = arrowShot.data.slice(
+      (2 * arrowShot.width + 2) * 4,
+      (2 * arrowShot.width + 2) * 4 + 3,
+    );
+    const glyph = await colorOf(page, ".pager-prev");
+    const ratio = Math.round(contrast(glyph, under0) * 100) / 100;
+    check(`${w.name} arrow off: glyph at least 4.5:1 on the dock`, ratio >= 4.5, {
+      ratio,
+      glyph,
+      dock: under0,
+    });
+    if (!w.hasTouch) {
+      const next = await box(page, ".pager-next");
+      const fill = () =>
+        page.locator(".pager-next").evaluate((e) => getComputedStyle(e).backgroundColor);
+      await page.mouse.move(next.x + next.width / 2, next.y + next.height / 2);
+      const hover = await fill();
+      await page.mouse.down();
+      const pressed = await fill();
+      const still = await box(page, ".pager-next");
+      await page.mouse.up();
+      check(
+        `${w.name} arrow pressed: a fill of its own, not moved`,
+        pressed !== hover && JSON.stringify(still) === JSON.stringify(next),
+        { hover, pressed, moved: JSON.stringify(still) !== JSON.stringify(next) },
+      );
+    }
+    for (const p of [...problems, ...(await violations(page))]) bad.push(`${w.name} ring: ${p}`);
+    await context.close();
+  }
+
+  // Eleven, the last decided and writing outside, its script long: the second line at its
+  // longest. 寫外部 is whole; the script ends in an ellipsis.
+  {
+    const many = Array.from({ length: 10 }, (_, i) => ({
+      ...approval(`c-long-${i}`),
+      approvalId: `ap-long-${i}`,
+      script: "nightly-offsite-backup-with-a-long-name",
+    }));
+    const { context, page, problems } = await open(w, many);
+    await page.evaluate(
+      (m) => (globalThis as { visualPush?: (m: unknown) => void }).visualPush?.(m),
+      {
+        kind: "approval.resolved",
+        p: { approvalId: "ap-long-9", state: "approved", via: "remote" },
+      },
+    );
+    await page.clock.runFor(300);
+    for (let i = 0; i < 10; i++) await page.locator(".pager-next").click();
+    const line = await box(page, ".pager-meta");
+    const tag = await box(page, ".pager-meta .sg-tag.warn");
+    const script = await page
+      .locator(w.hasTouch ? ".pager-script-sub" : ".pager-script-main")
+      .evaluate((e) => ({
+        cut: e.scrollWidth > e.clientWidth,
+        ellipsis: getComputedStyle(e).textOverflow,
+      }));
+    check(
+      `${w.name} long: 11/11 decided, 寫外部 whole in its line`,
+      (await meta(page))?.includes("11/11") === true &&
+        tag.x + tag.width <= line.x + line.width + 0.5,
+      { meta: await meta(page), tagEnd: tag.x + tag.width, lineEnd: line.x + line.width },
+    );
+    if (w.hasTouch)
+      check(
+        "phone long: the script, cut, ends in an ellipsis",
+        script.cut && script.ellipsis === "ellipsis",
+        script,
+      );
+    await page.screenshot({ path: join(shots, `${w.name}-8-long.png`) });
+    for (const p of [...problems, ...(await violations(page))]) bad.push(`${w.name} long: ${p}`);
     await context.close();
   }
 
@@ -253,6 +470,17 @@ for (const w of WIDTHS) {
       await badge(".pager-next"),
     );
     await page.locator(".pager-next").click();
+    // In the middle both arrows have a badge: neither stands over the other arrow.
+    const [pb, nb, pa, na] = await Promise.all(
+      [".pager-prev .pager-badge", ".pager-next .pager-badge", ".pager-prev", ".pager-next"].map(
+        (sel) => box(page, sel),
+      ),
+    );
+    check(
+      `${w.name} three: no badge over the other arrow`,
+      !overlap(pb!, na!) && !overlap(nb!, pa!),
+      { prevBadge: [pb!.x, pb!.width], next: na!.x, nextBadge: nb!.x, prev: pa!.x + pa!.width },
+    );
     const readOnly = await page.locator(".pager .sg-tag.warn").count();
     check(`${w.name} three: the second reads only, no 寫外部`, readOnly === 0, readOnly);
     await page.locator(".pager-next").click();

@@ -1527,8 +1527,10 @@ describe("cards from other conversations: set off, and told apart", () => {
       );
     });
     const dock = root.querySelector(".pinned-approvals") as HTMLElement;
-    // The one still waiting is shown first; no other waits.
-    expect(dock.querySelector(".pinned-head")?.textContent).toBe("其他對話的核准（2）");
+    // The one still waiting is shown first.
+    expect(dock.querySelector(".pinned-head")?.textContent).toBe(
+      "其他對話的核准（2） · 共 1 張待核准",
+    );
     const time = (ms: number) => shortTime(ms);
     // Behind the pager its header says it, one card at a time.
     const head = () => ({
