@@ -204,6 +204,39 @@ describe("two or more: behind the pager", () => {
     t.unmount();
   });
 
+  test("one decided, then › : the next card's deny does not take the focus, which stays on › (12)", async () => {
+    const t = await dock(1, 2);
+    await t.press("deny");
+    const next = t.arrow("next") as HTMLButtonElement;
+    next.focus();
+    await t.go("next");
+    expect(t.inPage()).toEqual(["s2"]);
+    expect(document.activeElement).toBe(next);
+    t.unmount();
+  });
+
+  test("the first decided elsewhere, then › : the next card's deny does not take the focus (12)", async () => {
+    // Held, Enter on › would change the card and then deny the one changed to, unread.
+    const t = await dock(1, 2);
+    await t.resolve(1, "denied");
+    const next = t.arrow("next") as HTMLButtonElement;
+    next.focus();
+    await t.go("next");
+    expect(t.inPage()).toEqual(["s2"]);
+    expect(document.activeElement).toBe(next);
+    t.unmount();
+  });
+
+  test("decided behind the pager, a card waiting in the thread does not take the focus (12)", async () => {
+    const t = await dock(1, 2);
+    await act(async () => t.h.last().receive(request(9, "conv-9")));
+    expect(document.activeElement?.closest(".thread-scroll")).not.toBeNull();
+    t.button("deny")?.focus();
+    await t.press("deny");
+    expect(document.activeElement?.classList.contains("pager-card")).toBe(true);
+    t.unmount();
+  });
+
   test("a card that comes does not change the one shown; its count does (15)", async () => {
     const t = await dock(1, 2);
     await t.go("next");
@@ -233,12 +266,13 @@ describe("two or more: behind the pager", () => {
   test("arrow keys on the page or on the pager do not change the card", async () => {
     const t = await dock(1, 2);
     for (const target of [document.body, t.q(".pager") as HTMLElement, t.arrow("next")!])
-      for (const key of ["ArrowRight", "ArrowLeft", "ArrowDown", "PageDown"])
+      for (const key of ["ArrowRight", "ArrowLeft", "ArrowDown", "PageDown"]) {
         await act(
           async () =>
             void target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })),
         );
-    expect(t.inPage()).toEqual(["s1"]);
+        expect(t.inPage(), key).toEqual(["s1"]);
+      }
     t.unmount();
   });
 
@@ -352,15 +386,16 @@ test("the decision of a card not shown is not sent, whoever calls it (11)", asyn
   // after another card is shown.
   const t = await dock(1, 2);
   const stale = t.button("approve") as HTMLButtonElement;
+  // Taken while it is in the page: React drops it from the node once the card goes.
+  const key = Object.keys(stale).find((k) => k.startsWith("__reactProps"));
+  const onClick = (stale as unknown as Record<string, { onClick?: (e: unknown) => void }>)[
+    key ?? ""
+  ]?.onClick;
+  expect(onClick).toBeTypeOf("function");
   await t.go("next");
   expect(stale.isConnected).toBe(false);
-  const onClick = Object.keys(stale).find((k) => k.startsWith("__reactProps"));
-  const props =
-    onClick === undefined
-      ? undefined
-      : (stale as unknown as Record<string, { onClick?: (e: unknown) => void }>)[onClick];
   await act(async () =>
-    props?.onClick?.({ preventDefault: vi.fn(), stopPropagation: vi.fn(), currentTarget: stale }),
+    onClick?.({ preventDefault: vi.fn(), stopPropagation: vi.fn(), currentTarget: stale }),
   );
   expect(t.decisions()).toEqual([]);
   t.unmount();
