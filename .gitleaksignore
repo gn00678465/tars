@@ -1,0 +1,5 @@
+# modern-web-guidance 的指南把演算法名稱（MLKEM768-X25519 等）寫成字串，generic-api-key 誤判。只列這幾筆；上游更新改了行號時會重新報出，屆時再看一次。
+.agents/skills/modern-web-guidance/guides/security/client-side-encryption.md:generic-api-key:187
+.agents/skills/modern-web-guidance/guides/security/client-side-encryption.md:generic-api-key:201
+.claude/skills/modern-web-guidance/guides/security/client-side-encryption.md:generic-api-key:187
+.claude/skills/modern-web-guidance/guides/security/client-side-encryption.md:generic-api-key:201
