@@ -90,6 +90,9 @@ export function wikiReduce(s: WikiState, e: WikiEvent): WikiState {
     case "category":
       return { ...s, category: e.category };
     case "select": {
+      // The page already open, picked again: no new request goes (requests.ts asks when the
+      // path changes), so dropping what it shows would leave it loading for good.
+      if (e.path === s.selected) return { ...s, view: "wiki" };
       const { page: _, ...rest } = s;
       return { ...rest, selected: e.path, view: "wiki" };
     }

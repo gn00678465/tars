@@ -92,6 +92,9 @@ function CitePill(props: { source: string; dispatch: (e: WikiEvent) => void }) {
 }
 
 /** 15-05: the category, 網頁端唯讀, the file, the last sync and the summary. */
+/** Not synced for longer than this, the time is in the warning colour (ui_spec 5.7). */
+const STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
 function Banner(props: { wiki: WikiState; now: number; dispatch: (e: WikiEvent) => void }) {
   const { wiki } = props;
   const path = wiki.selected;
@@ -121,8 +124,17 @@ function Banner(props: { wiki: WikiState; now: number; dispatch: (e: WikiEvent) 
           </div>
           <h2 className="wiki-page-title">{title}</h2>
         </div>
-        <span className="mono wiki-sync-stamp">
-          上次 sync：{last === undefined ? "還沒有" : momentText(last, props.now)}
+        <span className="wiki-sync-line">
+          由本機 <code>tars wiki sync</code> 更新 ·{" "}
+          <span
+            className={
+              last !== undefined && props.now - last > STALE_MS
+                ? "mono wiki-sync-stamp stale"
+                : "mono wiki-sync-stamp"
+            }
+          >
+            上次同步：{last === undefined ? "還沒有" : momentText(last, props.now)}
+          </span>
         </span>
       </div>
       {page?.state === "ok" && page.summary !== "" ? (

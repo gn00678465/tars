@@ -24,14 +24,17 @@
   opacity: 0.7;
 }
 
+/* Greyed by colour and a dashed edge, not opacity: the text keeps ≥4.5:1 (audit 9). */
 .wiki-cite-pill:disabled {
-  opacity: 0.5;
+  color: var(--subtle-foreground);
+  background: transparent;
+  border-style: dashed;
   cursor: not-allowed;
 }
 
 .wiki-cite-pill:disabled:hover {
-  background: var(--glass-control);
-  color: var(--muted-foreground);
+  background: transparent;
+  color: var(--subtle-foreground);
 }
 
 .wiki-turn-text {
@@ -48,4 +51,28 @@
   color: var(--foreground);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* The pages, a list of their own beside the category radio group (ui_spec 5.7). */
+.wiki-page-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wiki-sync-line {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+/* Not synced for over 7 days. */
+.wiki-sync-stamp.stale {
+  color: var(--status-warn);
+}
+
+/* A phone's touch target (audit 7: 42.8 px). */
+@media (max-width: 767px) {
+  .wiki-search-input {
+    min-height: 44px;
+  }
 }
