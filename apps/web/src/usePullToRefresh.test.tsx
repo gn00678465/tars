@@ -32,6 +32,16 @@ function Page(p: { draft?: boolean; reload: () => void }) {
   });
   return (
     <div id="page" ref={moved}>
+      {/* The top of the screen: the bar and the header (App.tsx), which do not scroll. */}
+      <header data-pull-edge="">
+        <span id="title">標題</span>
+        <button id="menu" type="button">
+          選單
+        </button>
+        <div id="edge-wide" className="wide">
+          <span id="edge-cell">cell</span>
+        </div>
+      </header>
       <PullIndicator state={state} />
       <main ref={ref} className="thread-scroll">
         <p id="msg">訊息</p>
@@ -46,6 +56,9 @@ function Page(p: { draft?: boolean; reload: () => void }) {
           <span id="cell">cell</span>
         </div>
       </main>
+      <footer>
+        <span id="dock">輸入框一帶</span>
+      </footer>
     </div>
   );
 }
@@ -246,6 +259,99 @@ test("with unsent text the pull says so, and letting go does nothing", async () 
   touch(at("msg"), "touchend", [], [{ y: 190 }]);
   await settle();
   expect(shown(root)).toEqual(["idle", ""]);
+  expect(reload).not.toHaveBeenCalled();
+});
+
+/** The thread scrolled to its middle: jsdom lays nothing out, so scrollTop is what this says. */
+const midway = (scroller: HTMLElement) =>
+  Object.defineProperty(scroller, "scrollTop", { value: 400, configurable: true });
+
+test("from the top edge, with the thread scrolled to its middle: the pull, the rest and the reload", async () => {
+  const { reload, root, at, offset, scroller } = await page();
+  midway(scroller);
+  const moves = drag(at("title"), PULL_PX + 20, true);
+  expect(moves.every((e) => e.defaultPrevented)).toBe(true);
+  expect([offset(), ...(shown(root) ?? [])]).toEqual([
+    `${(PULL_PX + 20) * DAMPING}px`,
+    "ready",
+    "放開重新整理",
+  ]);
+  touch(at("title"), "touchend", [], [{ y: 100 + PULL_PX + 20 }]);
+  expect([offset(), ...(shown(root) ?? [])]).toEqual([`${REST_PX}px`, "busy", "重新整理中…"]);
+  await settle();
+  expect(reload).toHaveBeenCalledTimes(1);
+});
+
+test("from the top edge short of the rest: back to 0, no reload", async () => {
+  const { reload, root, at, offset, scroller } = await page();
+  midway(scroller);
+  drag(at("title"), 60);
+  expect([offset(), bar(root)?.dataset.pull]).toEqual(["0px", "back"]);
+  await settle();
+  expect(shown(root)).toEqual(["idle", ""]);
+  expect(reload).not.toHaveBeenCalled();
+});
+
+test("scrolled to the middle, a pull on the thread or below it is scrolling: nothing is taken", async () => {
+  const { reload, root, at, scroller } = await page();
+  midway(scroller);
+  expect(drag(at("msg"), PULL_PX + 20).some((e) => e.defaultPrevented)).toBe(false);
+  // Neither the edge nor the thread (the composer's dock): not even the bar is drawn.
+  expect(drag(at("dock"), PULL_PX + 20).some((e) => e.defaultPrevented)).toBe(false);
+  expect(shown(root)).toEqual(["idle", ""]);
+  // Up from the edge is no pull either.
+  expect(drag(at("title"), -(PULL_PX + 20)).some((e) => e.defaultPrevented)).toBe(false);
+  expect(shown(root)).toEqual(["idle", ""]);
+  expect(reload).not.toHaveBeenCalled();
+});
+
+test("a finger only on the composer's dock: no bar is drawn", async () => {
+  const { root, at } = await page();
+  drag(at("dock"), PULL_PX + 20);
+  expect(bar(root)).toBeNull();
+});
+
+test("on the edge as on the thread: not from a button or something scrolling sideways, not with the keyboard up, behind an overlay, with two fingers", async () => {
+  const style = document.createElement("style");
+  style.textContent = ".wide { overflow-x: auto; }";
+  document.head.append(style);
+  const { reload, root, at, scroller } = await page();
+  midway(scroller);
+  Object.defineProperties(at("edge-wide"), {
+    scrollWidth: { value: 800 },
+    clientWidth: { value: 300 },
+  });
+  const took = (id: string) => drag(at(id), PULL_PX + 20).some((e) => e.defaultPrevented);
+  expect([took("menu"), took("edge-cell")]).toEqual([false, false]);
+  at("field").focus();
+  expect(took("title")).toBe(false);
+  at("field").blur();
+  const behind = root.parentElement as HTMLElement;
+  for (const [name, value] of [
+    ["data-base-ui-inert", ""],
+    ["inert", ""],
+    ["aria-hidden", "true"],
+  ] as const) {
+    behind.setAttribute(name, value);
+    expect(took("title"), name).toBe(false);
+    behind.removeAttribute(name);
+  }
+  const el = at("title");
+  touch(el, "touchstart", [{ y: 100 }, { y: 100, x: 200, id: 1 }]);
+  touch(el, "touchmove", [{ y: 190 }, { y: 190, x: 200, id: 1 }]);
+  touch(el, "touchend", [], [{ y: 190 }, { y: 190, x: 200, id: 1 }]);
+  await settle();
+  expect(shown(root)).toEqual(["idle", ""]);
+  expect(reload).not.toHaveBeenCalled();
+});
+
+test("from the edge with unsent text: the pull says so, and letting go does nothing", async () => {
+  const { reload, root, at, scroller } = await page({ draft: true });
+  midway(scroller);
+  drag(at("title"), PULL_PX + 20, true);
+  expect(shown(root)).toEqual(["blocked", "有未送出的文字，先送出或清除"]);
+  touch(at("title"), "touchend", [], [{ y: 190 }]);
+  await settle();
   expect(reload).not.toHaveBeenCalled();
 });
 

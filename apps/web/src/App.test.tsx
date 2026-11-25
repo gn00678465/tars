@@ -730,6 +730,14 @@ describe("the sidebar and the open conversation", () => {
     touch(scroll(root), "touchcancel", [], [{ y: 190 }]);
     return [moves.some((e) => e.defaultPrevented), pull];
   };
+  /** The same pull from the top edge: the connection pill, no control. */
+  const pullOnEdge = (root: HTMLElement) => {
+    const pill = root.querySelector(".topbar .conn-pill") as HTMLElement;
+    const moves = drag(pill, PULL_PX + 20, true);
+    const pull = root.querySelector(".pull-indicator")?.getAttribute("data-pull");
+    touch(pill, "touchcancel", [], [{ y: 190 }]);
+    return [moves.some((e) => e.defaultPrevented), pull];
+  };
   const phoneMedia = () =>
     vi.stubGlobal("matchMedia", () => ({
       matches: true,
@@ -753,6 +761,7 @@ describe("the sidebar and the open conversation", () => {
       await frame();
       expect(document.querySelector('[role="dialog"]')).not.toBeNull();
       expect(pullOn(root)).toEqual([false, "idle"]);
+      expect(pullOnEdge(root)).toEqual([false, "idle"]);
       await act(async () => {
         document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       });
@@ -762,6 +771,25 @@ describe("the sidebar and the open conversation", () => {
     } finally {
       unmount();
       vi.unstubAllGlobals();
+    }
+  });
+
+  test("scrolled down, a pull from the bar or the header is taken; from the thread or a button it does not", async () => {
+    const { root, unmount } = await listed();
+    try {
+      await act(async () => entry(root, "對話 1").click());
+      Object.defineProperty(scroll(root), "scrollTop", { value: 900, configurable: true });
+      expect(pullOnEdge(root)).toEqual([true, "ready"]);
+      const info = root.querySelector("[data-pull-edge] .conv-header-info") as HTMLElement;
+      expect(info.closest(".conv-header-bar")).not.toBeNull();
+      expect(drag(info, PULL_PX + 20, true).some((e) => e.defaultPrevented)).toBe(true);
+      touch(info, "touchcancel", [], [{ y: 190 }]);
+      expect(pullOn(root)).toEqual([false, "idle"]);
+      const menu = root.querySelector('.topbar [aria-label="展開對話列表"]') as HTMLElement;
+      expect(drag(menu, PULL_PX + 20).some((e) => e.defaultPrevented)).toBe(false);
+      expect(root.querySelector(".pull-indicator")?.getAttribute("data-pull")).toBe("idle");
+    } finally {
+      unmount();
     }
   });
 
