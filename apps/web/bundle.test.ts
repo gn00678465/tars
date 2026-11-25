@@ -12,8 +12,9 @@ import { assetsInlineLimit } from "./headers.ts";
 /**
  * Under this much JS a first visit loads, gzipped: the limit M4-P4b set, less the 842 bytes the
  * status sheet's screen readout (ScreenProbe) took, gone with it (main bcfb18c measured 242,482,
- * and 241,640 without it). M4-P4b's step was main's 240,620 (512d5f8) plus 2 kB for the approval
- * pager; P4b measured 242,013. M4-P3c's step was main's 237,680
+ * and 241,640 without it), plus 1 kB for the phone's knowledge-base back button and history (M4
+ * wiki back; it added 778 bytes). M4-P4b's step was main's 240,620 (512d5f8) plus 2 kB for the
+ * approval pager; P4b measured 242,013. M4-P3c's step was main's 237,680
  * (ae89269) plus 4 kB for the composer on Input Group and Textarea; P3c measured 240,440. M4-P3b's step was
  * main's 232,977 (8de1362) plus 8 kB for Trace, Code Block, Item and lucide. M4-P3a's step was main's 224,351 (82467ac) plus 9 kB for the Message Scroller.
  * P2 put Base UI's overlays on the first load (main was 138,115): the design's estimate was about
@@ -22,7 +23,7 @@ import { assetsInlineLimit } from "./headers.ts";
  * Measured by this file's own build, which leaves out the Cloudflare and _headers plugins: they
  * do not change the page's chunks.
  */
-const FIRST_LOAD_LIMIT = 240_620 + 2_000 - 842;
+const FIRST_LOAD_LIMIT = 240_620 + 2_000 - 842 + 1_000;
 
 /** Strings only zod 3 has, and only zod 4 has (research/a2ui_proto_result.md, Zod 4 (4)). */
 const ZOD3 = "Unrecognized key(s) in object";

@@ -53,8 +53,9 @@ import {
 } from "./components/ui/message-scroller.tsx";
 import { reducedMotion, usePullToRefresh } from "./usePullToRefresh.ts";
 import { keep, readKept } from "./kept.ts";
+import { entryNow, useWikiHistory } from "./wiki/history.ts";
 import { useWikiRequests } from "./wiki/requests.ts";
-import type { WikiEvent } from "./wiki/state.ts";
+import { categoryOf, type WikiEvent } from "./wiki/state.ts";
 
 /** Within this much of the end counts as at the bottom (rounding, a last line half shown). */
 const BOTTOM_PX = 24;
@@ -105,10 +106,21 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
   // the knowledge base once the local end says it has one.
   const [state, dispatch] = useReducer(reduce, initial, (s): State => {
     const kept = readKept();
+    // A reload in the middle of going back: the browser is on an entry the storage had not caught
+    // up with. The browser's place wins, so the next back goes on from it.
+    const e = entryNow();
+    const wiki =
+      kept.wiki !== undefined && e !== undefined
+        ? {
+            ...kept.wiki,
+            selected: e.path,
+            ...(kept.wiki.category === "all" ? {} : { category: categoryOf(e.path) }),
+          }
+        : kept.wiki;
     return {
       ...s,
       ...(kept.conv === undefined ? {} : { conv: kept.conv }),
-      ...(kept.wiki === undefined ? {} : { wiki: { ...s.wiki, ...kept.wiki } }),
+      ...(wiki === undefined ? {} : { wiki: { ...s.wiki, ...wiki } }),
     };
   });
   const [tick, setTick] = useState(now);
@@ -203,7 +215,21 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
     if (live) socket.send("models.get");
   }, [live, socket]);
   // The knowledge base, read only; shown once the local end answers for it (scene 15).
-  const toWiki = useCallback((e: WikiEvent) => dispatch({ type: "wiki", e }), []);
+  const wikiBack = useWikiHistory({
+    // The view, not wikiOn: after a reload the view is the knowledge base before wiki.status
+    // answers, and its entries are kept meanwhile. A local end without one sets it to chat.
+    active: phone && state.wiki.view === "wiki",
+    selected: state.wiki.selected,
+    select: (path) => dispatch({ type: "wiki", e: { type: "select", path } }),
+    toList: () => setDrawer(true),
+    toResults: () =>
+      document.querySelector(".dual-track-grid")?.scrollIntoView?.({ block: "start" }),
+  });
+  const toWiki = useCallback((e: WikiEvent) => {
+    // Pushed before the page changes: the entry keeps the one it came from.
+    if (e.type === "select" && e.from !== undefined) wikiBack.push(e.path, e.from);
+    dispatch({ type: "wiki", e });
+  }, []);
   const reachable = live && state.relay.online;
   useWikiRequests(socket, state.wiki, toWiki, reachable);
   const { wiki } = state;
@@ -654,6 +680,9 @@ export function App({ socket, now }: { socket: Socket; now: () => number }) {
             state={state}
             menuHidden={!collapsed && !compact}
             onMenu={() => (compact ? setDrawer(true) : setCollapsed(false))}
+            {...(phone && wikiOn && wiki.selected !== undefined && reachable
+              ? { onBack: wikiBack.back }
+              : {})}
             onSheet={() => setSheet(true)}
             onContext={() => setContextSheet({ focus: "" })}
             contextOpen={contextSheet !== undefined}

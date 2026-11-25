@@ -465,6 +465,25 @@ node tools/visual/font.ts --local "<family>"  # 換一個本機有的中文字�
 - 照原樣的那份，中文沒用到網站的字體就失敗；替身那份下載了任何字體就失敗；有 CSP 違規也失敗。
 - 這台機器沒有蘋方。蘋果裝置不下載是用替身推論的，不是實機。Windows 上的備援是微軟正黑，切換時的位移沒有實測。
 
+### 知識庫：鍵盤與手機的返回
+
+改了知識庫的側欄、`src/wiki/history.ts` 或手機的標頭之後跑：
+
+```
+cd apps/web
+node tools/visual/wiki.ts
+```
+
+- 側欄的鍵盤操作、手機搜尋框的高度、不存在的相關頁的對比、來源面板的焦點。
+- 手機的返回（`src/wiki/history.ts`）：
+  - 手機寬度（767 px 以下）在知識庫時，從清單、搜尋結果或頁內連結換到另一頁，就推一筆 history。state 只放 `{ tars, path, base, from, depth }`，不放內容。
+  - 瀏覽器的返回（iOS 邊緣滑動、Android 返回鍵）和左上的返回鍵是同一件事：回到前一頁。從清單進來的，再打開抽屜；從搜尋結果進來的，捲回結果。沒有自己推的紀錄時，返回鍵只打開抽屜。
+  - 離開手機的知識庫（回到對話、換成桌面寬度、本機端沒有知識庫）時，用 `history.go(-depth)` 退掉自己推的紀錄，退的期間不把 popstate 當返回。退的期間又打開的頁面，等退完再推。之後在對話裡按返回，和以前一樣是離開 app。
+  - 重新整理：history 的紀錄留著；如果 sessionStorage 記的頁面和目前的紀錄不同（返回到一半時重新整理），以紀錄為準。
+  - 桌面不推 history，也沒有返回鍵。
+  - 工具會檢查：手機上從清單開頁面推一筆；`page.goBack()` 後回到清單，仍在 app；連結換頁後按返回鍵回到前一頁；返回鍵至少 44 px，鍵盤聚焦時有焦點框；桌面不推、沒有返回鍵。截圖是 `.visual/wiki/phone-back-*.png`。jsdom 的版本與壞版本在 `src/App.wikiback.test.tsx`。
+- 未驗證：iOS 加到主畫面（standalone）時的 history 與邊緣滑動。要在 iPhone 上確認。
+
 ## 手動驗收
 
 這些項目自動測試涵蓋不到，由擁有者在自己的 Cloudflare 與手機上做。結果寫回 `research/cloudflare-tunnel-mtls.md`。行為和設計不同時，記下請求與回應的形狀（不含 JWT、cookie、email、憑證內容）。

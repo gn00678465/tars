@@ -2,6 +2,7 @@ import {
   Archive,
   Check,
   ChevronDown,
+  ChevronLeft,
   CircleAlert,
   Copy,
   GitFork,
@@ -20,6 +21,7 @@ import {
  */
 const ICONS = {
   chevron: ChevronDown,
+  back: ChevronLeft,
   check: Check,
   copy: Copy,
   shield: Shield,

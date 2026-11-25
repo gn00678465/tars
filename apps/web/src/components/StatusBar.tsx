@@ -138,6 +138,8 @@ export function TopBar(props: {
   state: State;
   onMenu: () => void;
   menuHidden: boolean;
+  /** A phone reading a page of the knowledge base: back to where it was opened from. */
+  onBack?: () => void;
   onSheet: () => void;
   /** Opens the context sheet; absent when the page has no context to show. */
   onContext?: () => void;
@@ -152,6 +154,16 @@ export function TopBar(props: {
   return (
     <header className="topbar">
       <div className="topbar-left">
+        {props.onBack === undefined ? null : (
+          <button
+            className="sg-icon-btn topbar-back"
+            type="button"
+            aria-label="返回"
+            onClick={props.onBack}
+          >
+            <Icon name="back" size={19} />
+          </button>
+        )}
         {/* The button's name, shown on hover and on focus as its title was. */}
         <Tooltip>
           <TooltipTrigger
