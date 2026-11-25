@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 import { button, buttons, render } from "../../render.ts";
 import { LIST, PAGE, REF, REF2, SEARCH, STATUS } from "../../wiki/fixtures.ts";
-import { type WikiEvent, type WikiState, wikiInitial } from "../../wiki/state.ts";
+import { type WikiEvent, type WikiState, wikiInitial, wikiReduce } from "../../wiki/state.ts";
 import { SourceOverlay } from "./SourceOverlay.tsx";
 import { WikiSideList, WikiTabs } from "./WikiSidebar.tsx";
 import { WikiWorkspace } from "./WikiWorkspace.tsx";
@@ -109,7 +109,10 @@ test("a page: banner, entries with their sources, related pages, the two-column 
     "網頁端唯讀",
     "projects/nas-backup.md",
   ]);
-  expect(root.querySelector(".wiki-sync-stamp")?.textContent).toBe("上次 sync：今天 13:15");
+  expect(root.querySelector(".wiki-sync-line")?.textContent).toBe(
+    "由本機 tars wiki sync 更新 · 上次同步：今天 13:15",
+  );
+  expect(root.querySelector(".wiki-sync-stamp")?.classList.contains("stale")).toBe(false);
   // The summary's source mark is a pill between its words.
   const summary = root.querySelector(".wiki-summary") as HTMLElement;
   expect(summary.textContent).toBe(`每晚把 NAS 同步到外接硬碟 [[source:${REF}]]，保留 30 天。`);
@@ -265,4 +268,106 @@ test("a mark with no turn behind it says so and offers no way to a conversation"
   const root = document.body;
   expect(root.textContent).toContain("找不到這個回合");
   expect(buttons(root).some((b) => b.textContent === "前往原對話")).toBe(false);
+});
+
+/** The side list with its own state, as the app keeps it: the keys change the category. */
+function Side(props: { wiki: WikiState }) {
+  const [wiki, setWiki] = useState(props.wiki);
+  return (
+    <WikiSideList
+      wiki={wiki}
+      now={NOW}
+      dispatch={(e) => setWiki((w) => wikiReduce(w, e))}
+      onPicked={() => {}}
+    />
+  );
+}
+
+const radios = (root: HTMLElement) => [...root.querySelectorAll<HTMLElement>("[role=radio]")];
+const key = (k: string) =>
+  act(async () => {
+    document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+  });
+
+test("the categories are one radio group, not in a list; the pages are the list 知識庫頁面", async () => {
+  const { root } = await render(<Side wiki={open} />);
+  const group = root.querySelector("[role=radiogroup]") as HTMLElement;
+  expect(group.getAttribute("aria-label")).toBe("知識庫分類");
+  expect(group.closest("[role=list]")).toBeNull();
+  expect(root.querySelector("[role=tablist], [role=tab]")).toBeNull();
+  const list = root.querySelector("[role=list]") as HTMLElement;
+  expect(list.getAttribute("aria-label")).toBe("知識庫頁面");
+  expect(list.querySelectorAll(":scope > [role=listitem]")).toHaveLength(4);
+  // 全部 first, each with its count; the one chosen is checked and the only Tab stop.
+  expect(
+    radios(root).map((r) => [r.textContent, r.getAttribute("aria-checked"), r.tabIndex]),
+  ).toEqual([
+    ["全部 4", "true", 0],
+    ["人物 1", "false", -1],
+    ["專案 2", "false", -1],
+    ["主題 0", "false", -1],
+    ["個人生活 0", "false", -1],
+    ["學習 1", "false", -1],
+    ["投資 0", "false", -1],
+  ]);
+});
+
+test("the arrows move and choose, wrapping at the ends; Home and End; the Tab stop follows", async () => {
+  const { root } = await render(<Side wiki={open} />);
+  const checked = () => radios(root).find((r) => r.getAttribute("aria-checked") === "true");
+  const at = () => [checked()?.textContent, document.activeElement?.textContent];
+  (radios(root)[0] as HTMLElement).focus();
+  await key("ArrowRight");
+  expect(at()).toEqual(["人物 1", "人物 1"]);
+  await key("ArrowDown");
+  expect(at()).toEqual(["專案 2", "專案 2"]);
+  expect(root.querySelectorAll("[role=listitem]")).toHaveLength(2);
+  await key("ArrowUp");
+  await key("ArrowLeft");
+  expect(at()).toEqual(["全部 4", "全部 4"]);
+  await key("ArrowLeft");
+  expect(at()).toEqual(["投資 0", "投資 0"]);
+  await key("Home");
+  expect(at()).toEqual(["全部 4", "全部 4"]);
+  await key("End");
+  expect(at()).toEqual(["投資 0", "投資 0"]);
+  expect(radios(root).map((r) => r.tabIndex)).toEqual([-1, -1, -1, -1, -1, -1, 0]);
+  await key("ArrowRight");
+  expect(at()).toEqual(["全部 4", "全部 4"]);
+  await key("End");
+  // Other keys are left alone.
+  await key("a");
+  expect(at()).toEqual(["投資 0", "投資 0"]);
+});
+
+test("a category without pages can be chosen and says so", async () => {
+  const { root } = await render(<Side wiki={open} />);
+  await act(async () => (radios(root)[3] as HTMLElement).click());
+  expect(radios(root)[3]?.getAttribute("aria-checked")).toBe("true");
+  expect(root.querySelectorAll("[role=listitem]")).toHaveLength(0);
+  expect(root.querySelector(".wiki-list-note")?.textContent).toBe("這個分類還沒有頁面");
+});
+
+test("500 pages are listed, and more than that says some are not", async () => {
+  const pages = Array.from({ length: 500 }, (_, i) => ({
+    path: `topics/p${i}`,
+    title: `第 ${i} 頁`,
+    updated: "2026-11-01",
+    blocked: false,
+  }));
+  const { root } = await render(<Side wiki={{ ...open, list: { pages, more: true } }} />);
+  expect(root.querySelectorAll("[role=listitem]")).toHaveLength(500);
+  expect(root.querySelector(".wiki-list-note")?.textContent).toBe("還有頁面沒列出");
+  const all = await render(<Side wiki={{ ...open, list: { pages, more: false } }} />);
+  expect(all.root.querySelector(".wiki-list-note")).toBeNull();
+});
+
+test("not synced for over 7 days, the sync time is in the warning colour", async () => {
+  const day = 24 * 60 * 60 * 1000;
+  const at = (ago: number) =>
+    workspace({ ...open, status: { ...STATUS, lastSyncAt: NOW - ago } }).then((r) =>
+      r.root.querySelector(".wiki-sync-stamp")?.classList.contains("stale"),
+    );
+  expect(await at(7 * day)).toBe(false);
+  expect(await at(7 * day + 60_000)).toBe(true);
 });

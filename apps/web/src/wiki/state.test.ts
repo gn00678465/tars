@@ -72,6 +72,16 @@ test("picking a page opens the knowledge base and drops the last page", () => {
   expect(wikiReduce(shown, { type: "select", path: "people/wang-xiaoming" }).page).toBe(undefined);
 });
 
+test("picking the page already open keeps it: no new request goes for the same path", () => {
+  const shown = { ...run([{ type: "select", path: "projects/nas-backup" }]), page: PAGE };
+  const again = wikiReduce(
+    { ...shown, view: "chat" },
+    { type: "select", path: "projects/nas-backup" },
+  );
+  expect(again.page).toBe(PAGE);
+  expect(again.view).toBe("wiki");
+});
+
 test("a search remembers what it asked; the answer replaces the last one", () => {
   const s = run([
     { type: "query", query: "備份" },

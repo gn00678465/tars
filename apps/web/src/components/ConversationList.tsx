@@ -78,7 +78,13 @@ export function ConversationList(props: {
         </button>
         {props.tabs}
       </div>
-      <div className="conv-list" role="list" aria-label="歷史對話">
+      {/* The knowledge base's view brings its own radio group and list: not inside this one. */}
+      <div
+        className="conv-list"
+        {...(props.wiki === undefined || props.offline
+          ? { role: "list", "aria-label": "歷史對話" }
+          : {})}
+      >
         {props.offline ? (
           <div className="conv-offline-box">
             <strong>本機端離線，無法載入歷史</strong>

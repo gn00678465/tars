@@ -106,12 +106,18 @@ test("the tab opens the list and the first page in place of the thread; 返回�
   expect(p.asked("wiki.page")?.p).toEqual({ path: "projects/nas-backup" });
   expect(p.root.querySelector(".wiki-page-title")?.textContent).toBe("NAS 備份腳本");
   expect(p.root.querySelectorAll(".conv-list .wiki-cat-pill")).toHaveLength(7);
+  // The categories are no list's child, and the one list there is the pages' (ui_spec 5.7).
+  const lists = () =>
+    [...p.root.querySelectorAll("[role=list]")].map((l) => l.getAttribute("aria-label"));
+  expect(p.root.querySelector("[role=radiogroup]")?.closest("[role=list]")).toBeNull();
+  expect(lists()).toEqual(["知識庫頁面"]);
   expect(p.root.querySelector(".conv-list .conv-item.active")?.textContent).toContain(
     "NAS 備份腳本",
   );
   await act(async () => button(p.root, "返回對話").click());
   expect(p.root.querySelector(".wiki-workspace")).toBeNull();
   expect(p.root.querySelector(".conv-list")?.textContent).toContain("NAS 備份怎麼排");
+  expect(lists()).toEqual(["歷史對話"]);
   expect(buttons(p.root).some((b) => b.textContent === "個人知識庫")).toBe(true);
   p.unmount();
 });
