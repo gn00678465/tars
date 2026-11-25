@@ -2,6 +2,10 @@
 // the drawer: Tab lands on the chosen category, the arrows change it, Home and End; one more Tab
 // is the first page; a source pill opens its check and Esc gives the focus back to it. Also the
 // two audit items: the phone's search box ≥44 px, an unknown related page's text ≥4.5:1.
+// Then the phone's back (M4 wiki back): a page opened from the list pushes an entry, and the
+// browser's back (page.goBack, as iOS's edge swipe and Android's back key) returns to the list
+// in the app; a related page's link pushes, and back returns to the page before; the back button
+// is there on a phone, ≥44 px, and not on a desktop, where nothing is pushed.
 //   node tools/visual/wiki.ts
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium). Writes to .visual/wiki/.
 import { join, resolve } from "node:path";
@@ -173,6 +177,99 @@ for (const width of ["desktop", "phone"] as const) {
     );
   } catch (e) {
     check(false, `${where}: ${(e as Error).message.split("\n")[0]}`);
+  }
+  await context.close();
+}
+// The phone's back, and none on a desktop.
+for (const width of ["desktop", "phone"] as const) {
+  const where = width === "desktop" ? "桌面" : "手機";
+  const context = await browser.newContext({
+    ...WIDTHS[width],
+    locale: "zh-TW",
+    reducedMotion: "reduce",
+  });
+  await context.addInitScript(COLLECT);
+  const page = await context.newPage();
+  page.setDefaultTimeout(10_000);
+  page.on("pageerror", (e) => failures.push(`${where} 返回: page error: ${e.message}`));
+  try {
+    await page.clock.setFixedTime(NOW);
+    const start = `${url}/?scene=${sceneOf("知識庫的一頁")}`;
+    await page.goto(start, { waitUntil: "load" });
+    await page.locator('button:has-text("個人知識庫")').click();
+    if (width === "phone") await page.locator(drawer).click();
+    await page.locator("[role=radiogroup]:visible").waitFor();
+    await page.waitForTimeout(300);
+    const length = () => page.evaluate(() => history.length);
+    const kept = () =>
+      page.evaluate(
+        () =>
+          (
+            JSON.parse(sessionStorage.getItem("tars.page") ?? "{}") as {
+              wiki?: { selected?: string };
+            }
+          ).wiki?.selected,
+      );
+    const opened = () => page.locator(".sidebar.mobile-open").count();
+    const back = page.locator('header button[aria-label="返回"]');
+    const before = await length();
+    await page
+      .locator('[role=list][aria-label="知識庫頁面"]:visible button:has-text("王小明")')
+      .click();
+    await page.waitForTimeout(400);
+    if (width === "desktop") {
+      check(
+        (await length()) === before && (await back.count()) === 0,
+        `${where} 開頁面不推 history（${before} → ${await length()}），沒有返回鍵`,
+      );
+    } else {
+      const box = await back.boundingBox();
+      check(
+        (await length()) === before + 1 &&
+          (await opened()) === 0 &&
+          (box?.width ?? 0) >= 44 &&
+          (box?.height ?? 0) >= 44,
+        `${where} 從清單開頁面：history ${before} → ${await length()}，抽屜收起，返回鍵 ${box?.width}×${box?.height}`,
+      );
+      await back.focus();
+      const ring = await back.evaluate((e) => getComputedStyle(e).outlineStyle);
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      const visible = await back.evaluate(
+        (e) => e.matches(":focus-visible") && getComputedStyle(e).outlineStyle !== "none",
+      );
+      check(visible, `${where} 返回鍵鍵盤聚焦時有焦點框（${ring} → ${visible}）`);
+      await page.screenshot({ path: join(dir, "phone-back-page.png") });
+      await page.goBack();
+      await page.waitForTimeout(400);
+      check(
+        page.url() === start && (await opened()) === 1 && (await kept()) === "projects/nas-backup",
+        `${where} 瀏覽器返回：仍在 app（${page.url() === start}），回到清單（抽屜開 ${await opened()}），頁面回到 ${await kept()}`,
+      );
+      await page.screenshot({ path: join(dir, "phone-back-list.png") });
+      // A related page's link pushes; back returns to the page before, the drawer shut.
+      await page
+        .locator('[role=list][aria-label="知識庫頁面"]:visible button:has-text("NAS 備份腳本")')
+        .click();
+      await page.waitForTimeout(400);
+      await page
+        .locator(".wiki-cite-pill:visible:not(:disabled)", { hasText: "[[learning/" })
+        .first()
+        .click();
+      await page.waitForTimeout(400);
+      const linked = await kept();
+      await back.click();
+      await page.waitForTimeout(400);
+      check(
+        linked !== "projects/nas-backup" &&
+          (await kept()) === "projects/nas-backup" &&
+          (await opened()) === 0 &&
+          page.url() === start,
+        `${where} 連結到 ${linked}，按返回鍵回到 ${await kept()}，抽屜沒開，仍在 app`,
+      );
+    }
+  } catch (e) {
+    check(false, `${where} 返回: ${(e as Error).message.split("\n")[0]}`);
   }
   await context.close();
 }

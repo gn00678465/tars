@@ -80,7 +80,7 @@ test("the sidebar lists the pages of a category with the six counts, and says wh
   expect(rows[0]?.classList.contains("active")).toBe(true);
   expect(r.root.textContent).toContain("還有頁面沒列出");
   await act(async () => (rows[1] as HTMLButtonElement).click());
-  expect(events).toEqual([{ type: "select", path: "projects/broken" }]);
+  expect(events).toEqual([{ type: "select", path: "projects/broken", from: "list" }]);
   expect(picked).toHaveBeenCalledOnce();
 });
 
@@ -140,7 +140,7 @@ test("a page: banner, entries with their sources, related pages, the two-column 
     ["[[topics/gone]]", true],
   ]);
   await act(async () => related[0]?.click());
-  expect(events.at(-1)).toEqual({ type: "select", path: "learning/sqlite-fts5" });
+  expect(events.at(-1)).toEqual({ type: "select", path: "learning/sqlite-fts5", from: "link" });
 
   expect(
     [...root.querySelectorAll(".wiki-changelog-row")].map((x) =>

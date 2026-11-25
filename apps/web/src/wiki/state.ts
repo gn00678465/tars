@@ -8,6 +8,7 @@ import {
   type WikiStatus,
   WIKI_QUERY,
 } from "@tars/protocol";
+import type { From } from "./history.ts";
 
 /**
  * The knowledge base on this page (ui_parity scene 15). It shows only after the local end answered
@@ -58,7 +59,8 @@ export type WikiEvent =
   | { readonly type: "forget"; readonly id?: string }
   | { readonly type: "view"; readonly view: "chat" | "wiki" }
   | { readonly type: "category"; readonly category: WikiCategory | "all" }
-  | { readonly type: "select"; readonly path: string }
+  /** A page opened; `from` says by what, for the phone's back (history.ts). */
+  | { readonly type: "select"; readonly path: string; readonly from?: From }
   | { readonly type: "query"; readonly query: string }
   | { readonly type: "track"; readonly track: "wiki" | "raw" }
   | { readonly type: "source"; readonly ref: string | undefined }

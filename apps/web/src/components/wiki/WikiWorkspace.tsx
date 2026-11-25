@@ -259,7 +259,7 @@ function Tracks(props: Props) {
                   h.path === wiki.selected ? "track-result-btn active" : "track-result-btn"
                 }
                 type="button"
-                onClick={() => dispatch({ type: "select", path: h.path })}
+                onClick={() => dispatch({ type: "select", path: h.path, from: "search" })}
               >
                 <div className="track-result-top">
                   <span>{h.title}</span>
@@ -356,7 +356,7 @@ function PageCard(props: { wiki: WikiState; dispatch: (e: WikiEvent) => void }) 
                       type="button"
                       disabled={!known}
                       title={known ? "在知識庫裡打開這一頁" : "這一頁不存在"}
-                      onClick={() => dispatch({ type: "select", path })}
+                      onClick={() => dispatch({ type: "select", path, from: "link" })}
                     >
                       <span>[[{path}]]</span>
                     </button>

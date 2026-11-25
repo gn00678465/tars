@@ -96,7 +96,7 @@ export function WikiSideList(props: {
                     title={p.title}
                     aria-current={here ? "true" : undefined}
                     onClick={() => {
-                      props.dispatch({ type: "select", path: p.path });
+                      props.dispatch({ type: "select", path: p.path, from: "list" });
                       props.onPicked();
                     }}
                   >
